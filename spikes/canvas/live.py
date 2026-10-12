@@ -48,6 +48,8 @@ class Settings:
     raise_ms: int
     seconds: float
     selftest: bool
+    simulate: int = 0
+    sim_size: tuple[int, int] = (1920, 1080)
 
     @property
     def reach_px(self) -> int:
@@ -90,6 +92,16 @@ def _seconds(text: str) -> float:
     return v
 
 
+def _size(text: str) -> tuple[int, int]:
+    try:
+        w, h = (int(x) for x in text.lower().split("x"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected WxH, got {text!r}") from exc
+    if w < 1 or h < 1:
+        raise argparse.ArgumentTypeError("size must be positive")
+    return w, h
+
+
 def parse_args(argv: list[str] | None = None) -> Settings:
     """Parse and validate the flags. No GTK import; invalid input exits via argparse (code 2)."""
     p = argparse.ArgumentParser(prog="spikes.canvas.live", description=__doc__.split("\n\n")[0])
@@ -110,6 +122,14 @@ def parse_args(argv: list[str] | None = None) -> Settings:
     p.add_argument(
         "--selftest", action="store_true", help="parse flags, print them, open no window"
     )
+    p.add_argument(
+        "--simulate",
+        type=_bounded(1, None, int),
+        default=0,
+        metavar="N",
+        help="headless: run N frames of the same tick/draw code, no window",
+    )
+    p.add_argument("--sim-size", type=_size, default=(1920, 1080), metavar="WxH")
     a = p.parse_args(argv)
     return Settings(
         output=a.output,
@@ -121,10 +141,15 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         raise_ms=a.raise_ms,
         seconds=a.seconds,
         selftest=a.selftest,
+        simulate=a.simulate,
+        sim_size=a.sim_size,
     )
 
 
-# ---- scene / damage maths (no GTK) ---------------------------------------------------------
+# ---- scene / animation / damage maths (no GTK) ---------------------------------------------
+
+Box = tuple[int, int, int, int]  # (x0, y0, x1, y1), x1/y1 exclusive
+FAKE_FRAME_US = 1_000_000 / 60  # simulated frame clock: 16.667 ms per frame
 
 
 def scene_panels(w: int, h: int, dock_depth: float) -> list[Panel]:
@@ -140,19 +165,44 @@ def dock_depth_at(t_s: float) -> float:
     return DOCK_FULL * (1 - math.cos(2 * math.pi * t_s / PERIOD_S)) / 2
 
 
-def dock_box(w: int, h: int, depth: float, pad: int) -> tuple[int, int, int, int]:
-    """Dock bounding box (x0, y0, x1, y1) at `depth`: fillets included, down to the screen edge,
-    expanded by `pad` (= shadow reach + border width), clamped to the surface."""
+def dock_box(w: int, h: int, depth: float, pad: int) -> Box:
+    """Dock bounding box at `depth`: fillets included, down to the screen edge, expanded by `pad`
+    (= shadow reach + border width), clamped to the surface."""
     x0 = (w - DOCK_LEN) // 2 - R - pad
     x1 = (w - DOCK_LEN) // 2 + DOCK_LEN + R + pad
     y0 = h - T - math.ceil(depth) - pad
     return max(0, x0), max(0, y0), min(w, x1), h
 
 
-def union(a, b):
+def union_boxes(a: Box | None, b: Box | None) -> Box | None:
+    """Bounding union; None means 'no box yet' and is neutral. Commutative."""
     if a is None:
         return b
+    if b is None:
+        return a
     return min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])
+
+
+@dataclass(frozen=True)
+class Step:
+    depth: float
+    box: Box  # dock box now
+    invalidate: Box  # box to hand to queue_draw_area: now, plus the previous frame's box
+
+
+class AnimationState:
+    """Per-frame dock depth and damage. The first step invalidates the whole current box."""
+
+    def __init__(self, w: int, h: int, pad: int):
+        self.w, self.h, self.pad = w, h, pad
+        self._prev: Box | None = None
+
+    def step(self, t_s: float) -> Step:
+        depth = dock_depth_at(t_s)
+        box = dock_box(self.w, self.h, depth, self.pad)
+        inv = union_boxes(box, self._prev)
+        self._prev = box
+        return Step(depth, box, inv)
 
 
 def pct(values: list[float], q: float) -> float:
@@ -160,10 +210,99 @@ def pct(values: list[float], q: float) -> float:
     return s[min(len(s) - 1, int(q * (len(s) - 1) + 0.5))] if s else float("nan")
 
 
+def interval_stats(timestamps_us: list[int]) -> dict:
+    """Frame-interval stats from frame-clock timestamps (us); None values when < 2 frames."""
+    n = len(timestamps_us)
+    out = {"frames": n, "mean_ms": None, "median_ms": None, "p95_ms": None, "fps": None}
+    if n < 2:
+        return out
+    iv = [(b - a) / 1000 for a, b in zip(timestamps_us, timestamps_us[1:], strict=False)]
+    out["mean_ms"] = statistics.fmean(iv)
+    out["median_ms"] = statistics.median(iv)
+    out["p95_ms"] = pct(iv, 0.95)
+    span_s = (timestamps_us[-1] - timestamps_us[0]) / 1e6
+    out["fps"] = (n - 1) / span_s if span_s > 0 else None
+    return out
+
+
+def make_painter(cfg: Settings, w: int, h: int):
+    """The one draw function used by the live draw handler and by --simulate."""
+    border = (cfg.border_width, cfg.border_rgba) if cfg.border_width > 0 else None
+    shadow = (cfg.elevation, cfg.shadow_rgba)
+
+    def paint(cr, depth: float, clip: tuple[int, int, int, int] | None) -> None:
+        draw_scene(
+            cr,
+            w,
+            h,
+            T,
+            R,
+            scene_panels(w, h, depth),
+            MASS,
+            border=border,
+            shadow=shadow,
+            clip=clip,
+        )
+
+    return paint
+
+
+def box_to_rect(b: Box) -> tuple[int, int, int, int]:
+    return b[0], b[1], b[2] - b[0], b[3] - b[1]
+
+
+@dataclass
+class ProbeResult:
+    timestamps_us: list[int]
+    draws_ms: list[float]
+    error: str | None = None
+    wall: float = 0.0
+    cpu: float = 0.0
+    geometry: str = ""
+
+
+def simulate(cfg: Settings, frames: int, size: tuple[int, int]) -> ProbeResult:
+    """Headless run of the live tick/draw loop: no window, fake 60 Hz clock, image surface."""
+    import cairo
+
+    w, h = size
+    res = ProbeResult([], [])
+    wall0, cpu0 = time.perf_counter(), time.process_time()
+    try:
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        cr = cairo.Context(surface)
+        paint = make_painter(cfg, w, h)
+        state = AnimationState(w, h, cfg.reach_px + cfg.border_width)
+        t0 = None
+        for i in range(frames):
+            ft = round(i * FAKE_FRAME_US)
+            if t0 is None:
+                t0 = ft
+            res.timestamps_us.append(ft)
+            step = state.step((ft - t0) / 1e6)
+            clip = None if i == 0 else box_to_rect(step.invalidate)  # first draw is full
+            t_start = time.perf_counter()
+            cr.save()
+            paint(cr, step.depth, clip)
+            cr.restore()
+            surface.flush()
+            res.draws_ms.append((time.perf_counter() - t_start) * 1000)
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        res.error = traceback.format_exc().strip().splitlines()[-1]
+    res.wall = time.perf_counter() - wall0
+    res.cpu = time.process_time() - cpu0
+    return res
+
+
 # ---- live part (GTK imported lazily) -------------------------------------------------------
 
 
-def run(cfg: Settings) -> int:
+def run(cfg: Settings) -> ProbeResult:
+    import traceback
+
     import cairo
     import gi
 
@@ -177,16 +316,17 @@ def run(cfg: Settings) -> int:
     from shell.gdk_util import monitor_index
     from shell.monitors import monitors_by_name
 
+    res = ProbeResult([], [])
     mon = monitors_by_name().get(cfg.output)
     if mon is None:
-        print(f"output {cfg.output} not found (kscreen-doctor mapping failed?); nothing started")
-        return 1
+        res.error = f"output {cfg.output} not found (kscreen-doctor mapping failed?)"
+        return res
     geo = mon.get_geometry()
     w, h = geo.width, geo.height
+    res.geometry = f"{cfg.output}: {w}x{h} at +{geo.x}+{geo.y}"
     idx = monitor_index(mon)
-    pad = cfg.reach_px + cfg.border_width
-    border = (cfg.border_width, cfg.border_rgba) if cfg.border_width > 0 else None
-    shadow = (cfg.elevation, cfg.shadow_rgba)
+    paint = make_painter(cfg, w, h)
+    state = AnimationState(w, h, cfg.reach_px + cfg.border_width)
 
     class Canvas(WaylandWindow):
         def __init__(self):
@@ -230,48 +370,46 @@ def run(cfg: Settings) -> int:
             label.set_size_request(*size)
             self.add(label)
 
-    st = {"depth": 0.0, "box": None, "first": True, "t0": None, "last_ft": None}
-    intervals: list[float] = []
-    draws_ms: list[float] = []
+    st = {"depth": 0.0, "first": True, "t0": None, "app": None}
+
+    def fail() -> None:
+        """Loud failure: traceback to stderr, record the reason, quit."""
+        traceback.print_exc()
+        if res.error is None:
+            res.error = traceback.format_exc().strip().splitlines()[-1]
+        if st["app"] is not None:
+            st["app"].quit()
 
     def on_draw(_area, cr) -> bool:
-        t_start = time.perf_counter()
-        if st["first"]:
-            st["first"] = False
-            clip = None  # first draw is a full redraw
-        else:
-            ok, rect = Gdk.cairo_get_clip_rectangle(cr)
-            clip = (rect.x, rect.y, rect.width, rect.height) if ok else None
-        draw_scene(
-            cr,
-            w,
-            h,
-            T,
-            R,
-            scene_panels(w, h, st["depth"]),
-            MASS,
-            border=border,
-            shadow=shadow,
-            clip=clip,
-        )
-        draws_ms.append((time.perf_counter() - t_start) * 1000)
+        try:
+            t_start = time.perf_counter()
+            if st["first"]:
+                st["first"] = False
+                clip = None  # first draw is a full redraw
+            else:
+                ok, rect = Gdk.cairo_get_clip_rectangle(cr)
+                clip = (rect.x, rect.y, rect.width, rect.height) if ok else None
+            paint(cr, st["depth"], clip)
+            res.draws_ms.append((time.perf_counter() - t_start) * 1000)
+        except Exception:
+            fail()
         return False
 
     canvas = Canvas()
     canvas.area.connect("draw", on_draw)
 
     def on_tick(widget, frame_clock) -> bool:
-        ft = frame_clock.get_frame_time()  # microseconds
-        if st["t0"] is None:
-            st["t0"] = ft
-        if st["last_ft"] is not None:
-            intervals.append((ft - st["last_ft"]) / 1000)
-        st["last_ft"] = ft
-        st["depth"] = dock_depth_at((ft - st["t0"]) / 1e6)
-        new = dock_box(w, h, st["depth"], pad)
-        x0, y0, x1, y1 = union(new, st["box"])
-        st["box"] = new
-        widget.queue_draw_area(x0, y0, x1 - x0, y1 - y0)
+        try:
+            ft = frame_clock.get_frame_time()  # microseconds
+            if st["t0"] is None:
+                st["t0"] = ft
+            res.timestamps_us.append(ft)
+            step = state.step((ft - st["t0"]) / 1e6)
+            st["depth"] = step.depth
+            widget.queue_draw_area(*box_to_rect(step.invalidate))
+        except Exception:
+            fail()
+            return False
         return True
 
     canvas.area.add_tick_callback(on_tick)
@@ -299,46 +437,59 @@ def run(cfg: Settings) -> int:
         GLib.timeout_add(cfg.raise_ms, raise_all)
 
     app = Application(APP_NAME, canvas, *contents, open_client=False)
+    st["app"] = app
     app.set_stylesheet_from_string(CSS, compile=False)
-
-    wall0, cpu0 = time.perf_counter(), time.process_time()
 
     def stop() -> bool:
         app.quit()
         return False
 
     GLib.timeout_add(int(cfg.seconds * 1000), stop)  # hard cap: always quits
+    wall0, cpu0 = time.perf_counter(), time.process_time()
     try:
         app.run()
-    finally:
-        report(
-            cfg, geo, intervals, draws_ms, time.perf_counter() - wall0, time.process_time() - cpu0
-        )
-    return 0
+    except Exception:
+        traceback.print_exc()
+        res.error = res.error or traceback.format_exc().strip().splitlines()[-1]
+    res.wall = time.perf_counter() - wall0
+    res.cpu = time.process_time() - cpu0
+    return res
 
 
-def report(cfg: Settings, geo, intervals, draws_ms, wall: float, cpu: float) -> None:
+def _fmt(v, spec: str = ".2f") -> str:
+    return "n/a" if v is None else format(v, spec)
+
+
+def report(cfg: Settings, res: ProbeResult, where: str) -> bool:
+    """Print the report; returns True when the probe counts as failed."""
+    stats = interval_stats(res.timestamps_us)
+    reason = res.error
+    if reason is None and stats["frames"] == 0:
+        reason = "no animation frames were produced"
+    if reason is not None:
+        print(f"PROBE FAILED: {reason}")
     print("=== canvas probe results ===")
     print(f"flags: {cfg}")
+    print(f"monitor {where}; reach_px={cfg.reach_px}")
+    print(f"frames (ticks): {stats['frames']}")
     print(
-        f"monitor {cfg.output}: {geo.width}x{geo.height} at +{geo.x}+{geo.y}; "
-        f"reach_px={cfg.reach_px}"
+        f"frame interval ms: mean {_fmt(stats['mean_ms'])} median {_fmt(stats['median_ms'])} "
+        f"p95 {_fmt(stats['p95_ms'])}"
     )
-    print(f"frames (ticks): {len(intervals) + 1 if intervals else 0}")
-    if intervals:
-        span = sum(intervals) / 1000
+    print(f"achieved fps over animation: {_fmt(stats['fps'], '.1f')}")
+    d = res.draws_ms
+    if d:
         print(
-            f"frame interval ms: mean {statistics.fmean(intervals):.2f} "
-            f"median {statistics.median(intervals):.2f} p95 {pct(intervals, 0.95):.2f}"
+            f"draw ms/frame: median {statistics.median(d):.2f} p95 {pct(d, 0.95):.2f} "
+            f"max {max(d):.2f} ({len(d)} draws)"
         )
-        print(f"achieved fps over animation: {len(intervals) / span:.1f}")
-    if draws_ms:
-        print(
-            f"draw handler ms/frame: median {statistics.median(draws_ms):.2f} "
-            f"p95 {pct(draws_ms, 0.95):.2f} max {max(draws_ms):.2f} ({len(draws_ms)} draws)"
-        )
-    print(f"CPU: {cpu:.2f} s over {wall:.2f} s wall = {cpu / wall:.2f} of one core")
-    print(CHECKLIST)
+    else:
+        print("draw ms/frame: n/a (0 draws)")
+    load = res.cpu / res.wall if res.wall > 0 else None
+    print(f"CPU: {res.cpu:.2f} s over {res.wall:.2f} s wall = {_fmt(load)} of one core")
+    if not cfg.simulate:
+        print(CHECKLIST)
+    return reason is not None
 
 
 CHECKLIST = """
@@ -361,7 +512,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"settings: {cfg}")
         print(f"reach_px for elevation {cfg.elevation}%: {cfg.reach_px}")
         return 0
-    return run(cfg)
+    if cfg.simulate:
+        res = simulate(cfg, cfg.simulate, cfg.sim_size)
+        where = f"simulated {cfg.sim_size[0]}x{cfg.sim_size[1]} (no window, fake 60 Hz clock)"
+    else:
+        res = run(cfg)
+        where = res.geometry or cfg.output
+    return 1 if report(cfg, res, where) else 0
 
 
 if __name__ == "__main__":
