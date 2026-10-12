@@ -3,12 +3,15 @@ import math
 import cairo
 import pytest
 
+from spikes.canvas import effects
 from spikes.canvas.effects import (
-    ShadowLayer,
+    MAX_REACH_PX,
     draw_border,
-    draw_shadow,
-    draw_shadow_stack,
-    shadow_alphas,
+    draw_scene,
+    draw_shadow_uniform,
+    parse_rgba_hex,
+    reach_px,
+    shadow_levels,
 )
 from spikes.canvas.outline import fill_mass
 
@@ -31,107 +34,82 @@ def pixels(surface):
     return lambda x, y: tuple(data[y * stride + x * 4 : y * stride + x * 4 + 4])  # B, G, R, A
 
 
-def shadow_surface(layers, opacity=0.55, panels=PANEL, profile="legacy", **kw):
+def shadow_surface(pct, alpha=0.5, panels=PANEL):
     s = new_surface()
-    cr = cairo.Context(s)
-    draw_shadow(cr, W, H, T, R, panels, layers, opacity, (0, 0, 0), profile=profile, **kw)
+    draw_shadow_uniform(cairo.Context(s), W, H, T, R, panels, pct, (0, 0, 0, alpha))
     return s
 
 
-def cumulative(alphas, k):
-    """Cumulative alpha at distance k (layer i covers distances < i)."""
-    rest = 1.0
-    for i, a in enumerate(alphas, start=1):
-        if i > k:
-            rest *= 1 - a
-    return 1 - rest
+def target(k, alpha, elevation):
+    sigma = elevation / 2.5
+    return alpha * 0.5 * math.erfc(k / (sigma * math.sqrt(2)))
 
 
-@pytest.mark.parametrize("layers", [8, 16, 24])
-def test_shadow_alphas_cumulative_follows_falloff(layers):
-    alphas = shadow_alphas(layers, 0.55, profile="legacy")
-    assert len(alphas) == layers
-    assert all(0 <= a <= 1 for a in alphas)
-    cum = [cumulative(alphas, k) for k in range(layers + 1)]
-    assert all(cum[k] >= cum[k + 1] - 1e-9 for k in range(layers))  # monotonic
-    assert abs(cum[0] - 0.55) <= 1 / 255
-    assert cum[layers] == 0
+def cumulative(levels, k):
+    """Cumulative alpha at distance k as 0..1, simulating cairo's 8-bit OVER, widest layer first."""
+    d = 0
+    for i in range(len(levels), k, -1):
+        a = round(levels[i - 1] * 255)
+        t = d * (255 - a) + 0x80
+        d = a + ((t + (t >> 8)) >> 8)
+    return d / 255
 
 
-def test_shadow_alphas_scale_with_opacity():
-    low = shadow_alphas(16, 0.2, profile="legacy")
-    high = shadow_alphas(16, 0.8, profile="legacy")
-    assert cumulative(low, 0) == pytest.approx(0.2, abs=1 / 255)
-    assert cumulative(high, 0) == pytest.approx(0.8, abs=1 / 255)
+# ---- shadow: profile -----------------------------------------------------------------------
 
 
-def column_alpha(surface, x, y0, y1):
-    px = pixels(surface)
-    return [px(x, y)[3] for y in range(y0, y1)]
+@pytest.mark.parametrize(("elevation", "alpha"), [(8, 0.25), (16, 0.35), (32, 0.45), (48, 0.35)])
+def test_shadow_levels_half_at_edge_monotonic_zero_at_elevation(elevation, alpha):
+    levels = shadow_levels(elevation, alpha)
+    assert len(levels) == elevation and all(0 <= a <= 1 for a in levels)
+    cum = [cumulative(levels, k) for k in range(elevation + 1)]
+    assert abs(cum[0] - alpha / 2) <= 1.5 / 255
+    assert all(cum[k] >= cum[k + 1] - 1e-9 for k in range(elevation))
+    assert cum[elevation] == 0
+    for k in range(elevation + 1):  # follows the erfc model
+        assert abs(cum[k] - target(k, alpha, elevation)) <= 2 / 255
 
 
-@pytest.mark.parametrize("layers", [8, 16, 24])
-def test_shadow_monotonic_and_banding(layers):
-    s = shadow_surface(layers)
-    # Under the panel bump (bottom edge at y = T + 40) and through empty frame (inner edge y = T).
-    lines = {
-        "panel": column_alpha(s, 300, T + BUMP_DEPTH, T + BUMP_DEPTH + layers + 2),
-        "frame": column_alpha(s, 100, T, T + layers + 2),
-    }
-    target = shadow_alphas(layers, 0.55, profile="legacy")
-    for name, col in lines.items():
-        steps = [col[i] - col[i + 1] for i in range(len(col) - 1)]
-        assert all(st >= 0 for st in steps), f"{name} layers={layers} not monotonic: {col}"
-        assert col[-1] == 0 and col[-2] == 0
-        # Ideal 8-bit falloff of the model: compare the measured steps to the ideal steps. The
-        # peak slope of the falloff itself is steeper than 2/255 at small elevations (a 140/255
-        # drop over 8 px cannot be smoother), so banding is the deviation from the smooth model.
-        ideal = [round(255 * cumulative(target, k + 0.5)) for k in range(len(col))]
-        worst = max(abs(c - i) for c, i in zip(col, ideal, strict=True))
-        ideal_steps = [ideal[i] - ideal[i + 1] for i in range(len(ideal) - 1)]
-        dev = max(abs(a - b) for a, b in zip(steps, ideal_steps, strict=True))
-        print(
-            f"BANDING layers={layers} {name}: max adjacent step={max(steps)}/255 "
-            f"ideal max step={max(ideal_steps)}/255 step deviation={dev} value deviation={worst}"
-        )
-        assert dev <= 2, f"{name} layers={layers}: step deviation {dev}/255 from the smooth model"
+def test_shadow_rendered_profile_matches_model():
+    elevation, alpha = reach_px(50), 0.45
+    px = pixels(shadow_surface(50, alpha))
+    col = [px(100, T + k)[3] for k in range(elevation + 4)]
+    steps = [col[i] - col[i + 1] for i in range(len(col) - 1)]
+    assert all(st >= 0 for st in steps), col
+    assert col[-1] == 0 and col[-2] == 0 and col[elevation] <= 1
+    assert abs(col[0] - 255 * alpha / 2) <= 6, (col[0], 255 * alpha / 2)
+    ideal = [round(255 * target(k + 0.5, alpha, elevation)) for k in range(len(col))]
+    assert max(abs(c - i) for c, i in zip(col, ideal, strict=True)) <= 3
 
 
-@pytest.mark.parametrize("layers", [8, 16, 24])
-def test_shadow_symmetric_left_right(layers):
-    s = shadow_surface(layers)
-    px = pixels(s)
-    # The panel is centred: spans 200..400 in a 600 wide screen, so x and W-1-x mirror.
-    worst_curved = 0
-    for y in range(0, T + BUMP_DEPTH + layers + 2):
-        for x in range(0, W // 2):
-            d = abs(px(x, y)[3] - px(W - 1 - x, y)[3])
-            straight = 40 <= x <= 160 or 240 <= x <= 299  # away from every arc
-            if straight:
-                assert d <= 1, f"asymmetry on a straight run at ({x},{y}): {d}/255"
-            worst_curved = max(worst_curved, d)
-    # Edge pixels on arcs differ by cairo's arc tessellation, not by the method.
-    print(f"SYMMETRY layers={layers}: worst arc-edge pixel difference {worst_curved}/255")
-    assert worst_curved <= 8
+@pytest.mark.parametrize("pct", [17, 33, 67])
+def test_shadow_is_uniform_on_all_four_sides(pct):
+    elevation = reach_px(pct)
+    px = pixels(shadow_surface(pct, 0.45))
+    for k in range(elevation + 1):
+        sides = {
+            "left": px(T + k, 200)[3],
+            "right": px(W - 1 - T - k, 200)[3],
+            "top": px(100, T + k)[3],
+            "bottom": px(100, H - 1 - T - k)[3],
+        }
+        spread = max(sides.values()) - min(sides.values())
+        assert spread <= 1, f"k={k}: not uniform {sides}"
 
 
-@pytest.mark.parametrize(
-    ("profile", "kw"),
-    [
-        ("legacy", {}),
-        ("gaussian", {}),
-        ("gaussian", {"offset": (0, 8)}),
-        ("gaussian", {"offset": (5, 12)}),
-    ],
-)
-def test_shadow_leaves_mass_untouched(profile, kw):
+def test_shadow_colour_is_used():
     s = new_surface()
-    cr = cairo.Context(s)
-    fill_mass(cr, W, H, T, R, PANEL, MASS)
-    before = pixels(s)
-    snapshot = {(x, y): before(x, y) for y in range(H) for x in range(W)}
-    cr2 = cairo.Context(s)
-    draw_shadow(cr2, W, H, T, R, PANEL, 16, 0.55, (0, 0, 0), profile=profile, **kw)
+    draw_shadow_uniform(cairo.Context(s), W, H, T, R, PANEL, 33, (1.0, 0.0, 0.0, 0.5))
+    b, g, r, a = pixels(s)(100, T)
+    assert g == 0 and b == 0 and r == a > 0  # premultiplied pure red
+
+
+def test_shadow_leaves_mass_untouched_and_does_not_leak_under_it():
+    s = new_surface()
+    fill_mass(cairo.Context(s), W, H, T, R, PANEL, MASS)
+    px = pixels(s)
+    snapshot = {(x, y): px(x, y) for y in range(H) for x in range(W)}
+    draw_shadow_uniform(cairo.Context(s), W, H, T, R, PANEL, 33, (0, 0, 0, 0.5))
     after = pixels(s)
     checked = 0
     for (x, y), v in snapshot.items():
@@ -139,121 +117,175 @@ def test_shadow_leaves_mass_untouched(profile, kw):
             checked += 1
             assert after(x, y) == v, f"mass pixel changed at ({x},{y})"
     assert checked > 10000
+    solo = pixels(shadow_surface(33))  # shadow alone: nothing on any fully-mass pixel
+    for (x, y), v in snapshot.items():
+        if v[3] == 255:
+            assert solo(x, y)[3] == 0, f"shadow leaked under the mass at ({x},{y})"
 
 
-def test_border_exactly_width_on_mass_side_and_nothing_on_desktop():
-    width = 3
+# ---- elevation percentage ------------------------------------------------------------------
+
+
+def test_default_max_reach_placeholder():
+    assert MAX_REACH_PX == 48  # the only place the default is pinned
+
+
+def test_reach_mapping():
+    m = MAX_REACH_PX
+    assert (reach_px(0), reach_px(100)) == (0, m)
+    assert reach_px(50) == round(m * 0.5) and reach_px(25) == round(m * 0.25)
+    vals = [reach_px(p) for p in range(101)]
+    assert all(isinstance(v, int) for v in vals)
+    assert vals == sorted(vals)  # monotonic
+    assert all(v == round(m * p / 100) for p, v in enumerate(vals))  # integer-rounded
+
+
+def test_reach_mapping_reads_the_constant(monkeypatch):
+    monkeypatch.setattr(effects, "MAX_REACH_PX", 96)
+    assert (reach_px(0), reach_px(50), reach_px(100)) == (0, 48, 96)
+    monkeypatch.setattr(effects, "MAX_REACH_PX", 20)
+    assert (reach_px(50), reach_px(100)) == (10, 20)
+
+
+def test_reach_out_of_range_is_clamped():
+    assert reach_px(-20) == 0 and reach_px(250) == MAX_REACH_PX
+
+
+def test_zero_percent_draws_nothing():
+    assert bytes(shadow_surface(0, 0.9).get_data()) == bytes(new_surface().get_data())
+    with_none = new_surface()
+    draw_scene(cairo.Context(with_none), W, H, T, R, PANEL, MASS)
+    with_zero = new_surface()
+    draw_scene(cairo.Context(with_zero), W, H, T, R, PANEL, MASS, shadow=(0, (0, 0, 0, 0.9)))
+    assert bytes(with_none.get_data()) == bytes(with_zero.get_data())
+
+
+def test_reach_matches_percentage_at_100_and_50_percent():
+    for pct in (100, 50):
+        reach = reach_px(pct)
+        col = [pixels(shadow_surface(pct, 0.6))(100, T + k)[3] for k in range(reach + 3)]
+        assert col[reach - 1] > 0 or col[reach - 2] > 0  # still reaching just inside
+        assert col[reach] <= 1 and col[reach + 1] == 0 and col[reach + 2] == 0
+
+
+def test_higher_percent_never_smaller_alpha_at_any_distance():
+    pcts = [10, 25, 40, 50, 75, 100]
+    cols = [
+        [pixels(shadow_surface(p, 0.45))(100, T + k)[3] for k in range(MAX_REACH_PX + 4)]
+        for p in pcts
+    ]
+    for lo, hi in zip(cols, cols[1:], strict=False):
+        assert all(b >= a for a, b in zip(lo, hi, strict=True)), (lo, hi)
+
+
+# ---- border --------------------------------------------------------------------------------
+
+
+def mass_with_border(width, rgba):
     s = new_surface()
     cr = cairo.Context(s)
     fill_mass(cr, W, H, T, R, PANEL, MASS)
-    draw_border(cr, W, H, T, R, PANEL, width, ACCENT)
-    px = pixels(s)
-    x = 300  # through the middle of the bump
+    draw_border(cr, W, H, T, R, PANEL, width, rgba)
+    return s
+
+
+@pytest.mark.parametrize("width", [1, 2, 4])
+def test_border_exactly_width_thick_on_mass_side_nothing_on_desktop(width):
+    px = pixels(mass_with_border(width, (1, 1, 1, 0.5)))
     edge = T + BUMP_DEPTH
-    accent = [y for y in range(H // 2) if px(x, y)[2] > 100]  # R channel: accent ~143, mass ~10
-    assert len(accent) == width, accent
-    assert accent == list(range(edge - width, edge))
-    assert all(px(x, y)[3] == 0 for y in range(edge, H - T - 1))  # desktop side stays transparent
-    # And through plain frame (inner edge at y = T) the same holds.
-    accent_f = [y for y in range(H // 2) if px(100, y)[2] > 100]
-    assert accent_f == list(range(T - width, T))
-    assert all(px(100, y)[3] == 0 for y in range(T, H - T - 1))
+    # R channel: mass ~10, 50% white over it ~132
+    lit = [y for y in range(H // 2) if px(300, y)[2] > 60]
+    assert abs(len(lit) - width) <= 1, lit
+    assert lit[-1] == edge - 1  # adjacent to the desktop, inside the mass
+    assert all(px(300, y)[3] == 0 for y in range(edge + 1, H - T - 1))  # desktop untouched
+    lit_f = [y for y in range(H // 2) if px(100, y)[2] > 60]
+    assert abs(len(lit_f) - width) <= 1 and lit_f[-1] == T - 1
+    assert all(px(100, y)[3] == 0 for y in range(T + 1, H - T - 1))
 
 
-# ---- gaussian profile (v2) ---------------------------------------------------------------
+@pytest.mark.parametrize("alpha", [1.0, 0.5, 0.25])
+def test_border_alpha_blends_over_the_mass(alpha):
+    rgba = (ACCENT[0], ACCENT[1], ACCENT[2], alpha)
+    px = pixels(mass_with_border(4, rgba))
+    b, g, r, a = px(100, T - 2)  # well inside the 4 px band
+    assert a == 255
+    for got, border_c, mass_c in zip((r, g, b), rgba[:3], MASS[:3], strict=True):
+        expected = 255 * (border_c * alpha + mass_c * (1 - alpha))
+        assert abs(got - expected) <= 2, (got, expected)
 
 
-def gauss_target(k, opacity, reach):
-    sigma = reach / 2.5
-    return opacity * 0.5 * math.erfc(k / (sigma * math.sqrt(2)))
+# ---- scene + damaged region ----------------------------------------------------------------
+
+BORDER = (2, (ACCENT[0], ACCENT[1], ACCENT[2], 0.5))
+SHADOW = (33, (0.0, 0.0, 0.0, 0.45))
 
 
-@pytest.mark.parametrize(("reach", "opacity"), [(8, 0.3), (32, 0.35), (48, 0.4)])
-def test_gaussian_alphas_half_at_edge_monotonic_zero_at_reach(reach, opacity):
-    alphas = shadow_alphas(reach, opacity)  # default profile is gaussian
-    assert len(alphas) == reach and all(0 <= a <= 1 for a in alphas)
-    cum = [cumulative(alphas, k) for k in range(reach + 1)]
-    assert abs(cum[0] - 0.5 * opacity) <= 1 / 255
-    assert all(cum[k] >= cum[k + 1] - 1e-9 for k in range(reach))
-    assert cum[reach] <= 1 / 255
-    for k in range(reach + 1):  # follows the erfc model
-        assert abs(cum[k] - gauss_target(k, opacity, reach)) <= 1 / 255
+def scene(depth, clip=None, surface=None):
+    s = surface or new_surface()
+    panels = [("top", 200, 200, 40, depth)]
+    draw_scene(cairo.Context(s), W, H, T, R, panels, MASS, border=BORDER, shadow=SHADOW, clip=clip)
+    return s
 
 
-def test_gaussian_sigma_parameter():
-    wide = shadow_alphas(32, 0.4, sigma=20)
-    narrow = shadow_alphas(32, 0.4, sigma=5)
-    assert cumulative(wide, 10) > cumulative(narrow, 10)
-
-
-def test_gaussian_rendered_edge_is_half_peak_and_monotonic():
-    reach, opacity = 32, 0.4
-    s = shadow_surface(reach, opacity, profile="gaussian")
-    col = column_alpha(s, 100, T, T + reach + 4)  # empty frame stretch, inner edge at y = T
-    steps = [col[i] - col[i + 1] for i in range(len(col) - 1)]
-    assert all(st >= 0 for st in steps), col
-    assert col[-1] == 0 and col[-2] == 0
-    peak = 255 * opacity
-    assert abs(col[0] - 0.5 * peak) <= 8, (col[0], 0.5 * peak)  # edge pixel ~ half the peak
-    assert col[0] < 0.6 * peak
-    ideal = [round(255 * gauss_target(k + 0.5, opacity, reach)) for k in range(len(col))]
-    assert max(abs(c - i) for c, i in zip(col, ideal, strict=True)) <= 3
-
-
-def test_gaussian_offset_shifts_top_shadow_down_and_fills_strip():
-    reach, opacity, dy = 24, 0.4, 8
-    base = column_alpha(
-        shadow_surface(reach, opacity, profile="gaussian"), 100, T, T + reach + dy + 4
-    )
-    moved = column_alpha(
-        shadow_surface(reach, opacity, profile="gaussian", offset=(0, dy)),
-        100,
-        T,
-        T + reach + dy + 4,
-    )
-    # Below the shifted edge the profile is the unshifted one, moved down by dy.
-    for m in range(reach):
-        assert abs(moved[dy + m] - base[m]) <= 2, (m, moved[dy + m], base[m])
-    # The strip between the bar and the shifted edge is the inside of the shifted shape: it must
-    # be at least as dark as the edge value (no light gap under the bar) and never exceed opacity.
-    assert all(moved[i] >= moved[dy] - 2 for i in range(dy)), moved[: dy + 1]
-    assert max(moved) <= round(255 * opacity) + 1
-    # Opposite edge: with a downward offset the bottom frame's shadow is weaker at the edge.
-    bottom = column_alpha(
-        shadow_surface(reach, opacity, profile="gaussian", offset=(0, dy)), 100, H - T - 4, H - T
-    )
-    bottom0 = column_alpha(
-        shadow_surface(reach, opacity, profile="gaussian"), 100, H - T - 4, H - T
-    )
-    assert bottom[-1] < bottom0[-1] - 10
-
-
-def test_gaussian_offset_symmetric_left_right():
-    s = shadow_surface(32, 0.35, profile="gaussian", offset=(0, 8))
+def snapshot(s):
     px = pixels(s)
-    for y in range(0, T + BUMP_DEPTH + 40):
-        for x in list(range(40, 161)) + list(range(240, 300)):
-            d = abs(px(x, y)[3] - px(W - 1 - x, y)[3])
-            assert d <= 1, f"asymmetry at ({x},{y}): {d}/255"
+    return [[px(x, y) for x in range(W)] for y in range(H)]
 
 
-def test_shadow_stack_composites_layers():
-    one = new_surface()
-    cr = cairo.Context(one)
-    draw_shadow_stack(cr, W, H, T, R, PANEL, [ShadowLayer(0.3, 8, (0, 2))], (0, 0, 0))
-    ref = shadow_surface(8, 0.3, profile="gaussian", offset=(0, 2))
-    assert pixels(one)(100, T + 3) == pixels(ref)(100, T + 3)
-    two = new_surface()
-    cr = cairo.Context(two)
-    draw_shadow_stack(
-        cr,
-        W,
-        H,
-        T,
-        R,
-        PANEL,
-        [ShadowLayer(0.3, 8, (0, 2)), ShadowLayer(0.22, 40, (0, 10))],
-        (0, 0, 0),
-    )
-    assert pixels(two)(100, T + 12)[3] > pixels(one)(100, T + 12)[3]
-    assert pixels(two)(100, T + 2)[3] > pixels(one)(100, T + 2)[3]
+def test_draw_scene_order_shadow_under_mass_border_over():
+    px = pixels(scene(40.0))
+    edge = T + BUMP_DEPTH
+    assert px(300, edge - 1)[2] > 60  # border lit on the mass side
+    assert px(300, edge + 1)[3] > 0 and px(300, edge + 1)[2] == 0  # shadow: black, on the desktop
+    assert px(300, 5)[3] == 255 and px(300, 5)[2] == round(MASS[0] * 255)  # mass
+
+
+def test_draw_scene_clip_matches_full_redraw_inside_and_keeps_outside():
+    clip = (150, 0, 300, 100)
+    x0, y0, cw, ch = clip
+    s = scene(10.0)  # retained surface at an earlier state
+    before = snapshot(s)
+    scene(40.0, clip=clip, surface=s)
+    got = snapshot(s)
+    full = snapshot(scene(40.0))
+    changed = 0
+    for y in range(H):
+        for x in range(W):
+            if x0 <= x < x0 + cw and y0 <= y < y0 + ch:
+                assert got[y][x] == full[y][x], f"inside clip differs at ({x},{y})"
+                changed += got[y][x] != before[y][x]
+            else:
+                assert got[y][x] == before[y][x], f"outside clip changed at ({x},{y})"
+    assert changed > 0
+
+
+def test_draw_scene_without_options_is_just_the_mass():
+    s = new_surface()
+    draw_scene(cairo.Context(s), W, H, T, R, PANEL, MASS)
+    ref = new_surface()
+    fill_mass(cairo.Context(ref), W, H, T, R, PANEL, MASS)
+    assert snapshot(s) == snapshot(ref)
+
+
+# ---- parse_rgba_hex ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("#8fd3b6", (0x8F / 255, 0xD3 / 255, 0xB6 / 255, 1.0)),
+        ("#8FD3B680", (0x8F / 255, 0xD3 / 255, 0xB6 / 255, 0x80 / 255)),
+        ("#00000073", (0.0, 0.0, 0.0, 0x73 / 255)),
+        ("#ffffffFF", (1.0, 1.0, 1.0, 1.0)),
+    ],
+)
+def test_parse_rgba_hex(text, expected):
+    assert parse_rgba_hex(text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "8fd3b6", "#8fd3b", "#8fd3b6800", "#gggggg", "#12345678z", None]
+)
+def test_parse_rgba_hex_invalid(bad):
+    with pytest.raises(ValueError):
+        parse_rgba_hex(bad)
