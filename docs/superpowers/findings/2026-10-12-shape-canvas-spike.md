@@ -29,7 +29,7 @@ What the spike decided to build:
 | CPU | AMD Ryzen AI 9 HX 370 w/ Radeon 890M (24 threads), governor `performance` (amd-pstate-epp, EPP performance) |
 | OS | Linux 7.2.9 (CachyOS) |
 | Software | Python 3.14.7, pycairo 1.29.2, cairo 1.18.6 |
-| Display | 1920x1080 at 60 Hz (HDMI-A-1), KWin Wayland, Plasma 6.7.5 |
+| Display | 1920x1080 at 60 Hz (HDMI-A-1), KWin Wayland, Plasma 6.7.5 (from `plasmashell --version` on the test machine) |
 | Headless backend | single-threaded cairo image surface (software), not the GTK stack |
 
 ## 3. Headless results
@@ -76,11 +76,11 @@ The union outline was compared pixel for pixel with the existing per-window rend
 1. A panel whose fillet lands inside a screen-corner arc: about 29 px differ. Rule: corner clearance `pos - r >= T + R`.
 2. Neighbouring panels on one edge closer than `r1 + r2` (up to 28 px): their fillets overlap. Found by the reviewer; the multi-panel test only proved that the union never exceeds the single-panel alpha and was otherwise vacuous.
 
-Spec section 17 now carries these minimum-geometry rules.
+Spec section 17 now carries these minimum-geometry rules (committed). Spec section 18's cost bullet was also amended to record the shadow-cache rejection, so the follow-up plan does not need to.
 
 ### 3.5 Banding criterion correction
 
-The plan's "adjacent-row alpha step <= 2/255" is physically impossible: with opacity 0.55 the ideal 8-bit smooth falloff has steps of 26 / 13 / 9 per pixel at 8 / 16 / 24 layers. The criterion became: monotonic, and deviation from the ideal 8-bit model <= 2/255. Measured: max step deviation 1 at all three layer counts, max value deviation 1 / 3 / 7 (rounding accumulates), all columns monotonic. Visual check on the crops (2x/3x): no stair steps. Left/right symmetry: <= 1/255 on straight runs, up to 8/255 on arc pixels (tessellation).
+The numbers in this subsection belong to the old smoothstep profile at opacity 0.55 (Task 2/3), not the final half-Gaussian profile. The plan's "adjacent-row alpha step <= 2/255" is physically impossible: with opacity 0.55 the ideal 8-bit smooth falloff has steps of 26 / 13 / 9 per pixel at 8 / 16 / 24 layers. The criterion became: monotonic, and deviation from the ideal 8-bit model <= 2/255. Measured: max step deviation 1 at all three layer counts, max value deviation 1 / 3 / 7 (rounding accumulates), all columns monotonic. Visual check on the crops (2x/3x): no stair steps. Left/right symmetry: <= 1/255 on straight runs, up to 7/255 on arc pixels (test bound 8; tessellation).
 
 ## 4. The shadow look (design history)
 
@@ -89,7 +89,7 @@ The plan's "adjacent-row alpha step <= 2/255" is physically impossible: with opa
 3. Revision: half-Gaussian profile, 8-bit-aware per-layer alphas, a mirrored inside ramp under the bars so offsets leave no light gap.
 4. Variants S1-S4 (offset, top-lit, two-layer contact + ambient) and borders B0-B4 were compared on light and dark sheets (`sheet_shadow_*`, `sheet_border_*`).
 5. Phil chose a simpler model: a **uniform** shadow with only elevation and RGBA colour; a border with width and RGBA colour. Calibration sheets (`sheet_reach_calibration_*`) set the limits in section 1.
-6. Observed weaknesses: a shadow cannot darken a near-black background, so it is faint on dark themes (the border carries the look there); 25% elevation is almost invisible; on light backgrounds the uniform shadow reads as a soft halo (heavy from about 64 px, unreasonable at 96 px).
+6. Weaknesses noted by the implementer and controller on the sheets (the user's only input here was "reasonable reach ends at 32 px"): a shadow cannot darken a near-black background, so it is faint on dark themes (the border carries the look there); 25% elevation is almost invisible; on light backgrounds the uniform shadow reads as a soft halo (heavy from about 64 px, unreasonable at 96 px).
 
 ## 5. Live results (Phil, HDMI-A-1, probe commit 872eff9)
 
@@ -105,7 +105,7 @@ All runs: HDMI-A-1, 1920x1080 at 60.000 Hz, canvas allocation 1920x1080 (equal t
 | 6 | `--content-layer overlay --raise-ms 0` | 59.9 | 16.70 / 16.67 / 16.69 | 2.02 / 2.36 / 11.89 | 600 / 599 | {1:597, 2:1} | 0.88 / 0.01 | 0.36 |
 | 7 | `--elevation 100` (reach 48 px) | 60.0 | 16.67 / 16.67 / 16.83 | 3.92 / 4.45 / 22.58 | 601 / 599 | {1:596, 2:2} | 1.75 / 1.02 | 0.43 |
 
-The max draw times (7.86-22.58 ms) include the one-time first full draw. Each 10 s run produced about 600 content ticks, also after the 500 ms re-raise (runs 1-3, 5, 7).
+The max draw times (7.86-22.58 ms) are inferred to be the one-time first full draw; the first draw was not logged separately, and run 1's 7.86 ms vs 11.9-13.6 ms in runs 2-6 is unexplained. Each 10 s run produced about 600 content ticks, also after the 500 ms re-raise (runs 1-3, 5, 7).
 
 **Observed by the tester:**
 
@@ -113,13 +113,15 @@ The max draw times (7.86-22.58 ms) include the one-time first full draw. Each 10
 2. No flicker or tearing that he could see.
 3. The border and shadow followed the bump. The marker looked glued to it (at the bottom it is pushed up by the screen edge, which is expected: a 14 px marker in a 10 px band).
 4. Click-through worked, as far as he could test in 10 s.
-5. Check (e), maximized window: the clock was correctly drawn above it, as designed (a maximized window stops at the frame's reserved zone; panels float over windows). This is a pass. (The tester first reported this as a fullscreen window; he later clarified it was maximized.) Fullscreen was tested separately afterwards; his words: "Fullscreen covers the edge shell, I switched back and forth and it worked as expected." So a fullscreen window covers the shell, as expected. This was a manual check by the user using his own method; the procedure beyond that is not recorded.
+5. Check (e), maximized window: the clock was correctly drawn above it, as designed (panels float over windows; the probe had no zone-reserving strips, so the reserved-zone stop was not tested). This is a pass. (The tester first reported this as a fullscreen window; he later clarified it was maximized.) Fullscreen was tested separately afterwards; his words: "Fullscreen covers the edge shell, I switched back and forth and it worked as expected." So an active fullscreen window covers the shell, as expected. This was a manual check by the user using his own method; the procedure beyond that is not recorded.
+
+Provenance: observations 1-4, the maximized pass and the active-fullscreen pass, plus the calibration answers "reasonable reach ends at 32 px", alpha 0.5, border 2 px accent and max 48 px, came from the user. Everything else in this note comes from agents (implementers, controller, reviewer).
 
 **Interpretation:**
 
-- Pacing is 59.9-60.6 fps at 60 Hz; frame interval median 16.67 ms in every run, p95 16.69-16.86 ms.
+- Pacing is 59.9-60.6 fps at 60 Hz; frame interval median 16.67 ms in every run, p95 16.69-16.86 ms. Rates above 60.0 (60.6 in runs 2 and 4, mean interval 16.50 ms) on a 60.000 Hz output are a frame-clock or measurement artefact, not faster pacing.
 - Draw cost is about 2x the headless number (1.06 ms in `--simulate`; live median 1.90-2.07 ms / p95 2.33-2.55 ms at 50% elevation, 3.92 ms / 4.45 ms at 100%; the difference is inferred to be GTK overhead), but all of it is well under 8 ms.
-- Sync between the content window and the canvas: max depth error 0.14-1.80 px (at most about one frame at peak speed). The mean error was about 1 px (a steady one-frame lag) in runs 1 and 7 and about 0 in the others, so the lag phase varies from run to run. It is not determined by the re-raise setting alone: runs 2 and 3 (default, with the delayed re-raise) had means of 0.04 and 0.01. The probe notes that even a perfect pipeline shows up to about 1.7 px because the draw follows the tick within a frame.
+- Sync between the content window and the canvas: max depth error 0.14-1.80 px (at most about one frame at peak speed). The mean error was about 1 px (consistent with a steady one-frame lag; the sign was not measured) in runs 1 and 7 and about 0 in the others, so the lag phase varies from run to run. It is not determined by the re-raise setting alone: runs 2 and 3 (default, with the delayed re-raise) had means of 0.04 and 0.01. The probe notes up to about 1.7 px of measurement slack, but `--simulate` gave 0.00 and several live runs averaged about 0, so the 1 px mean is a real, phase-dependent lag.
 - The delayed re-raise (`hide(); show_all()`) did not freeze the animation.
 - CPU 0.32-0.37 of one core (0.43 at 100% elevation) is while a loop animates continuously; normal use animates about 280 ms per interaction, so the average should be near zero (inferred, not measured). Before blaming the canvas, profile the content-tick / margin-relayout path and the 3-window setup; the headless draw is only about 1 ms of a 16.7 ms frame.
 
@@ -143,15 +145,15 @@ The max draw times (7.86-22.58 ms) include the one-time first full draw. Each 10
 | Redraw cost is far inside the budget. | 0.5-2.1 ms headless at 12-48 px (up to 3.4 ms at 96 px) versus 8 ms; live median 1.90-2.07 ms (p95 2.33-2.55 ms) at 50%, 3.92 ms (p95 4.45 ms) at 100% | Measured |
 | 60 fps is held. | 59.9-60.6 fps, interval median 16.67 ms, p95 16.69-16.86 ms | Measured |
 | The canvas follows the panels. | max depth error 0.14-1.80 px (mean about 0 to about 1 px depending on the run); border and shadow followed the bump | Measured + observed |
-| No banding. | Monotonic, deviation from the ideal 8-bit model <= 1 | Measured |
+| No banding. | Final half-Gaussian profile: rendered profile within 3/255 of the model (Task 2c), levels monotonic, crops judged smooth by the implementer, not yet by the user. Superseded smoothstep profile (Task 2/3): monotonic, step deviation 1-2, value deviation 1/3/7 at 8/16/24 layers. | Measured + implementer-observed |
 | Seams are impossible by construction. | Union outline equals the per-window renderers within 5/255 on four edges and five depths | Measured |
 | Content stays above the canvas. | Visible in all stacking variants | Observed (lone canvas, see section 8) |
 | Click-through works. | Only tested in 10 s runs | Observed |
 
 Recommended defaults for the real feature:
 
-- Redraw only the damaged region every frame. No shadow cache. Keep full redraws for resize, theme, config and hot-plug (about 13 ms at 48 px).
-- `elevation` 0-100% maps to `reach = round(MAX_REACH_PX * pct / 100)`; `MAX_REACH_PX = 48`; out-of-range values clamp; 0% draws nothing.
+- Redraw only the damaged region every frame. No shadow cache. Keep full redraws for resize, theme, config and hot-plug (about 13 ms headless at 48 px; the live maximum draw was 22.6 ms, probably the first full draw).
+- `elevation` 0-100% maps to `reach = round(MAX_REACH_PX * pct / 100)`; `MAX_REACH_PX = 48`; the drawing function clamps; config validation rejects out-of-range values with the key path (spec 18); 0% draws nothing.
 - Shadow default: black, alpha 0.5, elevation 50% (24 px; controller's choice, not confirmed by Phil).
 - Border default: 2 px accent RGBA.
 - Both effects are opt-in (`enabled = false`).
@@ -161,16 +163,21 @@ Recommended defaults for the real feature:
 
 ## 8. Not tested / open risks
 
-- Fullscreen: verified manually by the user in one session (a fullscreen window covers the shell; switching back and forth worked). Not measured; single machine, single output (HDMI-A-1). Repeat it as a manual check after the canvas refactor.
+- Fullscreen: verified manually by the user in one session (an active fullscreen window covers the shell; switching back and forth worked). Not measured; single machine, single output (HDMI-A-1). Repeat it as a manual check after the canvas refactor.
 - **Stacking in the real design.** The canvas-first, content-first, overlay and `--raise-ms 0` variants all showed content above the canvas, but with a lone canvas and no frame strips. The real design still has four invisible zone-reserving strips; stacking must be re-tested with them before `raise_to_top` is removed.
-- HiDPI and fractional scaling: the spec says reach scales by the display scale; untested, and 1 logical px is quantised at 2x.
+- HiDPI and fractional scaling: the spec says reach scales by the display scale; untested, and 1 logical px is quantised at 2x. Cost is likely to rise sharply: at 2x the reach doubles and the clip area is about 4x, and the absolute 96 px headless row is already 3.4 ms at 1x. Measure before committing.
 - Multi-monitor (one canvas per monitor): untested; only HDMI-A-1 was used.
 - Many panels animating at once: damage boxes would union and cost should be roughly additive per panel; not measured.
 - Long runs (GC pauses, memory): runs were 10 s.
-- Slower CPUs: all numbers come from one fast CPU with the performance governor. The 12x margin at 16 layers suggests room, but that is inferred.
+- Slower CPUs: all numbers come from one fast CPU with the performance governor. Headroom is about 4x at the default (live median about 2 ms vs 8 ms) and about 2x at 100% elevation (3.92 ms); a 2-4x slower CPU would be near the target. Inferred, not measured.
 - GPU and compositor cost beyond what the live frame times show.
 - Shadow legibility on dark themes: weak by physics; a higher alpha or a tinted colour may be needed.
-- Click-through beyond 10 s runs, and CPU cost during animation (see section 5).
+- Click-through beyond 10 s runs.
+- CPU cost during animation: 0.32-0.43 of one core while a loop animates continuously (section 5); source not profiled.
+- Sync lag: 0 to about 1 frame depending on the run (mean 1.0 px in runs 1 and 7, about 0 otherwise); direction not measured.
+- Layout: corner clearance `pos - r >= T + R` and min gap `r1 + r2` must be enforced by the resolver (3.4).
+- Live full draw up to 22.6 ms at 48 px; reloads and hot-plug cost one or two dropped frames.
+- Canvas draws coalesced in 1-9 frames per run (histogram bin 2); not investigated.
 
 ## 9. Follow-up plan outline (build order)
 
@@ -181,7 +188,7 @@ Recommended defaults for the real feature:
 5. Remove the `raise_to_top` workaround if stacking holds with the strips (re-test). Risk: KWin ordering.
 6. Damaged-region invalidation from each panel's depth changes. Risk: the clip must cover the previous footprint.
 7. Config and reload hooks: border and shadow changes are redraws, not rebuilds. Risk: per-monitor overrides.
-8. (No fullscreen policy needed: KWin handles it. Repeat the manual fullscreen check after the refactor.)
+8. No fullscreen policy appears necessary for an active fullscreen window: one manual pass, KWin behaviour inferred. Repeat after the refactor.
 9. Handle customization and interaction toggles (section 15) on the content windows. Risk: interplay with the markers and the empty input region.
 10. Multi-monitor and scale handling (reach times scale). Risk: fractional scales.
 11. Profile CPU during animation (content ticks, margin relayout, 3-window setup). Risk: may need a different animation path.
