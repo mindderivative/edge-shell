@@ -125,8 +125,12 @@ class EdgePanel(WaylandWindow):
         """Re-map the window so the compositor stacks it above the frame strips.
 
         Same layer, so stacking follows map order; a panel's handle sits inside the
-        strip band when collapsed and is hidden if a strip lands above it.
+        strip band when collapsed and is hidden if a strip lands above it. Hiding drops the
+        pointer state, so hover is reset; a drag in progress is never interrupted.
         """
+        if self._dragging:
+            return
+        self._hovered = False
         self.hide()
         self.show_all()
         self._last_rect = None

@@ -22,9 +22,13 @@ from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
 
-# Empirical: re-mapping at 50 ms still left the strips on top (KWin restacks them when it
-# first configures them); 500 ms is reliably after that (checked by screenshot).
+# Timing workaround, not an event-driven fix. The frame strips otherwise stack above the
+# panels (KWin restacks same-layer surfaces when it first configures them) and cover a
+# collapsed panel's handle. Re-mapping the panels puts them back on top. Empirical: 50 ms
+# was too early; 500 ms is reliably after the restack (checked by screenshot). The second,
+# later raise is a safety net for a slow compositor; both are no-ops after close().
 RAISE_DELAY_MS = 500
+RAISE_FALLBACK_MS = 2000
 
 
 def _geometry(monitor) -> tuple[int, int, int, int]:
@@ -89,6 +93,7 @@ class MonitorShell:
         self._register = register_window
         self._unregister = unregister_window or (lambda _window: None)
         self._scope = scope_class(name)
+        self._closed = False
         self.windows: list = []
         self.corners: list[ScreenCorner] = []
         self.panels: list[EdgePanel] = []
@@ -102,19 +107,14 @@ class MonitorShell:
         for index, geo in enumerate(panels_for(config, name)):
             self.panels.append(self._make_panel(index, geo, theme))
         if self.panels:
-            self._raise_tries = 0
-            GLib.timeout_add(RAISE_DELAY_MS, self._raise_panels)
+            for delay in (RAISE_DELAY_MS, RAISE_FALLBACK_MS):
+                GLib.timeout_add(delay, self._raise_panels)
 
     def _raise_panels(self) -> bool:
-        """Once the frame strips are mapped, re-map panels so they stack above them."""
-        if not self.panels:  # closed meanwhile
-            return False
-        self._raise_tries += 1
-        strips = self.windows[: len(EDGES)]
-        if not all(w.get_mapped() for w in strips) and self._raise_tries < 40:
-            return True
-        for panel in self.panels:
-            panel.raise_to_top()
+        """Re-map the live panels so they stack above the frame strips (see RAISE_DELAY_MS)."""
+        if not self._closed:
+            for panel in self.panels:
+                panel.raise_to_top()
         return False
 
     def _make_panel(self, index: int, geo: PanelGeometry, theme) -> EdgePanel:
@@ -188,6 +188,7 @@ class MonitorShell:
                 self._destroy(self.panels.pop(i))
 
     def close(self) -> None:
+        self._closed = True
         for window in self.windows:
             self._release(window)
         self.windows.clear()

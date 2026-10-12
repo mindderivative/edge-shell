@@ -1,5 +1,7 @@
 """Display-free tests for MonitorShell bookkeeping (windows are fakes)."""
 
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("gi")
@@ -9,7 +11,7 @@ import shell.monitors as mon_mod  # noqa: E402
 
 
 class FakeWindow:
-    def __init__(self, raises=False):
+    def __init__(self, *args, raises=False, **kwargs):
         self.destroyed = False
         self.raises = raises
         self.raised = 0
@@ -76,3 +78,98 @@ def test_destroy_error_is_contained():
     shell = bare_shell([FakeWindow(raises=True), FakeWindow()])
     shell.close()  # must not raise
     assert shell.windows == []
+
+
+# ---- raise timers -------------------------------------------------------------------
+
+
+def test_raise_panels_raises_live_panels():
+    a, b = FakeWindow(), FakeWindow()
+    shell = bare_shell([a, b], [a, b])
+    assert shell._raise_panels() is False  # one-shot GLib source
+    assert (a.raised, b.raised) == (1, 1)
+
+
+def test_raise_panels_skips_panels_that_were_removed():
+    a, b = FakeWindow(), FakeWindow()
+    shell = bare_shell([a, b], [a, b])
+    shell.panels.remove(b)
+    shell._raise_panels()
+    assert (a.raised, b.raised) == (1, 0)
+
+
+def test_raise_is_a_noop_after_close():
+    a = FakeWindow()
+    shell = bare_shell([a], [a])
+    shell.close()
+    shell.panels.append(a)  # even if something kept a stale reference
+    assert shell._raise_panels() is False
+    assert a.raised == 0
+
+
+def test_init_schedules_primary_and_fallback_raise(monkeypatch, make_config, fake_registry):
+    timers = []
+    monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
+    monkeypatch.setattr(mon_mod, "ScreenCorner", FakeWindow)
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: FakeWindow)
+    monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
+    monkeypatch.setattr(
+        mon_mod.GLib, "timeout_add", lambda ms, fn, *a: timers.append((ms, fn, a)) or len(timers)
+    )
+    cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock"}]}})
+    shell = mon_mod.MonitorShell("HDMI-A-1", object(), cfg, lambda w: None)
+    assert [ms for ms, _, _ in timers] == [mon_mod.RAISE_DELAY_MS, mon_mod.RAISE_FALLBACK_MS]
+    assert mon_mod.RAISE_FALLBACK_MS > mon_mod.RAISE_DELAY_MS
+    panel = shell.panels[0]
+    for _, fn, a in timers:
+        assert fn(*a) is False
+    assert panel.raised == 2
+    shell.close()
+    for _, fn, a in timers:
+        fn(*a)
+    assert panel.raised == 2  # no work after close
+
+
+def test_init_without_panels_schedules_no_raise(monkeypatch, make_config):
+    timers = []
+    monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
+    monkeypatch.setattr(mon_mod, "ScreenCorner", FakeWindow)
+    monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
+    monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: timers.append(a) or 1)
+    cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge"}})
+    mon_mod.MonitorShell("HDMI-A-1", object(), cfg, lambda w: None)
+    assert timers == []
+
+
+# ---- EdgePanel.raise_to_top (plain function called on a stand-in) --------------------
+
+
+def _panel_stub(dragging=False, hovered=True):
+    calls = []
+    return SimpleNamespace(
+        _dragging=dragging,
+        _hovered=hovered,
+        _d=3.0,
+        _last_rect=(1, 2, 3, 4),
+        hide=lambda: calls.append("hide"),
+        show_all=lambda: calls.append("show_all"),
+        _update_input_region=lambda d: calls.append(("region", d)),
+        calls=calls,
+    )
+
+
+def test_raise_to_top_remaps_resets_hover_and_reapplies_region():
+    from shell.edge_panel import EdgePanel
+
+    p = _panel_stub()
+    EdgePanel.raise_to_top(p)
+    assert p.calls == ["hide", "show_all", ("region", 3.0)]
+    assert p._hovered is False and p._last_rect is None
+
+
+def test_raise_to_top_never_interrupts_a_drag():
+    from shell.edge_panel import EdgePanel
+
+    p = _panel_stub(dragging=True)
+    EdgePanel.raise_to_top(p)
+    assert p.calls == []
