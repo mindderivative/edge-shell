@@ -1,7 +1,13 @@
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,7 +17,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: System libraries for pycairo
-        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config python3-dev
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
+      # This list mirrors the pyproject dependencies and must be kept in sync with them.
       - name: Install (no GTK; gi/fabric tests skip themselves)
         run: pip install "pydantic>=2.6" pycairo pytest "ruff==0.17.0"
       - run: ruff check .

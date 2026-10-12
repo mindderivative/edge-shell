@@ -80,3 +80,5 @@ that need `gi` or Fabric skip themselves there.
   (click, hover, drag) are planned, see spec section 15.
 - Panel startup includes a brief re-raise about half a second after launch, needed to stack
   panels above the frame strips.
+- Changing a connected monitor's resolution or scale does not reflow panels with an explicit
+  `pos`; restart the shell or save the config. Planned fix.
