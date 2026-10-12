@@ -53,3 +53,15 @@ def test_bad_edit_keeps_last_good_config(tmp_path, fake_registry, bad):
     assert store.last_error
     path.write_text(GOOD + '[theme]\naccent = "#112233"\n')  # fixing the file recovers
     assert store.reload() is not None and store.last_error is None
+
+
+def test_config_path_becoming_unreadable_keeps_last_good(tmp_path, fake_registry):
+    path = tmp_path / "c.toml"
+    path.write_text(GOOD)
+    store = ConfigStore(path)
+    before = store.config
+    path.unlink()
+    path.mkdir()  # e.g. replaced mid-save
+    assert store.reload() is None
+    assert store.config is before
+    assert store.last_error and str(path) in store.last_error

@@ -41,8 +41,8 @@ def parse_config(data: dict[str, Any]) -> Config:
 
 def _read_toml(path: Path) -> dict[str, Any]:
     try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError as exc:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
 

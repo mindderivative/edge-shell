@@ -64,3 +64,19 @@ def test_panel_bound_reports_full_key_path(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(write(tmp_path / "c.toml", text))
     assert "monitors.HDMI-A-1.panels.0.length" in str(exc.value)
+
+
+def test_unreadable_user_path_is_config_error(tmp_path):
+    directory = tmp_path / "c.toml"
+    directory.mkdir()
+    with pytest.raises(ConfigError) as exc:
+        load_config(directory)
+    assert str(directory) in str(exc.value)
+
+
+def test_invalid_utf8_is_config_error(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_bytes(b'[theme]\naccent = "\xff\xfe"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert str(path) in str(exc.value)
