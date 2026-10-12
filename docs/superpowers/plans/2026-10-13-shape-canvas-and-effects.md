@@ -12,13 +12,22 @@
 
 **Scope (Plan 1 of 3, fixed by Phil).** In: the canvas, invisible strips, content windows, border and shadow with config, reload and per-monitor overrides, the smallest safe geometry rules, a `--stats` measurement mode, gates, cleanup, docs. Out (separate plans): the align/offset/length/gap layout model (spec 16/17; today's `pos` placement through `geometry.anchor_and_margin` stays), handle customization (spec 15), the settings window, Plasma integration, HiDPI/fractional scale (the code stays scale-ready and warns), a multi-panel layout resolver.
 
-**Size:** 15 tasks. 10 carry code and tests (1-8, 11, 13), 5 end in or are a human gate (Gate 1 in Task 7, Gate 2 in Task 8, Gate 3 = Task 9, Gate 4 = Task 12, Gate 5 = Task 14), Task 10 is a conditional fallback, Task 15 is docs. Riskiest: Task 7 (strips on the `bottom` layer must still reserve the zone), Task 8 (canvas/content stacking and depth sync), Task 11 (removing the raise workaround depends on the gates).
+**Date:** 2026-10-13 (the plan's execution date, as in the file name).
+
+**Size:** 16 tasks. 11 carry code and tests (1-9, 12, 14), 5 gates (Gate 1 in Task 7, Gate 2 in Task 8, Gate 3 = Task 10, Gate 4 = Task 13, Gate 5 = Task 15), Task 11 is a set of conditional fallbacks, Task 16 is docs. Riskiest: Task 7 (strips on the `bottom` layer must still reserve the zone), Task 8 (canvas/content stacking and depth sync), Task 12 (removing the raise workaround depends on the gates).
+
+## Decisions recorded (DECIDED with Phil; do not reopen)
+
+1. **Branch base:** merge PR #1 first, then branch from `main` (details under Prerequisites).
+2. **Overlapping or too-close panels:** the later panel (config order) is hidden and a notification names it (Task 5 rules, Task 9 notification). No shifting.
+3. **Frame band click-through:** accepted. The invisible strips take no input, so clicks on the frame band reach the desktop (spec updated in Task 16).
+4. **Default shadow elevation 50 % (24 px):** confirmed by Phil. (The controller updated the sentence in spec section 18 separately, commit `3f1d311`; Task 16 only verifies it.)
+5. **Spike folder removal:** Task 12 deletes `spikes/canvas/` (including the live probe `spikes/canvas/live.py`) and `spikes/tests/`; git history keeps them at `872eff9`. Recorded as decided unless Phil objects before Task 12.
 
 ## Prerequisites
 
-- Execute on a NEW branch in its own worktree (superpowers:using-git-worktrees), named `feat/shape-canvas`.
-- Base it on `main` **only if** PR #1 (core shell, https://github.com/mindderivative/edge-shell/pull/1) is merged **and** the spike branch content (`spikes/`, `docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`, the spec 17/18 updates) has been merged or cherry-picked onto `main`. Check with: `git log --oneline main -- spikes/canvas/outline.py docs/superpowers/findings/2026-10-12-shape-canvas-spike.md` (both must show commits).
-- Otherwise create the branch from `spike/shape-canvas` (it contains the core shell, the spike and the findings).
+- Merge order (decision 1): (1) PR #1 (core shell, https://github.com/mindderivative/edge-shell/pull/1) is merged into `main`; (2) the spike branch `spike/shape-canvas` (it holds `spikes/`, the findings note, the spec 17/18 updates and both plan documents: the spike plan and this plan) is rebased onto `main` and merged as a second PR, **PR #2**; (3) the work branch `feat/shape-canvas` is then created from `main` in its own worktree (superpowers:using-git-worktrees). Task 3 copies code from `spikes/canvas/`, so PR #2 must be in. Check: `git log --oneline main -- spikes/canvas/outline.py docs/superpowers/findings/2026-10-12-shape-canvas-spike.md` shows commits for both paths.
+- Fallback: if PR #2 has not been merged, branch from `spike/shape-canvas`.
 - Baseline before Task 1: `scripts/py -m pytest -q` prints `255 passed` (2 GLib deprecation warnings are normal); `scripts/py -m ruff check .` prints `All checks passed!`.
 - Do not carry over local uncommitted edits (for example a local change to `examples/panels-test.toml`): always stage files by name, never `git add -A` or `git add .`.
 
@@ -29,7 +38,7 @@
 - **Monitor is an INT.** Fabric's `WaylandWindow.monitor` is an int property; a `Gdk.Monitor` object is silently dropped and KWin uses its default output. Always pass `monitor=monitor_index(monitor)` (`shell/gdk_util.py:16`). `MonitorShell._check_monitor` (`shell/monitors.py:130-139`) logs an error when a window lands on the wrong output: every new window goes through `MonitorShell._track`.
 - **Input shape after allocate.** Fabric's `Window.do_size_allocate` re-applies the `pass_through` state on every allocate (`fabric/widgets/window.py:219-222` in the venv): `pass_through=True` windows (canvas, strips) stay click-through by themselves; a window with a NARROW region must re-apply it after the parent allocate, as `EdgePanel.do_size_allocate` does (`shell/edge_panel.py:115-122`). Never drop that override.
 - **Exclusive zones.** Strips use `exclusivity="auto"` (never `"normal"`, which reserves 1 px). Non-reserving windows (canvas, panels) use `exclusivity="none"` and then `GtkLayerShell.set_exclusive_zone(self, -1)` immediately after `super().__init__()` (`shell/edge_panel.py:56-58`); zone 0 would make KWin push them clear of the frame.
-- **Stacking within a layer is not guaranteed by creation order** (the core build needed a delayed `hide()/show_all()` re-raise, `shell/monitors.py:25-31`, `shell/edge_panel.py:124-137`). The canvas is created first, panels after; the raise stays until Gates 1-2 prove it is no longer needed (Tasks 7, 8, 11).
+- **Stacking within a layer is not guaranteed by creation order** (the core build needed a delayed `hide()/show_all()` re-raise, `shell/monitors.py:25-31`, `shell/edge_panel.py:124-137`). The canvas is created first, panels after; the raise stays until Gates 1-2 prove it is no longer needed (Tasks 7, 8, 12).
 - **Window references.** Fabric's `Application.add_window` keeps every window: unregister before destroy (`EdgeShellApp.unregister_window`, `shell/app.py:56-61`; `MonitorShell._release`, `shell/monitors.py:153-162`).
 - **Timers.** Repeating timers must be cancelled on destroy (`widgets/clock.py:32-37`, `widgets/system_bar.py:37-42`). The canvas adds no timers.
 - **One instance.** `_already_running()` is checked before any window exists (`shell/app.py:32-34`, `shell/app.py:183-189`); keep that order in `run()`.
@@ -39,7 +48,7 @@
 - **VERIFY** (before every commit): `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`. The suite must be green at the end of EVERY task (0 failed).
 - **Git.** Plain separate git commands run from the worktree (no `cd … && git`, no command substitution around git). Stage files by name. **Never push.** Every commit message ends with a second `-m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`.
 - **Live runs.** Phil is the only visual tester, on `HDMI-A-1` only. **Never touch `DP-1`** (it holds the Plasma panel; never disable it, never configure it as `edge`). Live probes are capped at 10 s (`main.py --stats` refuses more). If the auto-mode classifier refuses a live run for a subagent, stop and report; do not work around it: Phil runs the gate command himself.
-- **Shape canvas facts (spec 18 + findings, do not reopen):** one outline for frame + corners + panels (`outline_path` / `fill_mass`); border = outline stroked at 2x width clipped to the mass side; shadow = uniform stacked round-join strokes under the mass, clipped to the desktop region, half-Gaussian `C(k) = a*0.5*erfc(k/(sigma*sqrt2))`, `sigma = reach/2.5`, 8-bit-aware layer alphas; `reach_px = round(48 * pct / 100)`, `MAX_REACH_PX = 48`; the drawing clamps, validation rejects out-of-range values with the key path; defaults when enabled: shadow `#00000080` elevation 50, border 2 px `#8fd3b6ff`; both `enabled = false` by default. **No shadow cache.** First draw full; then redraw the damaged box = union of the previous and current panel box grown by reach + border width.
+- **Shape canvas facts (spec 18 + findings, do not reopen):** one outline for frame + corners + panels (`outline_path` / `fill_mass`); border = outline stroked at 2x width clipped to the mass side; shadow = uniform stacked round-join strokes under the mass, clipped to the desktop region, half-Gaussian `C(k) = a*0.5*erfc(k/(sigma*sqrt2))`, `sigma = reach/2.5`, 8-bit-aware layer alphas; `reach_px = round(48 * pct / 100)`, `MAX_REACH_PX = 48`; the drawing clamps, validation rejects out-of-range values with the key path; defaults when enabled: shadow `#00000080` elevation 50 (24 px, confirmed by Phil), border 2 px `#8fd3b6ff`; both `enabled = false` by default. **No shadow cache.** First draw full; then redraw the damaged box = union of the previous and current panel box grown by reach + border width.
 - **Colours** accept `#rrggbb` or `#rrggbbaa` everywhere in the theme. GTK3's CSS parser rejects `#rrggbbaa` (checked: `Gdk.RGBA().parse("#8fd3b680")` is False), so CSS always goes through `shell.theme.css_color`.
 - **HiDPI:** scale 1 is assumed. The canvas logs a warning when a monitor's scale factor is not 1; shadow reach is not multiplied by the scale yet (later plan).
 - Pure modules import no GTK/`gi`: everything in `shell/canvas/` except `canvas.py`, plus `shell/panel_layout.py` and the existing pure modules.
@@ -50,9 +59,9 @@ The five failure modes most likely to bite Phil that no single happy-path test w
 
 1. **Stale pixels after animation or drag:** a damage box that misses a changed region leaves ghost shadow, border or body pixels. Expect every frame to equal a full redraw. Pinned by `test_damaged_redraws_equal_a_full_redraw` and `test_random_depth_jumps_never_leave_stale_pixels` (Task 4), and by mutation-checked boxes in `test_panel_box_on_every_edge` (Task 4).
 2. **Wrong window setup:** the canvas or a strip taking input, a strip not reserving its zone, or a strip stacked above panels. Expect click-through everywhere except panel bodies and handles. Pinned by `test_canvas_window_setup` (Task 6) and `test_strips_reserve_their_size_take_no_input_and_sit_below_the_canvas` (Task 7); the compositor side by Gates 1-2.
-3. **Canvas and panel out of step:** the body drawn at a different depth from the handle, or a ghost body left by a removed/rebuilt/failed panel. Expect the body to follow the handle every frame and disappear with its panel. Pinned by `test_apply_depth_moves_handle_and_region_then_reports_to_the_canvas` (Task 8), `test_add_and_remove_keep_canvas_and_panels_in_step`, `test_failed_panel_construction_leaves_no_scene_shape` (Task 8) and `test_simulation_draws_once_per_tick` (Task 13).
+3. **Canvas and panel out of step:** the body drawn at a different depth from the handle, or a ghost body left by a removed/rebuilt/failed panel. Expect the body to follow the handle every frame and disappear with its panel. Pinned by `test_apply_depth_moves_handle_and_region_then_reports_to_the_canvas` and `test_on_depth_is_stored_before_the_tweens_exist` (Task 8), `test_add_and_remove_keep_canvas_and_panels_in_step`, `test_failed_panel_construction_leaves_no_scene_shape` (Task 8) and `test_simulation_draws_once_per_tick` (Task 14).
 4. **Theme regressions:** a partial per-monitor `[theme.shadow]` override resetting the other shadow keys, or an alpha colour reaching GTK CSS as `#rrggbbaa` (silently ignored by GTK3). Expect key-by-key merging and every CSS colour parseable. Pinned by `test_monitor_override_merges_nested_tables_key_by_key` (Task 2) and `test_every_css_colour_parses_in_gtk3` (Task 1).
-5. **Self-intersecting outline from user geometry:** `pos = 0` or two panels close together on one edge breaks the single path (wrong fills). Expect the panel clamped or hidden with a warning, never a broken frame. Pinned by `test_without_the_clamp_the_outline_breaks_inside_the_corner_arc`, `test_panel_clamped_to_the_corner_renders_like_legacy`, `test_neighbours_need_a_gap_of_r1_plus_r2` (Task 5) and `test_a_neighbour_change_rebuilds_the_panel_it_unhides` (Task 8).
+5. **Self-intersecting outline from user geometry:** `pos = 0` or two panels close together on one edge breaks the single path (wrong fills). Expect the panel clamped or hidden with a warning, never a broken frame. Pinned by `test_without_the_clamp_the_outline_breaks_inside_the_corner_arc`, `test_panel_clamped_to_the_corner_renders_like_legacy`, `test_neighbours_need_a_gap_of_r1_plus_r2` (Task 5) and `test_a_neighbour_change_rebuilds_the_panel_it_unhides` (Task 8); the live clamp and its notification by Gate 3 item 6 (Task 10).
 
 ## File Structure
 
@@ -74,10 +83,10 @@ shell/app.py                  # wiring; layout warnings; --stats run
 shell/theme.py                # hex_to_rgba (alpha), css_color, to_css
 shell/config/models.py        # Border, Shadow, overrides, deep_merge, alpha colours
 shell/config/loader.py        # uses models.deep_merge
-shell/draw.py                 # DELETED in Task 11 (moved to tests/legacy_draw.py)
+shell/draw.py                 # DELETED in Task 12 (moved to tests/legacy_draw.py)
 tests/legacy_draw.py          # TEST-ONLY reference renderers (the outline contract)
 examples/effects-test.toml    # Gate 4 config
-spikes/canvas/, spikes/tests/ # DELETED in Task 11 (kept in git history at 872eff9)
+spikes/canvas/, spikes/tests/ # DELETED in Task 12 (kept in git history at 872eff9)
 ```
 
 | Task | Deliverable | Keeps the suite green because |
@@ -89,14 +98,15 @@ spikes/canvas/, spikes/tests/ # DELETED in Task 11 (kept in git history at 872ef
 | 5 | `shell/panel_layout.py` | new module only |
 | 6 | `ShapeCanvas` window | new module, not wired yet |
 | 7 | canvas per monitor, invisible strips, no corner windows; Gate 1 | tests for corners/raise updated in the same task |
-| 8 | panels through the canvas; Gate 2 | `test_monitor_shell.py` rewritten with the code |
-| 9 | Gate 3 (clock, system bar) | no code |
-| 10 | conditional fallbacks | only if a gate failed |
-| 11 | cleanup (raise, `shell/draw.py`, spikes) | tests removed together with the code they test |
-| 12 | Gate 4 (effects) + example | example file only |
-| 13 | `--stats`, simulate CLI | new code + tests |
-| 14 | Gate 5 (regression) | no code |
-| 15 | README, spec, findings | docs only |
+| 8 | panels through the canvas (EdgePanel depth, MonitorShell layout + reconcile); Gate 2 | `test_monitor_shell.py` rewritten with the code; the app does not read the new attributes yet |
+| 9 | layout notifications in the app (only when a monitor's warnings change) | new app method + tests |
+| 10 | Gate 3 (clock, system bar, corner clamp) | no code |
+| 11 | conditional fallbacks | only if a gate failed |
+| 12 | cleanup (raise, `shell/draw.py`, spikes) | tests removed together with the code they test |
+| 13 | Gate 4 (effects) + example | example file only |
+| 14 | `--stats`, simulate CLI | new code + tests |
+| 15 | Gate 5 (regression) | no code |
+| 16 | README, spec, findings | docs only |
 
 ---
 
@@ -572,7 +582,7 @@ git commit -m "feat(config): opt-in [theme.border] and [theme.shadow], deep per-
 **Files:**
 - Create: `shell/canvas/__init__.py` (empty), `shell/canvas/outline.py`, `shell/canvas/effects.py` (copied from `spikes/canvas/`, edits below), `shell/canvas/style.py`
 - Create: `tests/legacy_draw.py` (copy of `shell/draw.py`), `tests/test_canvas_outline.py`, `tests/test_canvas_effects.py` (copied from `spikes/tests/`, edits below), `tests/test_canvas_style.py`
-- Leave untouched: `shell/draw.py` (the panels still draw with it until Task 8) and `spikes/` (removed in Task 11).
+- Leave untouched: `shell/draw.py` (the panels still draw with it until Task 8) and `spikes/` (removed in Task 12).
 
 **Interfaces:**
 - Consumes: `shell.geometry.join_radius`, `is_horizontal`; `shell.theme.hex_to_rgba` (Task 1); `Theme.border/.shadow` (Task 2).
@@ -676,7 +686,7 @@ def test_pad_at_default_elevation(make_config):
 ```
 
 Run: `scripts/py -m pytest -q tests/test_canvas_outline.py tests/test_canvas_effects.py tests/test_canvas_style.py`
-Expected: FAIL (`ModuleNotFoundError: No module named 'spikes'` from inside `shell/canvas/effects.py`, and `No module named 'shell.canvas.style'`).
+Expected (verified in a scratch copy): collection stops with `ERROR tests/test_canvas_style.py` / `ModuleNotFoundError: No module named 'shell.canvas.style'` / `Interrupted: 1 error during collection`. The two copied test files would already pass at this point, because `spikes` is importable from the repo root and the copied `shell/canvas/effects.py` still imports `spikes.canvas.outline`; Step 3 removes that dependency.
 
 - [ ] **Step 3: Edit the copied modules**
 
@@ -2069,7 +2079,7 @@ The canvas now draws the frame and the four screen corners; the strips stop draw
 - Consumes: `ShapeCanvas(monitor, theme, scope)` with `set_theme(theme)` (Task 6).
 - Produces:
   - `shell.frame.EDGES`, `shell.frame.STRIP_LAYER = "bottom"`, `shell.frame.strip_window(edge: str) -> dict` (`layer`, `anchor`, `exclusivity="auto"`, `keyboard_mode="none"`, `pass_through=True`), `FrameEdge(edge, monitor, theme, scope)` (same signature as before). `ScreenCorner` and `CORNERS` no longer exist.
-  - `shell.monitors.raise_delays(env=os.environ) -> tuple[int, ...]`: `(RAISE_DELAY_MS, RAISE_FALLBACK_MS)` normally, `()` when `EDGE_SHELL_RAISE_MS=0` (temporary gate switch, removed in Task 11).
+  - `shell.monitors.raise_delays(env=os.environ) -> tuple[int, ...]`: `(RAISE_DELAY_MS, RAISE_FALLBACK_MS)` normally, `()` when `EDGE_SHELL_RAISE_MS=0` (temporary gate switch, removed in Task 12).
   - `MonitorShell.canvas: ShapeCanvas` (created and tracked first, before the strips); `MonitorShell.corners` no longer exists.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2201,7 +2211,7 @@ EDGES = ("top", "bottom", "left", "right")
 
 # Below the canvas and the panels (both on "top"): an invisible strip can then never cover a
 # panel, whatever order KWin stacks same-layer surfaces in. Exclusive zones count on every
-# layer (verified at Gate 1; the fallback, plan Task 10 A, moves them back to "top").
+# layer (verified at Gate 1; the fallback, plan Task 11 A, moves them back to "top").
 STRIP_LAYER = "bottom"
 
 _STRIP_ANCHOR = {
@@ -2339,30 +2349,30 @@ env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config examples/dock-test.toml -v
 8. Hover peek, click toggle and drag still work.
 
 **On failure:**
-- Item 2 fails (windows ignore the frame) -> Task 10 Fallback A, then repeat Gate 1.
-- Item 7 fails -> repeat Run B without `env EDGE_SHELL_RAISE_MS=0`. If the dots are visible then, note "raise still needed" (Task 10 Fallback B applies; continue). If not -> Task 10 Fallback C (stop).
+- Item 2 fails (windows ignore the frame) -> Task 11 Fallback A, then repeat Gate 1.
+- Item 7 fails -> repeat Run B without `env EDGE_SHELL_RAISE_MS=0`. If the dots are visible then, note "raise still needed" (Task 11 Fallback B applies; continue). If not -> Task 11 Fallback C (stop).
 - Items 1 or 4 fail -> stop; collect the `-v` log and a screenshot; fix before Task 8.
 
-Write down each item's result; Task 15 records them in the findings note.
+Write down each item's result; Task 16 records them in the findings note.
 
 ---
 
 ### Task 8: Panels draw through the canvas (Gate 2)
 
-`EdgePanel` stops drawing; it becomes the transparent content/handle/input window and reports its depth through `on_depth`. `MonitorShell` resolves the layout (Task 5), registers each panel's shape on the canvas, wires the depth callback, and reconciles panels against the resolved layout on reload. The app notifies layout warnings.
+`EdgePanel` stops drawing; it becomes the transparent content/handle/input window and reports its depth through `on_depth`. `MonitorShell` resolves the layout (Task 5), registers each panel's shape on the canvas, wires the depth callback, and reconciles panels against the resolved layout on reload. Layout warnings are logged here; the app's notification follows in Task 9 (split out to keep this task reviewable; the suite is green in between because the app does not read `layout_warnings` yet).
+
+Positions are now resolved once, to an explicit `pos`, when a panel is built: a centred panel therefore no longer re-centres by itself if the monitor's resolution changes while the shell runs (the compositor used to centre the old single-edge-anchored surface). This joins the existing limitation for explicit `pos` (README "Known limitations"; a config save or restart re-resolves).
 
 **Files:**
 - Modify: `shell/edge_panel.py` (constructor `on_depth`; delete `_canvas`, `_on_draw`; `_apply_depth`; `apply_theme`; imports)
 - Modify: `shell/monitors.py` (imports; whole `MonitorShell` class)
-- Modify: `shell/app.py:63-84` (`sync_monitors`), `shell/app.py:153-167` (`_reload` apply loop), `shell/app.py:172-179` (`_report_error` -> `_notify`, `_report_layout`)
-- Test: `tests/test_monitor_shell.py` (rewritten), `tests/test_edge_panel_drag.py`, `tests/test_app_sync.py`
+- Test: `tests/test_monitor_shell.py` (rewritten), `tests/test_edge_panel_drag.py`
 
 **Interfaces:**
 - Consumes: `resolve_layout`, `Layout` (Task 5); `PanelShape` (Task 4); `ShapeCanvas.add_panel/remove_panel/set_depth/set_theme` (Task 6); `raise_delays`, `RAISE_DELAY_MS`, `RAISE_FALLBACK_MS` (Task 7); `panels_for`, `widget_class` (registry).
 - Produces:
   - `EdgePanel(spec, theme, monitor, index, scope, on_depth: Callable[[float], None] | None = None)`. `spec.pos` must be an int (resolved). `_apply_depth(d)` sets `_d`, places the handle, updates the input region, then calls `on_depth(d)`. No `_on_draw`, no `_canvas`. Widgets (`widgets/*.py`) do not override `__init__`, so they need no change.
-  - `MonitorShell.panels: list[EdgePanel | None]` (config order; None = hidden by the layout rules), `MonitorShell.layout_warnings: list[str]`, `MonitorShell.live_panels() -> list[EdgePanel]`, `panel.scene_key: int` (set on every panel MonitorShell creates). `apply(config, changes)` restyles on a `restyle` change, then always reconciles panels with the resolved layout (rebuild when resolved geometry other than `state` changed, `set_state` when only `state` changed, add/remove to match).
-  - `EdgeShellApp._notify(title: str, message: str) -> None`, `EdgeShellApp._report_layout(shell) -> None` (notifies "Panels adjusted" with the warnings, if any).
+  - `MonitorShell.panels: list[EdgePanel | None]` (config order; None = hidden by the layout rules), `MonitorShell.layout_warnings: list[str]`, `MonitorShell.live_panels() -> list[EdgePanel]`, `panel.scene_key: int` (set on every panel MonitorShell creates). `apply(config, changes)` restyles on a `restyle` change, then always reconciles panels with the resolved layout (rebuild when resolved geometry other than `state` changed, `set_state` when only `state` changed, add/remove to match). Warnings are logged with `log.warning`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2482,6 +2492,20 @@ def test_destroy_error_is_contained():
     shell = bare_shell([FakeWindow(raises=True), FakeWindow()])
     shell.close()  # must not raise
     assert shell.windows == []
+
+
+def test_raise_panels_raises_only_live_panels():
+    a, b = FakeWindow(), FakeWindow()
+    shell = bare_shell([a, b], [a, None, b])  # None = a panel hidden by the layout rules
+    assert shell._raise_panels() is False  # one-shot GLib source
+    assert (a.raised, b.raised) == (1, 1)
+
+
+def test_raise_one_skips_a_panel_that_was_removed():
+    a, b = FakeWindow(), FakeWindow()
+    shell = bare_shell([a, b], [a])  # b was rebuilt or removed during the delay
+    assert shell._raise_one(b) is False and b.raised == 0
+    assert shell._raise_one(a) is False and a.raised == 1
 
 
 # ---- building a monitor (fakes for every window) ------------------------------------
@@ -2699,34 +2723,20 @@ def test_apply_depth_moves_handle_and_region_then_reports_to_the_canvas():
 
 def test_panels_no_longer_draw_their_own_body():
     assert not hasattr(ep.EdgePanel, "_on_draw")
+
+
+def test_on_depth_is_stored_before_the_tweens_exist():
+    # __init__ creates the depth Tween and calls jump_to, which runs _apply_depth and needs
+    # self._on_depth. Building a real EdgePanel would map a window on Phil's screen, so this
+    # display-free test checks the statement order in the source instead.
+    import inspect
+
+    src = inspect.getsource(ep.EdgePanel.__init__)
+    assert src.index("self._on_depth = on_depth") < src.index("Tween(")
 ```
 
-In `tests/test_app_sync.py` add the class attribute `layout_warnings: list = []` to `FakeShell` (after `fail_apply: set = set()`), and append:
-
-```python
-def test_layout_warnings_are_notified_when_a_shell_opens(env, monkeypatch):
-    app, mapping = env
-    notes = []
-    monkeypatch.setattr(
-        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
-    )
-    monkeypatch.setattr(FakeShell, "layout_warnings", ["monitors.HDMI-A-1.panels.1 (dock): x"])
-    mapping["HDMI-A-1"] = object()
-    app.sync_monitors()
-    assert notes == [("Panels adjusted", "monitors.HDMI-A-1.panels.1 (dock): x")]
-
-
-def test_no_notification_without_layout_warnings(env, monkeypatch):
-    app, mapping = env
-    notes = []
-    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
-    mapping["HDMI-A-1"] = object()
-    app.sync_monitors()
-    assert notes == []
-```
-
-Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_app_sync.py`
-Expected: FAIL (no `on_depth`, no `layout_warnings`, `_on_draw` still exists, no `_notify`).
+Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_edge_panel_drag.py`
+Expected: FAIL (no `on_depth` keyword, no `layout_warnings`, `_on_draw` still exists).
 
 - [ ] **Step 2: Edit `shell/edge_panel.py`**
 
@@ -2961,15 +2971,131 @@ class MonitorShell:
 
 (`_make_panel` and `_add_panel` are gone: `_new_panel` replaces both.)
 
-- [ ] **Step 4: Edit `shell/app.py`**
+- [ ] **Step 4: Run the tests**
 
-In `sync_monitors`, right after the `self.shells[name] = MonitorShell(...)` statement inside the `for name in open_:` loop, add `self._report_layout(self.shells[name])`. In `_reload`, inside the `try:` after `self.shells[name].apply(new, items)`, add `self._report_layout(self.shells[name])`. Replace `_report_error` by:
+Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_gtk_imports.py`
+Expected: all pass (23 in `test_monitor_shell.py`). Then `grep -n "draw_panel\|hex_to_rgba\|_canvas\b" shell/edge_panel.py` prints nothing.
+
+- [ ] **Step 5: Headless loop check**
+
+Run: `scripts/py -m pytest -q tests/test_canvas_scene.py -k "simulation or damaged"`
+Expected: pass (the Tween -> canvas path the panels now use is the one the simulation drives).
+
+- [ ] **Step 6: VERIFY and commit (before the gate)**
+
+```bash
+scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q
+git add shell/edge_panel.py shell/monitors.py tests/test_monitor_shell.py tests/test_edge_panel_drag.py
+git commit -m "feat(canvas): panels draw through the shape canvas; layout rules applied" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 7: GATE 2 (Phil, HDMI-A-1): the dock through the canvas**
+
+```bash
+env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config examples/dock-test.toml -v
+```
+1. **Fusion:** the extended dock and the frame are one shape: no seam, hairline or colour step at the joins or along the frame under the dock; the joins are smooth concave curves (zoom a `spectacle` screenshot).
+2. **Content:** the three launcher buttons are centred in the dock and clickable (Terminal opens Konsole).
+3. **Collapse / expand and handle-to-body sync:** click the handle: the body shrinks smoothly into the frame in about 0.3 s and grows back on the next click, and the handle rides the body's inner edge the whole time.
+   *Why this needs a number.* The spike measured a canvas-vs-marker depth error of 0.14-1.80 px max (mean about 0-1 px), but its marker moved on a slow 2 s sine (peak about 1.7 px per frame), so one frame of lag could cost at most about 1.7 px. The real panel eases out with `cubic-bezier(.2,.8,.2,1)` over 280 ms: the dock moves 15.4, 14.3, 10.9 and 7.4 px in its first four frames (computed from `shell.anim.EASE_OUT`), so the same one-frame lag can open a gap of up to about 15 px for a frame at the start of a toggle. The spike data neither confirms nor rules this out, because whether the canvas draws in the same frame as the panel's tick varied from run to run (findings section 5).
+   *Check.* First by eye at normal speed: any visible detach fails. Then record two collapses and two expands with Spectacle's screen recording of the dock region (60 fps) and step through the video frame by frame (e.g. `mpv`, key `.`). **Accepted:** the gap between the handle and the body's inner edge is at most 2 px, and only in at most one frame per toggle. **Anything larger or longer fails.**
+4. **Collapsed handle visible:** after collapsing, the three dots are visible in the frame band; check again after 10 s (late restack).
+5. **Click-through above the collapsed dock:** click the desktop about 40 px above the frame where the extended dock would be: the click reaches the desktop (only the 16 px hover zone above the frame belongs to the dock).
+6. **Hover peek:** move the pointer onto the frame over the dock: it peeks out (about 14 px) and goes back when the pointer leaves.
+7. **Drag:** press the handle and drag up: the depth follows the pointer, body and handle together; release above half depth extends, below half collapses.
+8. **Maximized window:** maximize a window: it still stops at the frame; the extended dock floats over it.
+9. The `-v` log has no errors.
+
+**On failure:**
+- Items 4 or 5 (stacking): repeat without `env EDGE_SHELL_RAISE_MS=0`. Fixed with the raise -> Fallback B (keep the raise). Not fixed -> Fallback C (stop).
+- Item 3 (the numeric rule fails) -> Task 11 Fallback D, then repeat this gate. If D does not pass the rule either, Fallback D's decision step applies (Phil chooses).
+- Item 1 (seams or wrong join shapes) -> stop: screenshot and compare with `tests/test_canvas_outline.py`; the pure contract says it cannot happen, so suspect a position mismatch between `EdgePanel` (`anchor_and_margin`) and the canvas shape (`PanelShape.pos`).
+
+---
+
+### Task 9: Notify layout adjustments, only when they change
+
+The app tells Phil when the layout rules moved, shrank or hid a panel. It notifies when a monitor's warnings differ from the last ones it reported for that monitor, so an unrelated reload (say, an accent colour change) does not repeat the same notification.
+
+**Files:**
+- Modify: `shell/app.py:44-50` (`__init__`), `shell/app.py:63-84` (`sync_monitors`), `shell/app.py:153-167` (`_reload` apply loop), `shell/app.py:172-179` (`_report_error` -> `_notify`, new `_report_layout`)
+- Test: `tests/test_app_sync.py`
+
+**Interfaces:**
+- Consumes: `MonitorShell.layout_warnings: list[str]` (Task 8).
+- Produces: `EdgeShellApp._notify(title: str, message: str) -> None`; `EdgeShellApp._report_layout(name: str, shell) -> None` (notifies "Panels adjusted" with the joined warnings when they differ from the last reported list for `name`; an empty list is recorded silently); attribute `EdgeShellApp._layout_reported: dict[str, list[str]]`.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/test_app_sync.py` add the class attribute `layout_warnings: list = []` to `FakeShell` (after `fail_apply: set = set()`), and append:
 
 ```python
-    def _report_layout(self, shell) -> None:
-        """Panels moved, shrunk or hidden by the layout rules (shell.panel_layout)."""
-        if shell.layout_warnings:
-            self._notify("Panels adjusted", "\n".join(shell.layout_warnings))
+def test_layout_warnings_are_notified_when_a_shell_opens(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
+    )
+    monkeypatch.setattr(FakeShell, "layout_warnings", ["monitors.HDMI-A-1.panels.1 (dock): x"])
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes == [("Panels adjusted", "monitors.HDMI-A-1.panels.1 (dock): x")]
+
+
+def test_no_notification_without_layout_warnings(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_layout_warnings_are_notified_only_when_they_change(renv, monkeypatch):
+    app, _, _, _, _ = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    shell = app.shells["HDMI-A-1"]
+    for warnings in (["w1"], ["w1"], ["w1", "w2"], [], ["w1"]):
+        shell.layout_warnings = warnings
+        app._report_layout("HDMI-A-1", shell)
+    assert notes == ["w1", "w1\nw2", "w1"]  # unchanged: silent; cleared: silent; back: again
+
+
+def test_unrelated_reload_does_not_repeat_the_layout_notification(renv, monkeypatch):
+    app, store, _, _, make_config = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    app.shells["HDMI-A-1"].layout_warnings = ["w"]
+    app._report_layout("HDMI-A-1", app.shells["HDMI-A-1"])
+    store.pending = make_config(
+        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+    )
+    app.reload()
+    assert len(notes) == 1
+```
+
+Run: `scripts/py -m pytest -q tests/test_app_sync.py`
+Expected: FAIL (`AttributeError: … has no attribute '_notify'` / `'_report_layout'`).
+
+- [ ] **Step 2: Implement in `shell/app.py`**
+
+1. In `__init__`, after `self._sync_timers: list[int] = []  # pending hot-plug sync timer ids` add
+   `        self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor`.
+2. In `sync_monitors`, right after the `self.shells[name] = MonitorShell(...)` statement inside the `for name in open_:` loop, add `self._report_layout(name, self.shells[name])`.
+3. In `_reload`, inside the `try:` after `self.shells[name].apply(new, items)`, add `self._report_layout(name, self.shells[name])`.
+4. Replace `_report_error` by:
+
+```python
+    def _report_layout(self, name: str, shell) -> None:
+        """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but
+        only when that monitor's warnings changed, not on every unrelated reload."""
+        warnings = list(shell.layout_warnings)
+        if warnings == self._layout_reported.get(name, []):
+            return
+        self._layout_reported[name] = warnings
+        if warnings:
+            self._notify("Panels adjusted", "\n".join(warnings))
 
     def _notify(self, title: str, message: str) -> None:
         try:
@@ -2984,49 +3110,24 @@ In `sync_monitors`, right after the `self.shells[name] = MonitorShell(...)` stat
 
 (`test_notify_send_body_cannot_be_parsed_as_option` keeps passing: `--` still precedes the body.)
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 3: Run the tests**
 
-Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_app_sync.py tests/test_gtk_imports.py`
-Expected: all pass. Then `grep -n "draw_panel\|hex_to_rgba\|_canvas\b" shell/edge_panel.py` prints nothing.
+Run: `scripts/py -m pytest -q tests/test_app_sync.py`
+Expected: all pass.
 
-- [ ] **Step 6: Headless loop check**
-
-Run: `scripts/py -m pytest -q tests/test_canvas_scene.py -k "simulation or damaged"`
-Expected: pass (the Tween -> canvas path the panels now use is the one the simulation drives).
-
-- [ ] **Step 7: VERIFY and commit (before the gate)**
+- [ ] **Step 4: VERIFY and commit**
 
 ```bash
 scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q
-git add shell/edge_panel.py shell/monitors.py shell/app.py tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_app_sync.py
-git commit -m "feat(canvas): panels draw through the shape canvas; layout rules applied and reported" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git add shell/app.py tests/test_app_sync.py
+git commit -m "feat(app): notify layout adjustments when they change" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
-
-- [ ] **Step 8: GATE 2 (Phil, HDMI-A-1): the dock through the canvas**
-
-```bash
-env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config examples/dock-test.toml -v
-```
-1. **Fusion:** the extended dock and the frame are one shape: no seam, hairline or colour step at the joins or along the frame under the dock; the joins are smooth concave curves (zoom a `spectacle` screenshot).
-2. **Content:** the three launcher buttons are centred in the dock and clickable (Terminal opens Konsole).
-3. **Collapse / expand:** click the handle: the body shrinks smoothly into the frame in about 0.3 s and grows back on the next click. The handle rides the body's inner edge the whole time; report any visible gap or wobble between the handle and the body edge, especially at the very start of a toggle.
-4. **Collapsed handle visible:** after collapsing, the three dots are visible in the frame band; check again after 10 s (late restack).
-5. **Click-through above the collapsed dock:** click the desktop about 40 px above the frame where the extended dock would be: the click reaches the desktop (only the 16 px hover zone above the frame belongs to the dock).
-6. **Hover peek:** move the pointer onto the frame over the dock: it peeks out (about 14 px) and goes back when the pointer leaves.
-7. **Drag:** press the handle and drag up: the depth follows the pointer, body and handle together; release above half depth extends, below half collapses.
-8. **Maximized window:** maximize a window: it still stops at the frame; the extended dock floats over it.
-9. The `-v` log has no errors.
-
-**On failure:**
-- Items 4 or 5 (stacking): repeat without `env EDGE_SHELL_RAISE_MS=0`. Fixed with the raise -> Fallback B (keep the raise). Not fixed -> Fallback C (stop).
-- Item 3 (handle visibly detached from the body during the first frames of a toggle) -> Task 10 Fallback D, then repeat this gate.
-- Item 1 (seams or wrong join shapes) -> stop: screenshot and compare with `tests/test_canvas_outline.py`; the pure contract says it cannot happen, so suspect a position mismatch between `EdgePanel` (`anchor_and_margin`) and the canvas shape (`PanelShape.pos`).
 
 ---
 
-### Task 9: GATE 3 (Phil, HDMI-A-1): clock and system bar (top and right edges)
+### Task 10: GATE 3 (Phil, HDMI-A-1): clock and system bar (top and right edges), corner clamp
 
-No code. Prerequisite: Gate 2 passed (or its fallback applied).
+No code. Prerequisite: Gate 2 passed (or its fallback applied) and Task 9 committed.
 
 ```bash
 env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config examples/panels-test.toml -v
@@ -3038,15 +3139,16 @@ env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config examples/panels-test.toml 
 3. Click each handle: collapse/expand animate smoothly; handles ride the inner edges; the collapsed handles are visible in the top and right frame bands.
 4. Hover peek works on both; drag works along each panel's own axis (down for the clock, left for the system bar).
 5. Toggle all three panels quickly one after another: no stray frame pixels or leftover body ghosts anywhere when they settle.
-6. The `-v` log has no errors.
+6. **Corner clamp (live).** Quit, then `cp examples/panels-test.toml /tmp/edge-gate3.toml`, add `pos = 0` to the `system_bar` entry and run `env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config /tmp/edge-gate3.toml -v`: a "Panels adjusted" notification says `monitors.HDMI-A-1.panels.2 (system_bar): pos 0 would run into a screen corner; moved to 38`; the bar starts 38 px below the top of the screen and the top-right rounded corner of the frame stays intact (no notch, no stray fill). Then add an unrelated change at the top of the file (`[theme]` with `accent = "#d3a68f"`) and save: the accent changes, but no second notification. Remove `pos = 0` and save: the bar returns to y = 600, no notification.
+7. The `-v` log has no errors (the clamp warning of item 6 is expected).
 
-**On failure:** as in Gate 2 (stacking -> retry with the raise; detached handle -> Fallback D; wrong shape on one edge only -> stop and compare that edge in `tests/test_canvas_outline.py` and `tests/test_panel_layout.py`).
+**On failure:** as in Gate 2 (stacking -> retry with the raise; handle-to-body rule fails -> Fallback D; wrong shape on one edge only -> stop and compare that edge in `tests/test_canvas_outline.py` and `tests/test_panel_layout.py`; item 6 wrong -> compare with `test_pos_is_clamped_to_the_corner_clearance` and the Task 9 tests).
 
 ---
 
-### Task 10: Fallbacks (ONLY when a gate says so)
+### Task 11: Fallbacks (ONLY when a gate says so)
 
-Skip this task entirely when Gates 1-3 passed with `EDGE_SHELL_RAISE_MS=0` and no visible handle lag. Each fallback is independent; apply only the ones a gate named, then repeat that gate.
+Skip this task entirely when Gates 1-3 passed with `EDGE_SHELL_RAISE_MS=0` and the Gate 2 handle-to-body rule passed. Each fallback is independent; apply only the ones a gate named, then repeat that gate.
 
 **Fallback A: KWin ignores exclusive zones on the `bottom` layer (Gate 1 item 2).**
 The strips go back to the `top` layer. They are invisible and input-less, so their stacking relative to panels no longer matters.
@@ -3056,25 +3158,95 @@ The strips go back to the `top` layer. They are invisible and input-less, so the
 - [ ] VERIFY, commit `fix(frame): zone strips on the top layer (KWin ignores bottom-layer zones)` with the trailer, repeat Gate 1.
 
 **Fallback B: content windows still need the re-raise (Gate 1 item 7 / Gate 2 items 4-5 pass only without `EDGE_SHELL_RAISE_MS=0`).**
-No code now. In Task 11 skip Steps 1-2 (raise removal) and keep the README limitation line about the re-raise; the `EDGE_SHELL_RAISE_MS` switch stays as a documented debug switch (add one line under README "Develop": `EDGE_SHELL_RAISE_MS=0 disables the startup re-raise (debugging stacking)`). Record the decision in the findings (Task 15).
+No code now. In Task 12 skip Steps 1-2 (raise removal) and keep the README limitation line about the re-raise; the `EDGE_SHELL_RAISE_MS` switch stays as a documented debug switch (add one line under README "Develop": `EDGE_SHELL_RAISE_MS=0 disables the startup re-raise (debugging stacking)`). Record the decision in the findings (Task 16).
 
 **Fallback C: content windows are hidden under the canvas even with the re-raise.**
 Stop. Do not improvise. Report to Phil with the `-v` log and a screenshot, and ask him to choose between: (1) content windows on the `overlay` layer (spike run 6 showed them visible, but overlay surfaces cover fullscreen windows, a visible regression), (2) the canvas on the `bottom` layer (panels stay above it, but normal windows would then cover the frame and the panel bodies while the handles stay on top), (3) going back to per-window drawing (spec 18 option A) for the panels. Each is a new decision for the spec.
 
-**Fallback D: the handle visibly lags the body at the start of a toggle (Gate 2 item 3).**
-The panel's Tween runs on the panel window's frame clock and the canvas redraws on its own; at the start of the 280 ms ease the body moves up to about 15 px per frame, so a one-frame offset can show. Try driving the depth Tween from the canvas's frame clock instead:
+**Fallback D: the handle-to-body rule of Gate 2 item 3 fails.**
+The panel's depth Tween runs on the panel window's frame clock and the canvas redraws on its own; at the start of the 280 ms ease the body moves up to about 15 px per frame (see Gate 2 item 3), so a one-frame offset shows. Try driving the depth Tween from the canvas's frame clock. A Tween ticking on ANOTHER widget is not stopped by GTK when the panel is destroyed, so the panel must cancel it and ignore late ticks; `_place_handle` must never run on a destroyed widget. (Prototyped while planning: the suite stays green with these changes.)
 
-- [ ] In `shell/edge_panel.py` add a constructor parameter after `on_depth`: `tick_widget=None,` (docstring: "`tick_widget` drives the depth Tween's frame clock; default: this window"), and create the depth tween with `self._tween = Tween(tick_widget or self, self._apply_depth, theme.duration_ms)` (the fade tween stays on `self`).
-- [ ] In `MonitorShell._new_panel` pass `tick_widget=self.canvas.area` next to `on_depth=`.
-- [ ] In `tests/test_monitor_shell.py`: give `FakeCanvas.__init__` an `self.area = object()` and add to `test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback`: `assert dock.kwargs["tick_widget"] is shell.canvas.area`.
-- [ ] VERIFY, commit `fix(canvas): drive panel depth from the canvas frame clock` with the trailer, repeat Gate 2. If Phil judges it no better (the lag moves to the handle), undo it with `git revert --no-commit HEAD`, then `git commit -m "revert: depth tween back on the panel frame clock" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`, and record "one-frame lag accepted" for Task 15.
+- [ ] In `shell/anim.py`, add to `class Tween` (before `animate_to`):
+
+```python
+    def cancel(self) -> None:
+        """Stop a running animation WITHOUT calling on_value (for a widget being destroyed)."""
+        if self._tick_id:
+            self._widget.remove_tick_callback(self._tick_id)
+            self._tick_id = 0
+```
+
+- [ ] In `shell/edge_panel.py`: add the constructor parameter `tick_widget=None,` after `on_depth: Callable[[float], None] | None = None,`; after `self._on_depth = on_depth` add `self._gone = False  # set on destroy: the depth tween may tick on another widget`; replace `self._tween = Tween(self, self._apply_depth, theme.duration_ms)` by
+
+```python
+        # Fallback D: the depth tween ticks on `tick_widget` (the canvas) so body and handle
+        # move in the canvas's frame; it must be stopped when this panel is destroyed.
+        self._tween = Tween(tick_widget or self, self._apply_depth, theme.duration_ms)
+        self.connect("destroy", self._stop_depth_ticks)
+```
+
+  (the fade tween stays on `self`), and put before `_apply_depth`, plus a guard as its first lines:
+
+```python
+    def _stop_depth_ticks(self, *_args) -> None:
+        self._gone = True
+        self._tween.cancel()
+
+    def _apply_depth(self, d: float) -> None:
+        if self._gone:  # never touch a destroyed panel's widgets
+            return
+        self._d = d
+```
+
+  (the rest of `_apply_depth` is unchanged; the name `_gone` avoids the widgets' own `_destroyed` flags and `_on_destroy` handlers in `widgets/clock.py` and `widgets/system_bar.py`).
+- [ ] In `MonitorShell._new_panel` pass `tick_widget=self.canvas.area,` after `on_depth=…`.
+- [ ] Tests: in `tests/test_monitor_shell.py` add `self.area = object()` to `FakeCanvas.__init__` and, in `test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback`, `assert dock.kwargs["tick_widget"] is shell.canvas.area` before the `on_depth` call. In `tests/test_edge_panel_drag.py` add `_gone=False,` to the `SimpleNamespace` in `test_apply_depth_moves_handle_and_region_then_reports_to_the_canvas` and append:
+
+```python
+def test_destroyed_panel_ignores_late_depth_ticks():
+    calls = []
+    s = SimpleNamespace(
+        _gone=False,
+        _tween=SimpleNamespace(cancel=lambda: calls.append("cancel")),
+        _place_handle=lambda d: calls.append(("handle", d)),
+        _update_input_region=lambda d: calls.append(("region", d)),
+        _on_depth=lambda d: calls.append(("canvas", d)),
+    )
+    ep.EdgePanel._stop_depth_ticks(s)
+    ep.EdgePanel._apply_depth(s, 5.0)  # a tick that was already queued on the canvas clock
+    assert calls == ["cancel"] and s._gone is True
+```
+
+  and to `tests/test_anim.py`:
+
+```python
+def test_cancel_stops_without_reporting_a_value():
+    w, seen = FakeWidget(), []
+    t = Tween(w, seen.append, duration_ms=100)
+    t.animate_to(10)
+    w.frame(16)
+    count = len(seen)
+    t.cancel()
+    assert not t.running and w.callbacks == {}
+    w.frame(16)
+    assert len(seen) == count  # no value after cancel
+    t.cancel()  # idempotent
+```
+
+- [ ] VERIFY, commit `fix(canvas): drive panel depth from the canvas frame clock` with the trailer, repeat Gate 2 (including the numeric rule and a rebuild of the dock through a config save while it animates, to exercise the destroy guard).
+- [ ] **Decision if D does not pass the rule (or only moves the lag to the handle): Phil chooses.** Undo D first (`git revert --no-commit HEAD`, then `git commit -m "revert: depth tween back on the panel frame clock" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`), then stop and present these options with the Gate 2 recordings:
+  1. **Draw the handle dots on the canvas** (the canvas paints the dots in the same frame as the body, so they can never drift apart; the content window keeps an invisible handle button for click, hover and drag). Overlaps spec 15 (handles drawn with cairo), so it would become a small task of its own, planned before Task 12.
+  2. **Accept the measured lag** as is (record the measured gap and frame count in the findings, Task 16).
+  3. **Soften the start of the ease** (a less steep first segment than `cubic-bezier(.2,.8,.2,1)` reduces the first-frame jump; changes the spec 4 timing, so it is Phil's call).
+  4. Anything else Phil proposes.
 
 ---
-### Task 11: Remove the replaced code (raise workaround, legacy renderers, spike scaffolding)
+
+### Task 12: Remove the replaced code (raise workaround, legacy renderers, spike scaffolding)
 
 Prerequisite: Gates 1-3 passed. **Under Fallback B (raise still needed) skip Steps 1-2** and keep the README re-raise line in Step 5.
 
-Decision on `spikes/`: the spike code is deleted (`spikes/canvas/`, `spikes/tests/`); it stays in git history at `872eff9` and the findings note points there. `spikes/__init__.py` stays for future probes. The spike tests import `shell.draw`, which this task deletes, so keeping them would leave broken code behind.
+**Recorded decision (Decisions recorded, item 5; applies unless Phil objects before this task):** the spike code is deleted: `spikes/canvas/` (including the live probe `spikes/canvas/live.py`, `bench.py`, `render_frames.py`, `render_sheets.py`) and `spikes/tests/`. It stays in git history at `872eff9` and the findings note points there; `main.py --stats` and `python -m shell.canvas.simulate` replace the live probe and the benchmark. `spikes/__init__.py` stays for future probes. The spike tests import `shell.draw`, which this task deletes, so keeping them would leave broken code behind.
 
 **Files:**
 - Modify: `shell/monitors.py` (raise code), `shell/edge_panel.py` (`raise_to_top`), `tests/test_monitor_shell.py`, `tests/test_draw.py`, `README.md`
@@ -3091,7 +3263,7 @@ In `tests/test_monitor_shell.py`:
 2. `bare_shell`: delete `shell._closed = False`.
 3. `build` fixture: docstring `"""build(monitors, theme=None) -> (shell, tracked windows)."""`; delete the `monkeypatch.delenv("EDGE_SHELL_RAISE_MS", raising=False)` line, the `timers = []` line and the `monkeypatch.setattr(mon_mod.GLib, "timeout_add", …)` statement; `_build` returns `shell, tracked`.
 4. Every `shell, tracked, _ = build(`, `shell, _, _ = build(` and `shell, _, timers = build(` becomes `shell, tracked = build(` / `shell, _ = build(` / `shell, _ = build(`.
-5. Delete the tests `test_init_schedules_primary_and_fallback_raise`, `test_init_without_panels_schedules_no_raise`, `test_raise_switch_off_schedules_nothing`, `test_raise_delays_switch`, and in `test_geometry_change_rebuilds_and_moves_the_scene_shape` delete the line `assert timers[-1][0] == mon_mod.RAISE_DELAY_MS  # the rebuilt panel is re-raised once`.
+5. Delete the tests `test_raise_panels_raises_only_live_panels`, `test_raise_one_skips_a_panel_that_was_removed`, `test_init_schedules_primary_and_fallback_raise`, `test_init_without_panels_schedules_no_raise`, `test_raise_switch_off_schedules_nothing`, `test_raise_delays_switch`, and in `test_geometry_change_rebuilds_and_moves_the_scene_shape` delete the line `assert timers[-1][0] == mon_mod.RAISE_DELAY_MS  # the rebuilt panel is re-raised once`.
 6. Delete the whole `# ---- EdgePanel.raise_to_top …` section (`_panel_stub` and its two tests) and append:
 
 ```python
@@ -3164,7 +3336,7 @@ scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m
 git add shell/monitors.py shell/edge_panel.py tests/test_monitor_shell.py tests/test_draw.py README.md
 git commit -m "refactor: drop the raise workaround, per-window renderers and spike scaffolding" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
-(The `git rm` deletions from Steps 3-4 are already staged.) Expected VERIFY: no failures; `tests/test_monitor_shell.py` goes from 21 to 14 tests (8 raise tests removed, 1 added).
+(The `git rm` deletions from Steps 3-4 are already staged.) Expected VERIFY: no failures; `tests/test_monitor_shell.py` goes from 23 to 14 tests (10 raise tests removed, 1 added).
 
 - [ ] **Step 7: Quick re-check (Phil, 30 s)**
 
@@ -3175,7 +3347,7 @@ No env var any more. Three panels as at Gate 3; the collapsed handles are visibl
 
 ---
 
-### Task 12: GATE 4 (Phil, HDMI-A-1): border and shadow, live reload, per-monitor override
+### Task 13: GATE 4 (Phil, HDMI-A-1): border and shadow, live reload, per-monitor override
 
 **Files:**
 - Create: `examples/effects-test.toml`
@@ -3246,7 +3418,7 @@ Edit `/tmp/edge-effects.toml` while it runs; each save applies within about a se
 
 ---
 
-### Task 13: `--stats` measurement mode and the headless simulate command
+### Task 14: `--stats` measurement mode and the headless simulate command
 
 **Files:**
 - Create: `shell/canvas/stats.py`
@@ -3257,7 +3429,7 @@ Edit `/tmp/edge-effects.toml` while it runs; each save applies within about a se
 - Consumes: `CanvasPainter.recorder` / `Recorder` protocol (Task 4), `simulate`, `FakeClock` (Task 4), `MonitorShell.canvas.painter`, `MonitorShell.live_panels()` (Task 8), `EdgePanel.toggle()` (existing), `load_config`, `deep_merge`, `Theme`.
 - Produces:
   - `shell.canvas.stats`: `GAP_US = 100_000`, `pct(values, q)`, `interval_stats(timestamps_us) -> dict` (keys `frames`, `mean_ms`, `median_ms`, `p95_ms`, `fps`; gaps > `GAP_US` ignored), `ticks_between_draws(tick_ts, draw_ts) -> list[int]`, `StatsRecorder(now_us: Callable[[], int])` with `ticks: dict[key, list[int]]`, `draw_ts`, `draw_ms`, `full_draw_ms`, `on_tick(key, depth)`, `on_draw(duration_ms, full)`, `report(wall_s, cpu_s) -> list[str]`. (`pct`, `interval_stats`, `ticks_between_draws` come from `spikes/canvas/live.py:217-234, 299-308` at `872eff9`.)
-  - `shell.canvas.simulate.default_shapes(width, height) -> list[PanelShape]`, `shell.canvas.simulate.main(argv=None) -> int` (`python -m shell.canvas.simulate [--frames N] [--size WxH] [--elevation P] [--border W]`).
+  - `shell.canvas.simulate.default_shapes(width, height) -> list[PanelShape]` (the registered widget defaults at 1920x1080; shrunk and moved on smaller sizes so no layout rule fires), `shell.canvas.simulate.main(argv=None) -> int` (`python -m shell.canvas.simulate [--frames N] [--size WxH] [--elevation P] [--border W]`).
   - `EdgeShellApp(store, stats_seconds: float | None = None)`, attributes `recorder`, methods `_exercise() -> bool` (toggles every live panel, repeats), `_stop() -> bool`; constant `shell.app.EXERCISE_MS = 300`.
   - `main.py --stats SECONDS` (`0 < SECONDS <= 10`, `main.MAX_STATS_SECONDS = 10`).
   - Why ticks are counted only on real depth changes and why there is no "sync error" number: in a live run the canvas draws later in the same frame than the panel's tick, so a timestamp comparison would always report one frame of error; the honest measure is the cadence (panel ticks between consecutive canvas draws: 1 = in step).
@@ -3338,10 +3510,26 @@ def test_simulation_draws_once_per_tick(make_config):
     assert interval_stats(rec.ticks[0])["median_ms"] == pytest.approx(16.667, abs=0.01)
 
 
+@pytest.mark.parametrize("size", [(1920, 1080), (640, 400)])
+def test_default_shapes_fit_the_simulated_surface(size):
+    from shell.panel_layout import resolve_layout
+    from shell.panel_spec import PanelGeometry
+
+    w, h = size
+    shapes = default_shapes(w, h)
+    geos = [PanelGeometry("p", s.edge, s.pos, s.length, s.depth, "extended", "p") for s in shapes]
+    layout = resolve_layout(geos, w, h, 10, 14)
+    assert layout.warnings == []  # nothing clamped, shrunk or hidden
+    assert [(p.pos, p.length) for p in layout.panels] == [(s.pos, s.length) for s in shapes]
+    if size == (1920, 1080):  # the registered widget defaults
+        assert [(s.pos, s.length) for s in shapes] == [(680, 560), (876, 168), (600, 300)]
+
+
 def test_cli_prints_a_report(capsys):
     assert main(["--frames", "20", "--size", "640x400", "--elevation", "50", "--border", "2"]) == 0
     out = capsys.readouterr().out
     assert "=== edge-shell canvas stats ===" in out
+    assert "panel 2:" in out  # all three panels animated
     assert "simulated 20 frames at 640x400" in out
 
 
@@ -3533,11 +3721,15 @@ def _fmt(v, spec: str = ".2f") -> str:
 
 
 def default_shapes(width: int, height: int) -> list[PanelShape]:
-    """The built-in panels at their registered defaults (widgets/: dock, clock, system_bar)."""
+    """The built-in panels (widgets/: dock, clock, system_bar): their registered defaults at
+    1920x1080, shrunk and moved on smaller sizes so that no layout rule (shell.panel_layout)
+    would move, shrink or hide one on the simulated surface."""
+    dock = min(560, width - 160)
+    bar = min(300, height // 3)
     return [
-        PanelShape("bottom", (width - 560) // 2, 560, 64),
+        PanelShape("bottom", (width - dock) // 2, dock, 64),
         PanelShape("top", (width - 168) // 2, 168, 46),
-        PanelShape("right", 600, 300, 56),
+        PanelShape("right", min(600, height - 110 - bar), bar, 56),  # clear of the dock
     ]
 
 
@@ -3643,7 +3835,7 @@ and change the last line of `main` to `    return EdgeShellApp(store, stats_seco
 ```
 
    (the remaining attribute lines stay).
-3. In `sync_monitors`, after `self._report_layout(self.shells[name])` add
+3. In `sync_monitors`, after `self._report_layout(name, self.shells[name])` add
 
 ```python
             if self.recorder is not None:
@@ -3711,9 +3903,9 @@ git commit -m "feat: --stats measurement mode and headless canvas simulation com
 
 ---
 
-### Task 14: GATE 5 (Phil, HDMI-A-1): regression and measurement
+### Task 15: GATE 5 (Phil, HDMI-A-1): regression and measurement
 
-No code. Prerequisite: Tasks 11-13 committed.
+No code. Prerequisite: Tasks 12-14 committed.
 
 ```bash
 cp examples/effects-test.toml /tmp/edge-gate5.toml
@@ -3746,7 +3938,7 @@ scripts/py main.py --config /tmp/edge-gate5.toml -v
 
 ---
 
-### Task 15: Docs: README, spec, findings
+### Task 16: Docs: README, spec, findings
 
 **Files:**
 - Modify: `README.md`, `docs/superpowers/specs/2026-10-11-edge-shell-design.md`, `docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`
@@ -3794,6 +3986,12 @@ scripts/py main.py --config /tmp/edge-gate5.toml -v
      to a screen corner is moved, one that overlaps an earlier panel (or leaves less than the
      minimum gap between their joins) is hidden; both send a notification. Planned: spec 16-17.
    ```
+   replace the bullet "Changing a connected monitor's resolution or scale does not reflow panels with an explicit `pos`; restart the shell or save the config. Planned fix." (two lines) by
+   ```markdown
+   - Changing a connected monitor's resolution or scale does not reflow panels: neither those
+     with an explicit `pos` nor, since the shape canvas, centred ones (every position is
+     resolved once, when the panel is built). Restart the shell or save the config. Planned fix.
+   ```
    and add
    ```markdown
    - The frame band is click-through: clicks on the frame reach the desktop.
@@ -3815,10 +4013,34 @@ scripts/py main.py --config /tmp/edge-gate5.toml -v
 
    and replace the **Fallback.** paragraph by `**Implemented (2026-10-13):** the single-canvas design (section 18, option B) replaced per-window drawing. The strips only reserve space; panels are content, handle and input windows above the canvas.` (Under Fallback A write `top (invisible)` for the strips; under Fallback B add `The startup re-raise of panels is still needed.`)
 3. Section 5.2: replace the paragraph by `The canvas draws one union outline of frame, corners and panels (`shell/canvas/outline.py`) in a canonical per-edge space rotated onto each edge, then the border and shadow (`shell/canvas/effects.py`). `shell/geometry.py` keeps the per-panel maths (join radius, input rects, anchors).`
-4. Section 6, live-reload table: the "Theme color" row becomes `| Theme colour, border or shadow | Regenerate CSS; redraw the canvas (no rebuild) |`; the "Panel `edge`, `pos`, `length` or `depth`" row becomes `| Panel `edge`, `pos`, `length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |`.
-5. Section 8 layout tree: add `│   ├── canvas/               # shape canvas: outline, effects, scene, painter, window` and `│   ├── panel_layout.py       # PURE: resolved positions, minimum geometry rules`, and change the `frame.py` comment to `# FrameEdge (invisible zone strips)`.
+4. Section 6, config example: in the TOML block, after the line `font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]` and before `[monitors.HDMI-A-1]`, insert
+
+   ```toml
+
+   [theme.border]                # opt-in inner border along the outline
+   enabled = true
+   width = 2                     # px, on the frame side
+   color = "#8fd3b6ff"           # #rrggbb or #rrggbbaa
+
+   [theme.shadow]                # opt-in uniform shadow onto the desktop
+   enabled = true
+   elevation = 50                # 0-100 %; 100 % reaches 48 px
+   color = "#00000080"           # the alpha is the strength
+   ```
+
+   and after `theme.accent = "#d3a68f"      # optional per-monitor override` add the line `theme.shadow.elevation = 80   # nested tables merge key by key`.
+   Then the live-reload table: the "Theme color" row becomes `| Theme colour, border or shadow | Regenerate CSS; redraw the canvas (no rebuild) |`; the "Panel `edge`, `pos`, `length` or `depth`" row becomes `| Panel `edge`, `pos`, `length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |`.
+5. Section 8 layout tree: add `│   ├── canvas/               # shape canvas: outline, effects, scene, painter, window` and `│   ├── panel_layout.py       # PURE: resolved positions, minimum geometry rules`, and change the `frame.py` comment to `# FrameEdge (invisible zone strips)`. In the module table below it, change the `shell/edge_panel.py` row to `| `shell/edge_panel.py` | Window setup, content placement, handle, input region, states; reports its depth to the canvas | Draw the panel body; contain widget content |` and add the rows
+
+   ```markdown
+   | `shell/canvas/*` (except `canvas.py`), `shell/panel_layout.py` | Pure logic: outline, border, shadow, scene, damage boxes, panel positions | Import GTK |
+   | `shell/canvas/canvas.py` | The `ShapeCanvas` window: draws frame, corners, panel bodies, border, shadow | Take input; know widget content |
+   ```
+
+   and add `shell/canvas/*` (except `canvas.py`) and `shell/panel_layout.py` to the first row's pure-module list if that row is kept as is.
 6. Section 17, after the "Minimum geometry rules" bullet add: `**Interim implementation (2026-10-13):** `shell/panel_layout.py` clamps `pos` into the free span (`T + R + r` from each end, `r` at full depth), shrinks over-long panels, and hides a later panel whose grown body box overlaps an earlier one (minimum gap `r1 + r2` on one edge), with a notification. The full resolver replaces it.`
 7. Section 18, before "**Spike required before choosing B**" add: `**Status (2026-10-13):** spike done (`docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`); option B implemented by `docs/superpowers/plans/2026-10-13-shape-canvas-and-effects.md`. The frame band is click-through now (the old strips took input).`
+8. Section 18, default elevation: Phil confirmed 50 % (24 px) (Decisions recorded, item 4); the controller already updated that spec sentence (commit `3f1d311` on `spike/shape-canvas`, "confirmed by Phil"). Check: `grep -n "Phil has not set it yet" docs/superpowers/specs/2026-10-11-edge-shell-design.md` must print nothing. If it still prints the line, replace `(24 px, a controller choice inside the reasonable range; Phil has not set it yet)` by `(24 px, confirmed by Phil)`.
 
 - [ ] **Step 3: Findings note**
 
@@ -3831,18 +4053,18 @@ Append to `docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`:
 |---|---|
 | 1 Layout resolver | Plan 2; interim corner-clearance / minimum-gap rules in `shell/panel_layout.py` (plan Task 5) |
 | 2 Alpha colours, theme models | Plan Tasks 1-2 |
-| 3 Promote outline/effects | Plan Task 3 (contract: `tests/test_canvas_outline.py` vs `tests/legacy_draw.py`); legacy code removed in Task 11 |
+| 3 Promote outline/effects | Plan Task 3 (contract: `tests/test_canvas_outline.py` vs `tests/legacy_draw.py`); legacy code removed in Task 12 |
 | 4 Canvas, invisible strips, content windows | Plan Tasks 6-8 |
-| 5 Remove `raise_to_top` | Plan Task 11 (or kept: Fallback B) |
+| 5 Remove `raise_to_top` | Plan Task 12 (or kept: Fallback B) |
 | 6 Damaged-region invalidation | Plan Task 4 (`shell/canvas/scene.py`, simulation tests) |
-| 7 Config and reload | Plan Tasks 2, 7, 8, Gate 4 |
+| 7 Config and reload | Plan Tasks 2, 7, 8, 9 (layout notifications), Gate 4 |
 | 8 Fullscreen | Gate 5 item 10 |
 | 9 Handle customization | Later plan (spec 15) |
 | 10 Multi-monitor and scale | Later; the canvas warns on scale != 1 |
 | 11 CPU profile | `main.py --stats` (Gate 5); deeper profiling later |
 | 12 Human gates | Gates 1-5 |
 
-The spike code (`spikes/canvas/`, `spikes/tests/`) was removed in plan Task 11; it is in git history at `872eff9`.
+The spike code (`spikes/canvas/`, `spikes/tests/`) was removed in plan Task 12; it is in git history at `872eff9`.
 ```
 
 Then add one line per gate below the table with the date, each item's pass/fail and any fallback applied, copied from the notes taken at Gates 1-5, plus the Gate 5 `--stats` report lines verbatim.
@@ -3870,23 +4092,25 @@ git commit -m "docs: shape canvas, border and shadow; spec and findings follow-u
 | `#rrggbbaa` in validator and `hex_to_rgba`, 6-digit unchanged; GTK3 CSS safety | 1 |
 | Per-monitor override with deep merge | 2, Gate 4 item 7 |
 | No shadow cache; first draw full; damage = union(prev, cur) grown by reach + border | 4 |
-| Strips invisible, input-less, still reserving T; stacking risk + gate + fallback | 7, Gate 1, 10 A |
+| Strips invisible, input-less, still reserving T; stacking risk + gate + fallback | 7, Gate 1, 11 A |
 | Screen corners drawn by the canvas; `ScreenCorner` removed | 7 |
-| Remove `raise_to_top` only after the gate | 7 (switch), Gates 1-2, 11, 10 B |
-| Outline-vs-legacy contract kept via `tests/legacy_draw.py` | 3, 11 |
-| Self-intersection rules clamped/rejected with warnings | 5, 8 (notification) |
+| Remove `raise_to_top` only after the gate | 7 (switch), Gates 1-2, 12, 11 B |
+| Outline-vs-legacy contract kept via `tests/legacy_draw.py` | 3, 12 |
+| Self-intersection rules clamped/rejected with warnings | 5, 8 (log), 9 (notification only when it changes), Gate 3 item 6 |
 | Border/shadow changes and toggles are restyles; reload updates the canvas | 2 (diff tests), 7, 8 |
+| Handle stays in step with the body (numeric rule), fallback and decision path | Gate 2 item 3, 11 D |
 | Regression: frame, corners, dock/clock/system bar, animation, hover, click, drag, centring, reload, hot-plug, second instance, `sync_monitors` guard | 8, Gates 2, 3, 5 |
-| Headless simulation of tick/draw loop | 4, 13 |
-| `--stats` measurement | 13, Gate 5 |
+| Headless simulation of tick/draw loop | 4, 14 |
+| `--stats` measurement | 14, Gate 5 |
 | HiDPI noted, code scale-ready | 6 (warning), Global Constraints |
-| Spike scaffolding decision | 11 (deleted; history `872eff9`) |
-| README, spec divergences, findings follow-ups | 15 |
+| Spike scaffolding decision (recorded) | 12 (deleted; history `872eff9`) |
+| README, spec divergences (sections 3, 5, 6, 8, 17, 18), findings follow-ups | 16 |
+| Decisions recorded (branch base, overlap rule, click-through band, elevation 50 %, spike removal) | Decisions recorded block, Prerequisites, 5, 9, 12, 16 |
 
 Deliberately not covered (out of scope): spec 15 handles, spec 16/17 resolver, settings window, Plasma integration, scale-aware reach, multi-monitor visual testing (only HDMI-A-1 may be used).
 
-**2. Placeholder scan:** no "TBD"/"TODO"/"similar to Task N"; every code step shows the code; edits to existing files quote the exact lines replaced. The Task 15 gate-results lines are data copied from the gates, specified field by field.
+**2. Placeholder scan:** no "TBD"/"TODO"/"similar to Task N"; every code step shows the code; edits to existing files quote the exact lines replaced. The Task 16 gate-results lines are data copied from the gates, specified field by field.
 
-**3. Type and name consistency (checked against the code while writing, by grep):** existing names used: `geometry.join_radius/is_horizontal/anchor_and_margin/surface_size/input_rect`, `PanelGeometry`, `panels_for`, `widget_class`, `monitor_index`, `Tween.jump_to/animate_to`, `EdgePanel.toggle/set_state/apply_theme/_apply_depth/_place_handle/_update_input_region/do_size_allocate`, `MonitorShell._track/_check_monitor/_release/_destroy/apply/close`, `EdgeShellApp.sync_monitors/_reload/_report_error/register_window/unregister_window/run`, `diff_configs`, `Change`, `load_config`, `ConfigStore`. New names are defined once and reused with the same signatures: `PanelShape(edge, pos, length, depth)`, `Scene.add_panel/remove_panel/set_depth`, `CanvasPainter.draw(cr, clip)`, `Recorder.on_tick(key, depth)/on_draw(duration_ms, full)`, `ShapeCanvas.set_theme/add_panel/remove_panel/set_depth`, `resolve_layout(..., where=)`, `Layout.panels/warnings`, `MonitorShell.live_panels/layout_warnings/scene_key`, `EdgeShellApp._notify/_report_layout/_exercise/_stop/recorder`. Every task's code was run while planning in a scratch copy of the branch: after Task 13 the suite was 434 passed (from 255), ruff clean.
+**3. Type and name consistency (checked against the code while writing, by grep):** existing names used: `geometry.join_radius/is_horizontal/anchor_and_margin/surface_size/input_rect`, `PanelGeometry`, `panels_for`, `widget_class`, `monitor_index`, `Tween.jump_to/animate_to`, `EdgePanel.toggle/set_state/apply_theme/_apply_depth/_place_handle/_update_input_region/do_size_allocate`, `MonitorShell._track/_check_monitor/_release/_destroy/apply/close`, `EdgeShellApp.sync_monitors/_reload/_report_error/register_window/unregister_window/run`, `diff_configs`, `Change`, `load_config`, `ConfigStore`. New names are defined once and reused with the same signatures: `PanelShape(edge, pos, length, depth)`, `Scene.add_panel/remove_panel/set_depth`, `CanvasPainter.draw(cr, clip)`, `Recorder.on_tick(key, depth)/on_draw(duration_ms, full)`, `ShapeCanvas.set_theme/add_panel/remove_panel/set_depth`, `resolve_layout(..., where=)`, `Layout.panels/warnings`, `MonitorShell.live_panels/layout_warnings/scene_key`, `EdgeShellApp._notify/_report_layout/_exercise/_stop/recorder`. Every task's code was run while planning in a scratch copy of the branch: after Task 14 the suite was 438 passed (from 255), ruff clean; the Task 8 state without Task 9 was green (416 passed), which is why the split is safe; Fallback D was prototyped on the Task 8 state and stayed green.
 
-**4. Review Focus:** each of the five lines has its pinning test in the owning task (Tasks 1, 2, 4, 5, 6, 7, 8, 13); mutation checks in Task 4 Step 7 show the damage tests fail when the pad or the previous-box union is dropped.
+**4. Review Focus:** each of the five lines has its pinning test in the owning task (Tasks 1, 2, 4, 5, 6, 7, 8, 14) and Gate 3 item 6; mutation checks in Task 4 Step 7 show the damage tests fail when the pad or the previous-box union is dropped.
