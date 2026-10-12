@@ -27,3 +27,24 @@ def make_config():
         )
 
     return _make
+
+
+from shell import registry
+from shell.panel_spec import PanelDefaults
+
+
+@pytest.fixture
+def fake_registry(monkeypatch):
+    monkeypatch.setattr(registry, "_WIDGETS", {})
+    monkeypatch.setattr(registry, "_DEFAULTS", {})
+    registry.register("dock", PanelDefaults(edge="bottom", length=560, depth=64, label="dock"))(
+        type("Dock", (), {})
+    )
+    registry.register("clock", PanelDefaults(edge="top", length=168, depth=46, label="clock"))(
+        type("Clock", (), {})
+    )
+    registry.register(
+        "bar",
+        PanelDefaults(edge="right", length=300, depth=56, pos=600, label="bar", state="collapsed"),
+    )(type("Bar", (), {}))
+    return registry
