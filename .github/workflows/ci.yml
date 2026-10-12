@@ -1,0 +1,19 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System libraries for pycairo
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config python3-dev
+      - name: Install (no GTK; gi/fabric tests skip themselves)
+        run: pip install "pydantic>=2.6" pycairo pytest "ruff==0.17.0"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
