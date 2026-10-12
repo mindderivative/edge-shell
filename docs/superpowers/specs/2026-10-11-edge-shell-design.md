@@ -106,7 +106,7 @@ Panels are drawn with cairo, not CSS boxes, so the body and both joins come from
 
 ### 5.3 Monitors
 
-Monitors are keyed by **connector name** (`DP-1`, `HDMI-A-1`), never by index. Each monitor has a mode:
+Monitors are keyed by **connector name** (`DP-1`, `HDMI-A-1`), never by index. Gdk monitors are mapped to connector names by geometry against `kscreen-doctor -j`. Each monitor has a mode:
 
 | `shell` | Edge Shell windows | Plasma panel |
 | --- | --- | --- |
@@ -241,9 +241,9 @@ Conventions: `ruff` for lint and format, `pytest`, TDD for layers 1 and 2. GitHu
 
 Each is a throwaway script in `spikes/` that answers one question.
 
-1. Does `Gdk.Monitor.get_model()` return the connector name under GTK3 on KWin? If not, use geometry matching against `kscreen-doctor -j`.
+1. **Resolved:** `Gdk.Monitor.get_model()` returns the panel model, not the connector (both monitors report `G24M2020G`). Gdk monitors are mapped to connector names by geometry against `kscreen-doctor -j`. See `docs/superpowers/findings/2026-10-11-monitor-names.md`.
 2. Does `evaluateScript` hide and restore a Plasma panel cleanly with no flicker or layout side effects? Only a temporary test panel on `HDMI-A-1` is touched first; Phil confirms before the live panel on DP-1 is touched.
-3. With frame strips, corners and one panel on `HDMI-A-1`, do maximized windows stop at the frame and does the panel fuse with it? Phil verifies visually.
+3. **Folded into the build:** frame strips, corners and the dock are built for real in milestones 2-3; Phil's visual gates A and B answer this. If either gate fails, stop and choose the single-canvas fallback in 5.1.
 
 ## 12. Build order
 
