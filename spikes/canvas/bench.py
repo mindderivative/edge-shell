@@ -16,13 +16,14 @@ import math
 import pathlib
 import platform
 import statistics
+import sys
 import time
 from collections.abc import Callable
 
 import cairo
 
 from shell import geometry
-from spikes.canvas.effects import draw_border, draw_shadow
+from spikes.canvas.effects import ShadowLayer, draw_border, draw_shadow, draw_shadow_stack
 from spikes.canvas.outline import _MATRICES, Panel, fill_mass, outline_path
 
 T, R = 10, 14
@@ -545,7 +546,110 @@ def table(rows: list[dict], runs: list[list[dict]]) -> str:
     return "\n".join(lines)
 
 
+# ---- v2: gaussian profile at larger reach (Task 2b) ----------------------------------------
+
+V2_CASES: list[tuple[str, list[ShadowLayer]]] = [
+    ("gauss reach 32 op .35 off (0,8)", [ShadowLayer(0.35, 32, (0, 8))]),
+    ("gauss reach 48 op .40 off (0,16)", [ShadowLayer(0.40, 48, (0, 16))]),
+    (
+        "S3 two-layer 8/(0,2) + 40/(0,10)",
+        [ShadowLayer(0.30, 8, (0, 2)), ShadowLayer(0.22, 40, (0, 10))],
+    ),
+    ("gauss reach 32 op .30 off (0,0)", [ShadowLayer(0.30, 32)]),
+]
+
+
+def _v2_scene(
+    cr: cairo.Context, scene: Scene, panels: list[Panel], stack: list[ShadowLayer]
+) -> None:
+    draw_shadow_stack(cr, scene.w, scene.h, T, R, panels, stack, SHADOW_RGB)
+    fill_mass(cr, scene.w, scene.h, T, R, panels, MASS)
+    draw_border(cr, scene.w, scene.h, T, R, panels, BORDER_W, ACCENT)
+
+
+def make_full_v2(scene: Scene, stack: list[ShadowLayer]):
+    surf = new_surface(scene.w, scene.h)
+    cr = cairo.Context(surf)
+
+    def frame(d: float) -> None:
+        clear_region(cr, None)
+        _v2_scene(cr, scene, scene.panels(d), stack)
+        surf.flush()
+
+    return surf, frame
+
+
+def make_damaged_v2(scene: Scene, stack: list[ShadowLayer]):
+    """Damaged-region redraw: the clip covers the dock bbox + the largest reach + its offset."""
+    reach = max(
+        sl.reach + math.ceil(abs(sl.offset[0])) + math.ceil(abs(sl.offset[1])) for sl in stack
+    )
+    rect = scene.damage(reach)
+    surf = new_surface(scene.w, scene.h)
+    cr = cairo.Context(surf)
+    _v2_scene(cr, scene, scene.panels(0), stack)
+
+    def frame(d: float) -> None:
+        cr.save()
+        cr.rectangle(*rect)
+        cr.clip()
+        clear_region(cr, None)
+        _v2_scene(cr, scene, scene.panels(d), stack)
+        cr.restore()
+        surf.flush()
+
+    return surf, frame, rect
+
+
+def run_v2() -> list[dict]:
+    sc = Scene(1920, 1080)
+    rows = []
+
+    def add(name: str, frame, rect) -> None:
+        r = {"scenario": name, **measure(frame)}
+        r["clip_px"] = rect[2] * rect[3] if rect else sc.w * sc.h
+        rows.append(r)
+        print(
+            f"  {name:<40} med {r['median_ms']:7.2f}  p95 {r['p95_ms']:7.2f}  "
+            f"max {r['max_ms']:7.2f} ms  clip {r['clip_px']} px",
+            flush=True,
+        )
+
+    for name, stack in V2_CASES:
+        _, f, rect = make_damaged_v2(sc, stack)
+        add(f"damaged  {name}", f, rect)
+    _, f = make_full_v2(sc, [ShadowLayer(0.40, 48, (0, 16))])
+    add("full     S4 gauss reach 48 off (0,16)", f, None)
+    for name, stack in V2_CASES[:3]:
+        _, f = make_full_v2(sc, stack)
+        add(f"full     {name}", f, None)
+    # pixel check: damaged-region result equals a full redraw at an arbitrary depth
+    for name, stack in V2_CASES[:3]:
+        surf, f, _ = make_damaged_v2(sc, stack)
+        for i in range(WARMUP + 37):
+            f(depth_at(i))
+        ref = new_surface(sc.w, sc.h)
+        _v2_scene(cairo.Context(ref), sc, sc.panels(depth_at(WARMUP + 36)), stack)
+        print("  check damaged==full", name, diff_stats(surf, ref, (0, 0, sc.w, sc.h)))
+    return rows
+
+
+def main_v2() -> None:
+    print("machine:", json.dumps(machine()))
+    runs = []
+    for n in (1, 2):
+        print(f"--- v2 run {n} ---", flush=True)
+        runs.append(run_v2())
+    out = pathlib.Path(__file__).resolve().parents[1] / "out"
+    out.mkdir(exist_ok=True)
+    (out / "bench_v2.json").write_text(json.dumps({"runs": runs, "target_ms": TARGET_MS}, indent=2))
+    print(f"\nwrote {out / 'bench_v2.json'}  (target damaged median <= {TARGET_MS} ms)")
+
+
 def main() -> None:
+    if "--v2" in sys.argv:
+        main_v2()
+        return
     m = machine()
     print("machine:", json.dumps(m))
     runs: list[list[dict]] = []

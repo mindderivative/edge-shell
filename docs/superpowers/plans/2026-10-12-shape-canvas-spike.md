@@ -203,3 +203,8 @@ State the machine (CPU model from `/proc/cpuinfo`, Python and pycairo versions).
 3. Is the outline test strong (it compares against the existing per-window renderers, so a rotated or mirrored edge fails)?
 4. Are the live probe's claims backed by the numbers it prints rather than by assertion?
 5. Does the go/no-go follow from the numbers and Phil's observations?
+
+## Task 2b (added after the user's feedback on the first renders)
+
+The user judged the Task 2 "shadow" to be embossing, not a shadow. Diagnosis: the legacy `shadow_alphas` model puts the full opacity AT the edge (distance 0) with no offset, a tight halo that reads as a bevel. Task 2b adds `profile="gaussian"` to `spikes/canvas/effects.py` (cumulative alpha `opacity * 0.5 * erfc(k / (sigma * sqrt(2)))`, so half the peak at the edge, `sigma = reach / 2.5`), an `offset` whose pushed-under part keeps the mirrored inside ramp (no light gap under the bar), `draw_shadow_stack` for contact + ambient layers, 8-bit-aware per-layer alphas (plain float alphas lose up to 15/255 over 32-48 layers), and `draw_border_stack` for dual-line borders. `legacy` stays for reference.
+`spikes/canvas/render_sheets.py` writes the comparison sheets (S0-S4 shadows, B0-B4 borders, light and dark, plus 2x/3x join crops) to `spikes/out/`; `bench.py --v2` re-benchmarks reach 32/48 and the two-layer stack. Selection of the look is the user's, from the sheets.
