@@ -65,3 +65,18 @@ def test_config_path_becoming_unreadable_keeps_last_good(tmp_path, fake_registry
     assert store.reload() is None
     assert store.config is before
     assert store.last_error and str(path) in store.last_error
+
+
+def test_required_store_errors_on_missing_file(tmp_path, fake_registry):
+    with pytest.raises(ConfigError, match="gone.toml"):
+        ConfigStore(tmp_path / "gone.toml", required=True)
+    assert ConfigStore(tmp_path / "gone.toml").config  # optional: defaults
+
+
+def test_required_store_keeps_config_if_file_disappears(tmp_path, fake_registry):
+    path = tmp_path / "c.toml"
+    path.write_text(GOOD)
+    store = ConfigStore(path, required=True)
+    path.unlink()
+    assert store.reload() is None
+    assert "c.toml" in store.last_error

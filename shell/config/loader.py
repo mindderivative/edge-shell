@@ -39,15 +39,27 @@ def parse_config(data: dict[str, Any]) -> Config:
         raise ConfigError(format_validation_error(exc)) from None
 
 
-def _read_toml(path: Path) -> dict[str, Any]:
+def _read_toml(path: Path, missing_ok: bool = False) -> dict[str, Any]:
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        if missing_ok:
+            return {}
+        raise ConfigError(f"{path}: {exc}") from None
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
 
-def load_config(user_path: Path | None = USER_PATH, default_path: Path = DEFAULT_PATH) -> Config:
+def load_config(
+    user_path: Path | None = USER_PATH,
+    default_path: Path = DEFAULT_PATH,
+    required: bool = False,
+) -> Config:
+    """Defaults overlaid with the user file. A missing user file is fine unless `required`.
+
+    No exists() pre-check: on EACCES it can report False and silently fall back to defaults.
+    """
     data = _read_toml(default_path)
-    if user_path is not None and user_path.exists():
-        data = _deep_merge(data, _read_toml(user_path))
+    if user_path is not None:
+        data = _deep_merge(data, _read_toml(user_path, missing_ok=not required))
     return parse_config(data)

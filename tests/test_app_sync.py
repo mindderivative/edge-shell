@@ -281,3 +281,14 @@ def test_reload_unexpected_exception_is_contained_and_reported(renv, monkeypatch
     monkeypatch.setattr(app, "sync_monitors", explode)
     app.reload()  # must not raise inside a GLib callback
     assert len(errors) == 1 and "kscreen gone" in errors[0]
+
+
+def test_run_refuses_a_second_instance_before_creating_windows(env, monkeypatch, capsys):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    monkeypatch.setattr(app_mod, "_already_running", lambda: True)
+    created = []
+    monkeypatch.setattr(app_mod, "Application", lambda *a, **k: created.append(a))
+    assert app.run() == 1
+    assert FakeShell.opened == [] and created == []
+    assert "already running" in capsys.readouterr().err

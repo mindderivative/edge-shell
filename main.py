@@ -15,7 +15,10 @@ from shell.config.store import ConfigStore
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="edge-shell")
     parser.add_argument(
-        "--config", type=Path, default=USER_PATH, help="config file (default: %(default)s)"
+        "--config",
+        type=Path,
+        default=None,
+        help=f"config file; must exist when given (default: {USER_PATH}, optional)",
     )
     parser.add_argument(
         "--list-outputs", action="store_true", help="print monitors and connector names"
@@ -36,15 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     import widgets  # noqa: F401  (registers the built-in panels before the config is validated)
 
     try:
-        store = ConfigStore(args.config)
+        store = ConfigStore(args.config or USER_PATH, required=args.config is not None)
     except ConfigError as exc:
         print(f"config error:\n{exc}", file=sys.stderr)
         return 2
 
     from shell.app import EdgeShellApp
 
-    EdgeShellApp(store).run()
-    return 0
+    return EdgeShellApp(store).run()
 
 
 if __name__ == "__main__":

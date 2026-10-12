@@ -80,3 +80,23 @@ def test_invalid_utf8_is_config_error(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert str(path) in str(exc.value)
+
+
+def test_missing_user_file_is_an_error_when_required(tmp_path):
+    missing = tmp_path / "nope.toml"
+    with pytest.raises(ConfigError, match="nope.toml"):
+        load_config(missing, required=True)
+
+
+def test_unreadable_user_file_is_an_error_not_defaults(tmp_path):
+    import os
+
+    path = write(tmp_path / "c.toml", "[theme]\n")
+    path.chmod(0)
+    try:
+        if os.access(path, os.R_OK):
+            pytest.skip("permissions not enforced (running as root)")
+        with pytest.raises(ConfigError, match="c.toml"):
+            load_config(path)  # exists() would have said False and used defaults
+    finally:
+        path.chmod(0o600)

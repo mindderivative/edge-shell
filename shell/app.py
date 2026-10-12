@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import subprocess
+import sys
 import traceback
 from collections import defaultdict
 
@@ -13,6 +14,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from fabric import Application
+from fabric.core.application import FABRIC_DBUS_INTERFACE_NAME
 from gi.repository import Gdk, GLib
 
 from shell import plan
@@ -23,6 +25,13 @@ from shell.monitors import MonitorShell, monitors_by_name
 from shell.theme import scope_class, to_css
 
 log = logging.getLogger(__name__)
+
+APP_NAME = "edge-shell"
+
+
+def _already_running() -> bool:
+    # Fabric refuses a second Application with the same id, but only after the windows exist.
+    return Application.name_running(FABRIC_DBUS_INTERFACE_NAME + f".{APP_NAME}")
 
 
 class EdgeShellApp:
@@ -169,9 +178,17 @@ class EdgeShellApp:
         except OSError:
             pass  # no notify-send; the log line above is enough
 
-    def run(self) -> None:
+    def run(self) -> int:
+        """Run until quit; returns the process exit code."""
+        if _already_running():  # check before any window is created (no flash of a 2nd frame)
+            print(
+                "edge-shell is already running (close the other instance first; "
+                "fg/Ctrl+C if it is a suspended job)",
+                file=sys.stderr,
+            )
+            return 1
         self.sync_monitors()
-        self.app = Application("edge-shell", *self._early)
+        self.app = Application(APP_NAME, *self._early)
         self._early.clear()
         self.app.set_stylesheet_from_string(self.css(), compile=False)
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)
@@ -179,3 +196,4 @@ class EdgeShellApp:
         self.watch_displays()
         signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C quits
         self.app.run()
+        return 0
