@@ -10,7 +10,9 @@ from collections import defaultdict
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from fabric import Application
+from gi.repository import Gdk, GLib
 
 from shell import plan
 from shell.config.diff import diff_configs
@@ -29,6 +31,7 @@ class EdgeShellApp:
         self.shells: dict[str, MonitorShell] = {}
         self._watcher: ConfigWatcher | None = None
         self._early: list = []  # windows created before the Application exists
+        self._sync_timers: list[int] = []  # pending hot-plug sync timer ids
 
     @property
     def config(self):
@@ -42,6 +45,10 @@ class EdgeShellApp:
 
     def sync_monitors(self) -> None:
         connected = monitors_by_name()
+        if not connected and self.shells:
+            # kscreen-doctor failed or a hot-plug flap; closing all would blank every frame
+            log.warning("monitor mapping unavailable, keeping current shells")
+            return
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -54,6 +61,31 @@ class EdgeShellApp:
             self.shells[name] = MonitorShell(name, desired[name], self.config, self.register_window)
         if close or open_:
             self.refresh_css()
+
+    def watch_displays(self) -> None:
+        display = Gdk.Display.get_default()
+        if display is None:
+            log.warning("no Gdk display, monitor hot-plug will not be watched")
+            return
+        display.connect("monitor-added", self._schedule_sync)
+        display.connect("monitor-removed", self._schedule_sync)
+
+    def _schedule_sync(self, *_) -> None:
+        # kscreen-doctor can lag the Gdk signal, so sync twice; sync is idempotent.
+        for timer in self._sync_timers:  # only still-pending ids: fired ones removed themselves
+            GLib.source_remove(timer)
+        self._sync_timers = [self._arm_sync(600), self._arm_sync(2500)]
+
+    def _arm_sync(self, delay_ms: int) -> int:
+        holder: list[int] = []
+        holder.append(GLib.timeout_add(delay_ms, lambda: self._sync_once(holder[0])))
+        return holder[0]
+
+    def _sync_once(self, timer: int) -> bool:
+        if timer in self._sync_timers:
+            self._sync_timers.remove(timer)
+        self.sync_monitors()
+        return GLib.SOURCE_REMOVE
 
     def css(self) -> str:
         return "\n".join(
@@ -109,5 +141,6 @@ class EdgeShellApp:
         self.app.set_stylesheet_from_string(self.css(), compile=False)
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)
         self.start_watching()
+        self.watch_displays()
         signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C quits
         self.app.run()
