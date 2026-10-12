@@ -104,3 +104,42 @@ def test_zero_duration_snaps():
     t.animate_to(10)
     w.frame(0)
     assert t.value == 10 and not w.callbacks
+
+
+def test_on_value_retarget_on_final_frame_keeps_running():
+    w = FakeWidget()
+    holder = []
+
+    def on_value(v):
+        if v == 100:
+            holder[0].animate_to(0)
+
+    t = Tween(w, on_value, duration_ms=100)
+    holder.append(t)
+    t.animate_to(100)
+    w.frame(0)
+    w.frame(200)  # final frame: on_value retargets
+    assert len(w.callbacks) == 1 and t.running
+    w.frame(0)  # first tick of the new tween
+    w.frame(200)
+    assert t.value == 0 and not w.callbacks and not t.running
+
+
+def test_on_value_jump_then_animate_on_final_frame_registers_one_callback():
+    w = FakeWidget()
+    holder = []
+
+    def on_value(v):
+        if v == 100:
+            holder[0].jump_to(7)
+            holder[0].animate_to(50)
+
+    t = Tween(w, on_value, duration_ms=100)
+    holder.append(t)
+    t.animate_to(100)
+    w.frame(0)
+    w.frame(200)
+    assert len(w.callbacks) == 1 and t.running
+    w.frame(0)
+    w.frame(200)
+    assert t.value == 50 and not w.callbacks and not t.running

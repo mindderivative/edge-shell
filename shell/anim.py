@@ -71,6 +71,7 @@ class Tween:
         elif abs(target - self.value) < 1e-9:
             return
         # Retargeting mid-flight starts from the current value, so there is never a jump.
+        # The delay restarts on every retarget; use jump_to or another tween to reverse instantly.
         self._from, self._to, self._start_us = self.value, target, None
         if not self._tick_id:
             self._tick_id = self._widget.add_tick_callback(self._tick)
@@ -85,8 +86,10 @@ class Tween:
         else:
             t = 0.0 if elapsed <= 0 else min(1.0, elapsed / self._duration_us)
         self.value = self._from + (self._to - self._from) * self._easing(t)
-        self._on_value(self.value)
-        if t >= 1.0:
+        done = t >= 1.0
+        if done:
+            # Clear before on_value so a re-entrant animate_to/jump_to registers a
+            # fresh callback that survives this one being removed (return False).
             self._tick_id = 0
-            return False  # remove the tick callback
-        return True
+        self._on_value(self.value)
+        return not done
