@@ -310,3 +310,33 @@ Raised by Phil at Gate E of the core plan.
 - Reload: reordering or changing `align`/`gap` moves panels, which today means rebuilding the affected panels' windows (their surface margin changes); the diff gains a `panel-move` change kind if rebuild flicker proves annoying.
 - Handle placement (section 15) should be relative to the panel body, independent of the slot.
 - The settings window (section 13) exposes slot, order and gap, and shows the overlap warning.
+
+## 17. Planned: panel anchoring, sizing and corner behaviour
+
+Raised by Phil after Gate G of the core plan; the three choices below were decided with Phil. This extends section 16 and, with it, replaces today's `pos`-only placement.
+
+**Behaviour of the core plan as built (for reference)**
+
+- A panel attaches to one edge and is placed by `pos`: pixels from the **start** of the edge (left for top/bottom, top for left/right). There is no end-anchoring.
+- `length` is a fixed pixel count. Depth grows only perpendicular to the edge, away from it.
+- If `pos + length` runs past the end of the edge, the surface is shifted inward to stay on screen. If the panel is longer than the edge, it overhangs the far end and the screen clips it (untested). The only length bound is absolute (4000 px), unrelated to the monitor.
+- Content is centred at its natural size; there is no fill, content-fit, percentage, or min/max.
+- Panels have no corner awareness: the frame's rounded corner pieces are separate R x R windows, and a panel placed within about R + T of a screen corner overlaps them. Corner-spanning (L-shaped) panels are not built.
+
+**Decisions**
+
+1. **Anchoring: `align` + `offset`.** `align = start | center | end` and `offset` is the distance in pixels from **that** end (default 0). A bottom-right bar is `edge = "bottom"`, `align = "end"`, `offset = 0`. This subsumes `pos` (start-aligned offset) and composes with the slot/order/gap layout of section 16.
+2. **Sizing: `length` accepts a pixel number, `"fill"`, `"content"`, or a percentage** (e.g. `"50%"`), with optional `min_length` / `max_length`. `"fill"` spans the available span between the corner zones (minus gaps and neighbours); `"content"` wraps the widget's natural size; percentages are of the available span. Depth stays in pixels. Growth along the edge is from the anchored end toward the free side (an end-aligned panel grows toward the start).
+3. **Overflow and corners: clamp to the free span.**
+   - The **free span** of an edge is the monitor extent minus a corner clearance at each end (`T + R`, so panels never run into the rounded corner pieces).
+   - A requested length larger than the free span is **shrunk to fit**, with a log warning (and a notification on config reload); content that no longer fits is clipped. It is never a load-time error, so smaller or hot-plugged monitors keep working.
+   - Offsets that would push a panel past the free span are clamped inward.
+   - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), built later; they are the only panels that meet two edges.
+
+**Design implications (for the future plan)**
+
+- Pure layout module (`layout_edge(panels, extent, gap, radius, thickness) -> {panel: (offset, length)}`) resolving align/offset/length/fill/content/percent/min/max and the free span for each edge; no GTK, headless tests. `"content"` needs the widget's natural size, which comes from GTK, so the layout takes it as an input (measured once after build, re-measured on rebuild) and the pure function stays testable with fake sizes.
+- `anchor_and_margin` moves behind this resolver; `EdgePanel` receives a resolved offset and length.
+- Models: `PanelConfig` gains `align`, `offset`, `length: int | "fill" | "content" | str-percent`, `min_length`, `max_length`; `pos` is kept as a deprecated alias for start-aligned offset until removed.
+- The free span depends on the monitor extent, so geometry/scale changes (see README limitation) must trigger a re-layout; the same hook should handle that known gap.
+- Tests: headless unit tests for the layout function (align/offset/fill/content/percent/min/max/clamping/corner clearance) plus a render test for a panel at the end of an edge next to the corner piece.
