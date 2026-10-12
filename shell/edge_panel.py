@@ -68,7 +68,14 @@ class EdgePanel(WaylandWindow):
 
         self._canvas = Gtk.DrawingArea()
         self._canvas.connect("draw", self._on_draw)
-        self._content = self.build_content()
+        # Centring container: the widget's own content is centred inside the body box
+        # that _place_content sizes and positions (a Box packs children at the start).
+        inner = self.build_content()
+        inner.set_hexpand(True)
+        inner.set_vexpand(True)
+        inner.set_halign(Gtk.Align.CENTER)
+        inner.set_valign(Gtk.Align.CENTER)
+        self._content = Box(name="panel-content", children=[inner])
         self._handle = self._build_handle()
         self.add(Overlay(child=self._canvas, overlays=[self._content, self._handle]))
 
