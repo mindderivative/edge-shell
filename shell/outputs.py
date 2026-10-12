@@ -17,20 +17,27 @@ class Output:
 
 
 def parse_kscreen(text: str) -> list[Output]:
+    """Parse `kscreen-doctor -j`; any unexpected shape raises ValueError."""
+    data = json.loads(text)
+    if not isinstance(data, dict) or not isinstance(data.get("outputs", []), list):
+        raise ValueError("unexpected kscreen-doctor JSON: expected an object with an outputs list")
     outputs = []
-    for o in json.loads(text).get("outputs", []):
-        if not o.get("enabled"):
-            continue
-        scale = float(o.get("scale") or 1.0)
-        outputs.append(
-            Output(
-                name=o["name"],
-                x=o["pos"]["x"],
-                y=o["pos"]["y"],
-                width=round(o["size"]["width"] / scale),
-                height=round(o["size"]["height"] / scale),
+    try:
+        for o in data.get("outputs", []):
+            if not o.get("enabled"):
+                continue
+            scale = float(o.get("scale") or 1.0)
+            outputs.append(
+                Output(
+                    name=str(o["name"]),
+                    x=int(o["pos"]["x"]),
+                    y=int(o["pos"]["y"]),
+                    width=round(o["size"]["width"] / scale),
+                    height=round(o["size"]["height"] / scale),
+                )
             )
-        )
+    except (KeyError, TypeError, AttributeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError(f"unexpected kscreen-doctor output entry: {exc!r}") from None
     return outputs
 
 

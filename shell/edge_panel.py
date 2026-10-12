@@ -260,8 +260,7 @@ class EdgePanel(WaylandWindow):
             return False
         if not event.state & Gdk.ModifierType.BUTTON1_MASK:
             # primary button not held: the release was lost (grab break, remap)
-            self._press = None
-            self._dragging = False
+            self._finish_drag()
             return False
         dx = event.x_root - self._press[0]
         dy = event.y_root - self._press[1]
@@ -281,6 +280,11 @@ class EdgePanel(WaylandWindow):
     def _on_release(self, _widget, event) -> bool:
         if event.button != 1:
             return False
+        self._finish_drag()
+        return False  # always let Gtk.Button finish its release (resets pressed state)
+
+    def _finish_drag(self) -> None:
+        """End a press: snap and settle if it was a drag. Also used when the release was lost."""
         was_dragging = self._dragging
         self._press = None
         self._dragging = False  # must be cleared before _retarget()
@@ -290,7 +294,6 @@ class EdgePanel(WaylandWindow):
             # the button's own release handler still runs and may emit "clicked", which
             # _on_clicked ignores; clear the flag once this event is fully dispatched
             GLib.idle_add(self._clear_suppress)
-        return False  # always let Gtk.Button finish its release (resets pressed state)
 
     def _clear_suppress(self) -> bool:
         self._suppress_click = False

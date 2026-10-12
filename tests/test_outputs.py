@@ -65,3 +65,26 @@ def test_unmatched_is_none():
 def test_invalid_json_is_a_value_error():
     with pytest.raises(ValueError):
         parse_kscreen("not json")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[]",
+        '"str"',
+        '{"outputs": null}',
+        '{"outputs": 5}',
+        '{"outputs": [5]}',
+        '{"outputs": [{"enabled": true}]}',
+        '{"outputs": [{"enabled": true, "name": "A", "pos": 1, "size": {}}]}',
+        '{"outputs": [{"enabled": true, "name": "A", "pos": {"x": 0, "y": 0},'
+        ' "size": {"width": "w", "height": 1}}]}',
+    ],
+)
+def test_unexpected_json_shapes_are_value_errors(text):
+    with pytest.raises(ValueError):
+        parse_kscreen(text)
+
+
+def test_missing_outputs_key_means_no_outputs():
+    assert parse_kscreen("{}") == []

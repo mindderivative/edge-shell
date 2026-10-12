@@ -292,3 +292,13 @@ def test_run_refuses_a_second_instance_before_creating_windows(env, monkeypatch,
     assert app.run() == 1
     assert FakeShell.opened == [] and created == []
     assert "already running" in capsys.readouterr().err
+
+
+def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
+    app, _ = env
+    calls = []
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda argv: calls.append(argv))
+    app._report_error("--urgency=critical looks like an option")
+    argv = calls[0]
+    assert argv[0] == "notify-send"
+    assert argv.index("--") < argv.index("--urgency=critical looks like an option")

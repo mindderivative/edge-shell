@@ -173,7 +173,7 @@ class EdgeShellApp:
         log.error("config not applied (keeping the previous config):\n%s", message)
         try:
             subprocess.Popen(
-                ["notify-send", "-a", "Edge Shell", "Config not applied", message[:400]]
+                ["notify-send", "-a", "Edge Shell", "--", "Config not applied", message[:400]]
             )
         except OSError:
             pass  # no notify-send; the log line above is enough

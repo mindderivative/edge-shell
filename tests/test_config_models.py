@@ -84,3 +84,20 @@ def test_bad_override_color_fails_at_load(make_config):
     with pytest.raises(ValidationError) as exc:
         make_config(monitors={"HDMI-A-1": {"theme": {"accent": "nope"}}})
     assert "monitors.HDMI-A-1.theme" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ['Evil"Font', "back\\slash", "a{b", "a}b", "a;b"])
+def test_font_names_with_css_metacharacters_rejected(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"font": ["Hack", bad]})
+    assert exc.value.errors()[0]["loc"] == ("theme", "font")
+    assert "font name" in str(exc.value)
+
+
+def test_font_override_with_bad_name_fails_at_load(make_config):
+    with pytest.raises(ValidationError, match="monitors.HDMI-A-1.theme"):
+        make_config(monitors={"HDMI-A-1": {"theme": {"font": ["a;b"]}}})
+
+
+def test_ordinary_font_names_accepted(make_config):
+    assert make_config(theme={"font": ["JetBrains Mono", "Hack Nerd Font Mono"]})

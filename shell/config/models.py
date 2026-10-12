@@ -20,6 +20,7 @@ PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
 _COLOR_FIELDS = (
     "frame",
     "text",
@@ -60,6 +61,16 @@ class Theme(_Strict):
         if not _HEX.match(value):
             raise ValueError("must be a #rrggbb hex color")
         return value.lower()
+
+    @field_validator("font")
+    @classmethod
+    def _font_names(cls, value: list[str]) -> list[str]:
+        for name in value:
+            if _FONT_FORBIDDEN.search(name):
+                raise ValueError(
+                    f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"
+                )
+        return value
 
 
 # Same fields as Theme, all optional. Merged over the base theme and re-validated by Theme.
