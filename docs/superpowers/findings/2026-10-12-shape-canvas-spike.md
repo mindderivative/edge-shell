@@ -113,7 +113,7 @@ The max draw times (7.86-22.58 ms) include the one-time first full draw. Each 10
 2. No flicker or tearing that he could see.
 3. The border and shadow followed the bump. The marker looked glued to it (at the bottom it is pushed up by the screen edge, which is expected: a 14 px marker in a 10 px band).
 4. Click-through worked, as far as he could test in 10 s.
-5. Check (e), maximized window: the clock was correctly drawn above it, as designed (a maximized window stops at the frame's reserved zone; panels float over windows). This is a pass. **Fullscreen was not tested.** (The tester first reported this as a fullscreen window; he later clarified it was maximized.)
+5. Check (e), maximized window: the clock was correctly drawn above it, as designed (a maximized window stops at the frame's reserved zone; panels float over windows). This is a pass. (The tester first reported this as a fullscreen window; he later clarified it was maximized.) Fullscreen was tested separately afterwards; his words: "Fullscreen covers the edge shell, I switched back and forth and it worked as expected." So a fullscreen window covers the shell, as expected. This was a manual check by the user using his own method; the procedure beyond that is not recorded.
 
 **Interpretation:**
 
@@ -161,7 +161,7 @@ Recommended defaults for the real feature:
 
 ## 8. Not tested / open risks
 
-- **Fullscreen behaviour: untested.** Planned test: open a fullscreen window and make it the ACTIVE window, then run the probe with a start delay so focus stays on it, e.g. `sleep 5; scripts/py -m spikes.canvas.live` from a terminal on DP-1 while clicking the fullscreen window on HDMI-A-1 during the delay. KWin differentiates maximized from fullscreen: fullscreen ignores the work area, and the active fullscreen window is normally raised above panels and docks. Only if an ACTIVE fullscreen window turns out to be covered is a configurable fullscreen-aware policy needed (hide or lower the shell while an active fullscreen window is on that output, via KWin scripting or D-Bus).
+- Fullscreen: verified manually by the user in one session (a fullscreen window covers the shell; switching back and forth worked). Not measured; single machine, single output (HDMI-A-1). Repeat it as a manual check after the canvas refactor.
 - **Stacking in the real design.** The canvas-first, content-first, overlay and `--raise-ms 0` variants all showed content above the canvas, but with a lone canvas and no frame strips. The real design still has four invisible zone-reserving strips; stacking must be re-tested with them before `raise_to_top` is removed.
 - HiDPI and fractional scaling: the spec says reach scales by the display scale; untested, and 1 logical px is quantised at 2x.
 - Multi-monitor (one canvas per monitor): untested; only HDMI-A-1 was used.
@@ -181,7 +181,7 @@ Recommended defaults for the real feature:
 5. Remove the `raise_to_top` workaround if stacking holds with the strips (re-test). Risk: KWin ordering.
 6. Damaged-region invalidation from each panel's depth changes. Risk: the clip must cover the previous footprint.
 7. Config and reload hooks: border and shadow changes are redraws, not rebuilds. Risk: per-monitor overrides.
-8. Conditional: run the fullscreen test from section 8 first; only if an active fullscreen window is covered, add a fullscreen-aware policy (hide or lower the shell). Risk: KWin D-Bus / scripting reliability.
+8. (No fullscreen policy needed: KWin handles it. Repeat the manual fullscreen check after the refactor.)
 9. Handle customization and interaction toggles (section 15) on the content windows. Risk: interplay with the markers and the empty input region.
 10. Multi-monitor and scale handling (reach times scale). Risk: fractional scales.
 11. Profile CPU during animation (content ticks, margin relayout, 3-window setup). Risk: may need a different animation path.
