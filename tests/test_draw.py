@@ -1,8 +1,11 @@
+"""Pins the legacy per-window renderers (tests/legacy_draw.py), the reference that
+tests/test_canvas_outline.py compares the shape canvas with."""
+
 import cairo
 import pytest
 
 from shell import geometry as g
-from shell.draw import draw_panel, draw_screen_corner
+from tests.legacy_draw import draw_panel, draw_screen_corner
 
 L, DEPTH, T, R = 100, 50, 10, 14
 RGBA = (0.04, 0.05, 0.05, 1.0)

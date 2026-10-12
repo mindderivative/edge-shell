@@ -65,6 +65,8 @@ scripts/py -m pytest -q                            # display-free tests
 scripts/py -m ruff format . && scripts/py -m ruff check .
 ```
 
+`EDGE_SHELL_RAISE_MS=0 disables the startup re-raise (debugging stacking)`
+
 Pure logic lives in `shell/` (config, geometry, drawing, animation); GTK windows are thin
 shells over it. New widgets go in `widgets/` and register with `@register`; they never call
 cairo or layer-shell directly. CI runs lint and the display-free tests without GTK; tests
