@@ -93,17 +93,19 @@ The plan's "adjacent-row alpha step <= 2/255" is physically impossible: with opa
 
 ## 5. Live results (Phil, HDMI-A-1, probe commit 872eff9)
 
-Canvas allocation equalled the monitor geometry (1920x1080). The reports preserved the 7 runs as ranges and per-variant notes, not as seven separate printouts, so the table groups them by variant; the numbers are those recorded in the ledger.
+All runs: HDMI-A-1, 1920x1080 at 60.000 Hz, canvas allocation 1920x1080 (equal to the monitor), `reach_px` 24 (run 7: 48). Numbers are from the tester's printouts.
 
-| Variant (flags) | fps | Canvas draw ms median / p95 / max | Depth error max / mean (px) |
-|---|---|---|---|
-| default (`--raise-ms 500`, elevation 50%, border 2) | 59.9-60.6 | 1.90-2.07 / 2.33-2.55 / 7.9-13.6 | 1.3-1.8 / 0.01-1.01 |
-| `--raise-ms 0` | 59.9-60.6 | within the default ranges | 0.14 / 0 |
-| `--stack-order content-first` | 59.9-60.6 | within the default ranges | 1.01 / 0 |
-| `--content-layer overlay` | 59.9-60.6 | within the default ranges | 0.88 / 0.01 |
-| `--elevation 100` (48 px) | 59.9-60.6 | 3.92 / 4.45 / 22.58 | 1.75 / 1.02 |
+| Run | Flags | fps | Frame interval mean / median / p95 (ms) | Canvas draw median / p95 / max (ms) | Content ticks / canvas draws | Ticks-between-draws histogram | Depth error max / mean (px) | CPU (of one core) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | default (elev 50, raise 500, canvas-first, content layer top) | 60.1 | 16.65 / 16.67 / 16.80 | 2.07 / 2.55 / 7.86 | 601 / 599 | {1:596, 2:2} | 1.80 / 1.01 | 0.32 |
+| 2 | default | 60.6 | 16.50 / 16.67 / 16.86 | 1.90 / 2.48 / 13.33 | 607 / 600 | {0:2, 1:588, 2:9} | 1.69 / 0.04 | 0.33 |
+| 3 | default | 59.9 | 16.69 / 16.67 / 16.71 | 1.97 / 2.33 / 13.55 | 600 / 599 | {1:597, 2:1} | 1.30 / 0.01 | 0.35 |
+| 4 | `--raise-ms 0` | 60.6 | 16.51 / 16.67 / 16.70 | 1.99 / 2.37 / 11.91 | 607 / 600 | {1:592, 2:7} | 0.14 / 0.00 | 0.37 |
+| 5 | `--stack-order content-first` | 59.9 | 16.68 / 16.67 / 16.69 | 1.96 / 2.37 / 12.13 | 601 / 600 | {0:1, 1:597, 2:1} | 1.01 / 0.00 | 0.36 |
+| 6 | `--content-layer overlay --raise-ms 0` | 59.9 | 16.70 / 16.67 / 16.69 | 2.02 / 2.36 / 11.89 | 600 / 599 | {1:597, 2:1} | 0.88 / 0.01 | 0.36 |
+| 7 | `--elevation 100` (reach 48 px) | 60.0 | 16.67 / 16.67 / 16.83 | 3.92 / 4.45 / 22.58 | 601 / 599 | {1:596, 2:2} | 1.75 / 1.02 | 0.43 |
 
-Across all seven runs: frame interval median 16.67 ms, p95 <= 16.86 ms; content ticks versus canvas draws about 1:1, histogram of content ticks between consecutive draws `{1: ~590-597, 2: 1-9, 0: 0-2}`; CPU 0.32-0.43 of one core; 600 ticks after the 500 ms re-raise. The 22.58 ms max (and the 7.9-13.6 ms maxima elsewhere) is the one-time first full draw. Which flags the two remaining runs used is not recorded in the ledger (the five variants above account for five runs).
+The max draw times (7.86-22.58 ms) include the one-time first full draw. Each 10 s run produced about 600 content ticks, also after the 500 ms re-raise (runs 1-3, 5, 7).
 
 **Observed by the tester:**
 
@@ -115,11 +117,11 @@ Across all seven runs: frame interval median 16.67 ms, p95 <= 16.86 ms; content 
 
 **Interpretation:**
 
-- Pacing is 60 fps at 60 Hz, with no dropped frames visible in the interval statistics.
-- Draw cost is about 2x the headless number (1.06 ms in `--simulate`, 1.9-2.1 ms live; the difference is inferred to be GTK overhead), but 2-4 ms is well under 8 ms.
-- Sync between the content window and the canvas is 0-1 frame (<= 1.8 px at peak speed); the phase varies between runs. The probe notes that even a perfect pipeline shows up to about 1.7 px because the draw follows the tick within a frame.
+- Pacing is 59.9-60.6 fps at 60 Hz; frame interval median 16.67 ms in every run, p95 16.69-16.86 ms.
+- Draw cost is about 2x the headless number (1.06 ms in `--simulate`; live median 1.90-2.07 ms / p95 2.33-2.55 ms at 50% elevation, 3.92 ms / 4.45 ms at 100%; the difference is inferred to be GTK overhead), but all of it is well under 8 ms.
+- Sync between the content window and the canvas: max depth error 0.14-1.80 px (at most about one frame at peak speed). The mean error was about 1 px (a steady one-frame lag) in runs 1 and 7 and about 0 in the others, so the lag phase varies from run to run. It is not determined by the re-raise setting alone: runs 2 and 3 (default, with the delayed re-raise) had means of 0.04 and 0.01. The probe notes that even a perfect pipeline shows up to about 1.7 px because the draw follows the tick within a frame.
 - The delayed re-raise (`hide(); show_all()`) did not freeze the animation.
-- CPU 0.32-0.43 of one core is while a loop animates continuously; normal use animates about 280 ms per interaction, so the average should be near zero (inferred, not measured). Before blaming the canvas, profile the content-tick / margin-relayout path and the 3-window setup; the headless draw is only about 1 ms of a 16.7 ms frame.
+- CPU 0.32-0.37 of one core (0.43 at 100% elevation) is while a loop animates continuously; normal use animates about 280 ms per interaction, so the average should be near zero (inferred, not measured). Before blaming the canvas, profile the content-tick / margin-relayout path and the 3-window setup; the headless draw is only about 1 ms of a 16.7 ms frame.
 
 ## 6. Reviewer findings and how they were handled
 
@@ -138,9 +140,9 @@ Across all seven runs: frame interval median 16.67 ms, p95 <= 16.86 ms; content 
 
 | Claim | Evidence | Kind |
 |---|---|---|
-| Redraw cost is far inside the budget. | 0.5-2.1 ms headless at 12-48 px (up to 3.4 ms at 96 px) versus 8 ms; 1.9-4.5 ms live (p95) | Measured |
-| 60 fps is held. | 59.9-60.6 fps, interval median 16.67 ms, p95 <= 16.86 ms | Measured |
-| The canvas follows the panels. | 0-1 frame lag, <= 1.8 px at peak; border and shadow followed the bump | Measured + observed |
+| Redraw cost is far inside the budget. | 0.5-2.1 ms headless at 12-48 px (up to 3.4 ms at 96 px) versus 8 ms; live median 1.90-2.07 ms (p95 2.33-2.55 ms) at 50%, 3.92 ms (p95 4.45 ms) at 100% | Measured |
+| 60 fps is held. | 59.9-60.6 fps, interval median 16.67 ms, p95 16.69-16.86 ms | Measured |
+| The canvas follows the panels. | max depth error 0.14-1.80 px (mean about 0 to about 1 px depending on the run); border and shadow followed the bump | Measured + observed |
 | No banding. | Monotonic, deviation from the ideal 8-bit model <= 1 | Measured |
 | Seams are impossible by construction. | Union outline equals the per-window renderers within 5/255 on four edges and five depths | Measured |
 | Content stays above the canvas. | Visible in all stacking variants | Observed (lone canvas, see section 8) |
