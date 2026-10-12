@@ -37,7 +37,7 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 | Token | Default | Notes |
 | --- | --- | --- |
 | `T` frame thickness | 10 px | Also the space reserved on each edge |
-| `R` corner and join radius | 14 px | Joins shrink to the panel's depth while it animates |
+| `R` corner and join radius | 14 px | Joins shrink to half the panel's depth while it animates (so the convex corner and concave join stack into a smooth S-curve instead of overlapping) |
 | Frame color | `#0b0c0d` | Panels use the same color so they read as part of the frame |
 | Text / secondary | `#e6e8ea` / `#9ba0a6` | |
 | Accent | `#8fd3b6` | Active workspace and focus rings only |
@@ -69,7 +69,7 @@ Three states per panel. Only **extended** shows content.
 | Peek | 14 px | Hidden; handle dots brighten | Pointer enters the strip | Pointer leaves, or handle clicked |
 | Extended | Full depth | Fades in | Handle click, or drag released at ≥50% | Handle click |
 
-**Timing.** Depth animates over 280 ms with `cubic-bezier(.2, .8, .2, 1)`. Content fades in over 170 ms starting 110 ms into the reveal; on collapse it fades out immediately. Join radius is `min(R, depth)` on every frame.
+**Timing.** Depth animates over 280 ms with `cubic-bezier(.2, .8, .2, 1)`. Content fades in over 170 ms starting 110 ms into the reveal; on collapse it fades out immediately. Join radius, for both the body's convex corners and the concave joins, is `min(R, depth/2)` on every frame, so the convex corner and concave join stack into a smooth S-curve instead of overlapping.
 
 **Drag.** Pressing the handle and moving along the panel's axis sets depth directly, clamped to `[0, full]`. On release the panel snaps at the 50% threshold. A press that moves less than 4 px is a click.
 
@@ -106,7 +106,7 @@ Panels are drawn with cairo, not CSS boxes, so the body and both joins come from
 
 ### 5.3 Monitors
 
-Monitors are keyed by **connector name** (`DP-1`, `HDMI-A-1`), never by index. Each monitor has a mode:
+Monitors are keyed by **connector name** (`DP-1`, `HDMI-A-1`), never by index. Gdk monitors are mapped to connector names by geometry against `kscreen-doctor -j`. Each monitor has a mode:
 
 | `shell` | Edge Shell windows | Plasma panel |
 | --- | --- | --- |
@@ -241,9 +241,9 @@ Conventions: `ruff` for lint and format, `pytest`, TDD for layers 1 and 2. GitHu
 
 Each is a throwaway script in `spikes/` that answers one question.
 
-1. Does `Gdk.Monitor.get_model()` return the connector name under GTK3 on KWin? If not, use geometry matching against `kscreen-doctor -j`.
+1. **Resolved:** `Gdk.Monitor.get_model()` returns the panel model, not the connector (both monitors report `G24M2020G`). Gdk monitors are mapped to connector names by geometry against `kscreen-doctor -j`. See `docs/superpowers/findings/2026-10-11-monitor-names.md`.
 2. Does `evaluateScript` hide and restore a Plasma panel cleanly with no flicker or layout side effects? Only a temporary test panel on `HDMI-A-1` is touched first; Phil confirms before the live panel on DP-1 is touched.
-3. With frame strips, corners and one panel on `HDMI-A-1`, do maximized windows stop at the frame and does the panel fuse with it? Phil verifies visually.
+3. **Folded into the build:** frame strips, corners and the dock are built for real in milestones 2-3; Phil's visual gates A and B answer this. If either gate fails, stop and choose the single-canvas fallback in 5.1.
 
 ## 12. Build order
 
@@ -267,3 +267,112 @@ A normal window (opened from a key binding, tray icon or frame handle) for editi
 
 - Should a pinned panel reserve space (push windows) or float over them? This spec assumes **float**.
 - Should the settings window also expose a drag-and-drop layout editor, or only form fields? Deferred to its own design.
+
+## 15. Planned: handle customization and per-interaction toggles
+
+Requested by Phil at Gate D of the core plan. It is not part of the core plan, but the core must not paint this into a corner.
+
+**Requirements**
+
+- The handle (today: three 3 px dots) is customizable per panel: shape, color (rest and hover), size, and position along the edge.
+- Handle shapes include at least: dots, a thin bar, and a chevron/arrow. A chevron can **morph with the panel's depth**: pointing one way when collapsed, rotating to point the other way when expanded.
+- The three interactions are individually opt-in/opt-out per panel: **click to toggle**, **hover to peek**, **drag to open**. Defaults stay all-on, so existing configs behave as today.
+- A handle style may depend on which interactions are enabled (e.g. a thin bar when only drag is on, an arrow when only click is on).
+
+**Design implications (for the future plan; nothing here changes the current core)**
+
+- Config: a per-panel `[handle]` table (`shape`, `size`, `offset`, `color`, `hover_color`) and an `[interaction]` table (`click`, `hover`, `drag`, all default true) in the Pydantic models; the registry can supply per-widget defaults. Unknown shapes fail validation with the key path as elsewhere.
+- Rendering: the handle moves from CSS-styled widgets to cairo drawing inside the panel canvas (or a dedicated drawing area), driven by a pure `draw_handle(cr, shape, ...)` plus a morph parameter derived from `d / depth`. That makes the arrow morph free and keeps shapes testable with the same headless pixel tests as the panels.
+- Hit area vs visual: the clickable/hover/drag area stays a separate, larger target than the drawn shape.
+- Behavior: `panel_state` and `EdgePanel` consult the interaction flags (no hover peek when hover is off; ignore press-drag when drag is off; the handle is not a button when click is off). Keyboard activation still follows the click flag.
+- Diffing: handle and interaction changes are cheap in-place updates (restyle or flag change), not window rebuilds.
+- Today's code touch points: `EdgePanel._build_handle`, `_place_handle`, the pointer handlers, the `.handle-dot` CSS in `shell/theme.py`, and the `handle`/`handle_hover` theme tokens.
+- The settings window (section 13) exposes these controls.
+
+## 16. Planned: several panels on one edge (layout and separation)
+
+Raised by Phil at Gate E of the core plan.
+
+**Today (core plan, as built).** Each panel positions itself independently: `edge` plus `pos`, the distance in pixels along the edge where the panel body starts; no `pos` means centred. Nothing arranges panels relative to each other and nothing detects overlap: two centred panels on one edge sit on top of each other, and side-by-side placement means hand-computing `pos` values. The default layout avoids this by using a different edge per panel.
+
+**Requirements**
+
+- Several panels can share an edge and be separated predictably, without hand-computed pixel offsets.
+- Each panel can be placed by **alignment slot** (`start`, `center`, `end` of the edge), with an **order** within a slot and a configurable **gap** between neighbours. Explicit `pos` stays available as an override.
+- Overlap is detected and reported (log plus notification, like config errors) instead of silently stacking; the shell still runs.
+- Panels keep their own length and depth; the layout only decides the position along the edge.
+- Corner interaction: the length available to an edge is the monitor extent minus the corner radius on each end, so slotted panels never run into the screen corners.
+
+**Design implications (for the future plan)**
+
+- Config: panel entries gain `align` (default `center`) and optionally `order`; a per-edge/per-monitor `gap` setting; `pos` remains and wins when present.
+- Layout: a pure function `layout_edge(panels, extent, gap, radius) -> {panel: pos}` (no GTK) computes positions per edge, so it is unit-testable like the geometry; `EdgePanel` keeps taking a resolved `pos`.
+- Reload: reordering or changing `align`/`gap` moves panels, which today means rebuilding the affected panels' windows (their surface margin changes); the diff gains a `panel-move` change kind if rebuild flicker proves annoying.
+- Handle placement (section 15) should be relative to the panel body, independent of the slot.
+- The settings window (section 13) exposes slot, order and gap, and shows the overlap warning.
+
+## 17. Planned: panel anchoring, sizing and corner behaviour
+
+Raised by Phil after Gate G of the core plan; the three choices below were decided with Phil. This extends section 16 and, with it, replaces today's `pos`-only placement.
+
+**Behaviour of the core plan as built (for reference)**
+
+- A panel attaches to one edge and is placed by `pos`: pixels from the **start** of the edge (left for top/bottom, top for left/right). There is no end-anchoring.
+- `length` is a fixed pixel count. Depth grows only perpendicular to the edge, away from it.
+- If `pos + length` runs past the end of the edge, the surface is shifted inward to stay on screen. If the panel is longer than the edge, it overhangs the far end and the screen clips it (untested). The only length bound is absolute (4000 px), unrelated to the monitor.
+- Content is centred at its natural size; there is no fill, content-fit, percentage, or min/max.
+- Panels have no corner awareness: the frame's rounded corner pieces are separate R x R windows, and a panel placed within about R + T of a screen corner overlaps them. Corner-spanning (L-shaped) panels are not built.
+
+**Decisions**
+
+1. **Anchoring: `align` + `offset`.** `align = start | center | end` and `offset` is the distance in pixels from **that** end (default 0). A bottom-right bar is `edge = "bottom"`, `align = "end"`, `offset = 0`. This subsumes `pos` (start-aligned offset) and composes with the slot/order/gap layout of section 16.
+2. **Sizing: `length` accepts a pixel number, `"fill"`, `"content"`, or a percentage** (e.g. `"50%"`), with optional `min_length` / `max_length`. `"fill"` spans the available span between the corner zones (minus gaps and neighbours); `"content"` wraps the widget's natural size; percentages are of the available span. Depth stays in pixels. Growth along the edge is from the anchored end toward the free side (an end-aligned panel grows toward the start).
+3. **Overflow and corners: clamp to the free span.**
+   - The **free span** of an edge is the monitor extent minus a corner clearance at each end (`T + R`, so panels never run into the rounded corner pieces).
+   - A requested length larger than the free span is **shrunk to fit**, with a log warning (and a notification on config reload); content that no longer fits is clipped. It is never a load-time error, so smaller or hot-plugged monitors keep working.
+   - Offsets that would push a panel past the free span are clamped inward.
+   - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), built later; they are the only panels that meet two edges.
+
+**Design implications (for the future plan)**
+
+- Pure layout module (`layout_edge(panels, extent, gap, radius, thickness) -> {panel: (offset, length)}`) resolving align/offset/length/fill/content/percent/min/max and the free span for each edge; no GTK, headless tests. `"content"` needs the widget's natural size, which comes from GTK, so the layout takes it as an input (measured once after build, re-measured on rebuild) and the pure function stays testable with fake sizes.
+- `anchor_and_margin` moves behind this resolver; `EdgePanel` receives a resolved offset and length.
+- Models: `PanelConfig` gains `align`, `offset`, `length: int | "fill" | "content" | str-percent`, `min_length`, `max_length`; `pos` is kept as a deprecated alias for start-aligned offset until removed.
+- The free span depends on the monitor extent, so geometry/scale changes (see README limitation) must trigger a re-layout; the same hook should handle that known gap.
+- Tests: headless unit tests for the layout function (align/offset/fill/content/percent/min/max/clamping/corner clearance) plus a render test for a panel at the end of an edge next to the corner piece.
+
+## 18. Planned: frame/panel border and shadow (drawing architecture)
+
+Raised by Phil after the core PR; requirements are Phil's, the architecture options are the controller's analysis and need a spike before a decision.
+
+**Requirements**
+
+- **Inner border:** a stroke along the *inner* edge of the frame (the edge facing the desktop) that flows seamlessly around the rounded screen corners, down into each panel's joins, along the panel body, and back out, as one continuous line. Configurable `width` (px) and `color`.
+- **Shadow:** a soft shadow cast by the frame and by the panels onto the desktop, as one smooth shape that flows into the panels' joins. Configurable `color`, `opacity`, `elevation` (offset/blur), and related shape controls (e.g. spread). It must **move with the animation**: as a panel's depth changes, its border and shadow follow it every frame.
+- **Opt-in/opt-out:** border and shadow are independent toggles (`enabled`), off by default so today's look is unchanged; overridable per monitor via the theme, and per panel later.
+
+**Why this is an architecture decision.** Today the outline is drawn by separate windows (CSS frame strips, cairo screen corners, one cairo window per panel). A border only reads as one line if every piece hands off exactly where the next begins, and a shadow of a *union* of shapes is not the sum of per-window shadows: overlapping per-window shadows darken twice at joins and show seams, and every window would also have to grow by the shadow extent and animate it.
+
+**Options**
+
+- **A. Keep per-window drawing** and add border/shadow per piece: strips, corners and panels each draw their part, with matching end caps. Smallest change, but seam-prone (the same class of problem as the spec's seam risk), double-darkened shadows at overlaps, and every window must grow by the shadow extent.
+- **B. One click-through shape canvas per monitor (recommended):** a single monitor-sized, input-transparent layer surface draws the frame, corners and all panel shapes as one outline, plus the border stroke and the shadow, in one cairo pass. Panels stop drawing their own bodies and become content/handle/input windows stacked above the canvas, reading their current depth from a shared per-panel value. This is the single-canvas approach already named as the fallback in 5.1. Seams are impossible by construction (one fill, one stroke), the shadow is of the union, border and shadow animate for free with depth, and the panel-over-strip stacking workaround (`raise_to_top`) disappears because the canvas is a single surface under all content windows. Costs: a larger refactor (`EdgePanel` loses its draw routine; depth is shared with the canvas; stacking and input regions change) and per-frame redraw cost of a large surface.
+
+**Shadow rendering (decided with Phil): stacked grown copies of the one outline.** Cairo has no blur, and none is needed. The shadow is the single outline path (frame, corners and every panel at its current depth) stroked **under** the shapes with **round joins** at increasing widths (about 1 px steps up to the elevation), each at a lower alpha, so the shape is "copied, layered under, and grown uniformly toward the screen centre" with a soft falloff. Cairo's stroker computes the grown shape, so there is no offset-curve maths.
+- Convex corners round off naturally (the radial-gradient look); concave joins and screen-corner fillets shrink as the stroke grows and fill in to a sharp inside corner once the stroke is wider than their radius, as a real shadow does.
+- One path means the shadow is of the **union**: no double-darkening at joins, and it follows each panel's depth every frame.
+- The alpha curve across the layers sets the falloff (smoothstep or Gaussian-like, tuned so the cumulative alpha, 1 minus the product of (1 minus a_i), matches the target falloff); `elevation` sets the number of layers and an optional uniform (dx, dy) shift of the whole shadow gives a directional light; `spread`/`blur` map to the starting width and the falloff width; `opacity` scales the peak alpha.
+- Optional radial/linear gradients can smooth any visible banding but are not expected to be needed.
+- Cost: wide strokes over a long path are not free. Redraw is limited to the damaged region (the animating panel's bounding box plus the shadow extent), and when nothing animates the shadow can be cached as an alpha mask and reused. The spike below measures both.
+
+**Spike required before choosing B (throwaway scripts, then a report):**
+1. Can one monitor-sized transparent layer surface redraw a panel's bounding box plus shadow at 60 fps on this machine (damage regions, cairo software rendering)?
+2. Does the union shadow from stacked grown strokes look right at joins and corners, without banding at typical elevations (render tests plus a visual check by Phil), and what do N strokes cost per frame versus a cached mask?
+3. Stacking: does a click-through canvas under per-panel content windows stay below them and above the desktop on KWin, without needing the raise workaround?
+
+**Design implications**
+
+- Config: `[theme.border]` (`enabled`, `width`, `color`) and `[theme.shadow]` (`enabled`, `color`, `opacity`, `elevation`, `blur`, `spread`), all optional, defaults off; per-monitor overrides through the existing theme-override mechanism.
+- Pure drawing layer: `draw_outline(cr, shapes, border, shadow)` taking resolved geometry for the frame and each panel at their current depth; headless pixel tests like `draw.py`'s today.
+- Interplay: panel anchoring/sizing (section 17) produces the resolved panel rectangles the canvas draws; handle customization (section 15) stays on the content windows; layout (section 16) feeds the same resolved rectangles.
+- Reload: border/shadow changes are colour/parameter updates (a canvas redraw), not window rebuilds.

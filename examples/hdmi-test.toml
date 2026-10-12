@@ -1,0 +1,4 @@
+# Runs Edge Shell on HDMI-A-1 only; DP-1 keeps its Plasma panel untouched.
+#   scripts/py main.py --config examples/hdmi-test.toml
+[monitors.HDMI-A-1]
+shell = "edge"

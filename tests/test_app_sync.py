@@ -1,0 +1,304 @@
+"""Display-free tests for EdgeShellApp.sync_monitors and the hot-plug timer bookkeeping."""
+
+from types import SimpleNamespace
+
+import pytest
+
+pytest.importorskip("gi")
+pytest.importorskip("fabric")
+
+import shell.app as app_mod  # noqa: E402
+
+
+class FakeShell:
+    opened: list = []
+    closed: list = []
+    applied: list = []
+    fail_apply: set = set()
+
+    def __init__(self, name, monitor, config, register, unregister=None):
+        self.name = name
+        self.monitor = monitor
+        FakeShell.opened.append(name)
+
+    def close(self):
+        FakeShell.closed.append(self.name)
+
+    def apply(self, config, changes):
+        if self.name in FakeShell.fail_apply:
+            raise RuntimeError("boom")
+        FakeShell.applied.append((self.name, [c.kind for c in changes]))
+
+
+@pytest.fixture
+def env(monkeypatch, make_config):
+    FakeShell.opened = []
+    FakeShell.closed = []
+    FakeShell.applied = []
+    FakeShell.fail_apply = set()
+    mapping: dict = {}
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: mapping)
+    monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
+    store = SimpleNamespace(config=make_config(monitors={"HDMI-A-1": {"shell": "edge"}}))
+    app = app_mod.EdgeShellApp(store)
+    return app, mapping
+
+
+def test_opens_shell_for_connected_edge_monitor(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert FakeShell.opened == ["HDMI-A-1"]
+    assert set(app.shells) == {"HDMI-A-1"}
+
+
+def test_sync_is_idempotent(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    app.sync_monitors()
+    assert FakeShell.opened == ["HDMI-A-1"]
+    assert FakeShell.closed == []
+
+
+def test_empty_mapping_keeps_active_shells(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    mapping.clear()
+    app.sync_monitors()
+    assert FakeShell.closed == []
+    assert set(app.shells) == {"HDMI-A-1"}
+
+
+def test_empty_mapping_without_shells_is_a_noop(env):
+    app, _ = env
+    app.sync_monitors()
+    assert FakeShell.opened == [] and FakeShell.closed == []
+    assert app.shells == {}
+
+
+def test_replugged_connector_is_reopened(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert FakeShell.closed == ["HDMI-A-1"]
+    assert FakeShell.opened == ["HDMI-A-1", "HDMI-A-1"]
+
+
+def test_unconfigured_connected_monitor_is_ignored(env):
+    app, mapping = env
+    mapping["DP-1"] = object()  # default mode is plasma, so no Edge Shell
+    app.sync_monitors()
+    assert FakeShell.opened == []
+
+
+def test_configured_but_disconnected_monitor_is_ignored(env):
+    app, mapping = env
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    assert "HDMI-A-1" not in app.shells
+
+
+def test_sync_once_syncs_and_drops_its_own_timer_id(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app._sync_timers = [7, 8]
+    assert app._sync_once(7) is False  # GLib.SOURCE_REMOVE
+    assert app._sync_timers == [8]
+    assert FakeShell.opened == ["HDMI-A-1"]
+
+
+def test_schedule_sync_only_removes_pending_ids(env, monkeypatch):
+    app, _ = env
+    removed = []
+    ids = iter(range(100, 110))
+    monkeypatch.setattr(app_mod.GLib, "source_remove", removed.append)
+    monkeypatch.setattr(app_mod.GLib, "timeout_add", lambda ms, fn, *a: next(ids))
+    app._schedule_sync()
+    assert app._sync_timers == [100, 101]
+    app._sync_once(100)  # fired: no longer pending
+    app._schedule_sync()
+    assert removed == [101]
+    assert app._sync_timers == [102, 103]
+
+
+class FakeFabricApp:
+    def __init__(self):
+        self.windows = []
+
+    def add_window(self, window):
+        self.windows.append(window)
+
+    def remove_window(self, window):
+        self.windows.remove(window)  # like Fabric: ValueError if absent
+
+
+def test_unregister_before_application_exists_drops_early_window(env):
+    app, _ = env
+    win = object()
+    app.register_window(win)
+    app.unregister_window(win)
+    assert app._early == []
+
+
+def test_unregister_after_application_removes_it_from_fabric(env):
+    app, _ = env
+    app.app = FakeFabricApp()
+    win = object()
+    app.register_window(win)
+    assert app.app.windows == [win]
+    app.unregister_window(win)
+    assert app.app.windows == []
+
+
+def test_shell_receives_unregister_callback(env, monkeypatch):
+    app, mapping = env
+    got = {}
+
+    class Capturing(FakeShell):
+        def __init__(self, name, monitor, config, register, unregister=None):
+            super().__init__(name, monitor, config, register)
+            got["unregister"] = unregister
+
+    monkeypatch.setattr(app_mod, "MonitorShell", Capturing)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert got["unregister"] == app.unregister_window
+
+
+# ---- reload ----------------------------------------------------------------------
+
+
+def mon(shell="edge", panels=()):
+    return {"shell": shell, "panels": list(panels), "theme": {}}
+
+
+class ReloadStore:
+    def __init__(self, config):
+        self.config = config
+        self.path = None
+        self.last_error = None
+        self.pending = None
+
+    def reload(self):
+        if self.pending is None:
+            return None
+        old, self.config = self.config, self.pending
+        self.pending = None
+        return old, self.config
+
+
+@pytest.fixture
+def renv(monkeypatch, make_config, fake_registry):
+    FakeShell.opened, FakeShell.closed, FakeShell.applied = [], [], []
+    FakeShell.fail_apply = set()
+    mapping = {"HDMI-A-1": object()}
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: mapping)
+    monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
+    errors = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_report_error", lambda self, m: errors.append(m))
+    store = ReloadStore(make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    FakeShell.opened.clear()
+    return app, store, errors, mapping, make_config
+
+
+def test_sync_reports_what_it_opened_and_closed(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    assert app.sync_monitors() == (set(), {"HDMI-A-1"})
+    mapping["HDMI-A-1"] = object()
+    assert app.sync_monitors() == ({"HDMI-A-1"}, {"HDMI-A-1"})
+    assert app.sync_monitors() == (set(), set())
+
+
+def test_reload_rebuild_monitor_closes_and_reopens_without_apply(renv):
+    app, store, errors, _, make_config = renv
+    store.pending = make_config(
+        theme={"thickness": 12}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+    )
+    app.reload()
+    assert FakeShell.closed == ["HDMI-A-1"]
+    assert FakeShell.opened == ["HDMI-A-1"]
+    assert FakeShell.applied == []
+    assert errors == []
+
+
+def test_reload_applies_grouped_changes_to_existing_shell(renv):
+    app, store, _, _, make_config = renv
+    store.pending = make_config(
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "state": "collapsed"}])},
+    )
+    app.reload()
+    assert FakeShell.applied == [("HDMI-A-1", ["restyle", "panel-state"])]
+    assert FakeShell.closed == [] and FakeShell.opened == []
+
+
+def test_reload_does_not_apply_to_a_shell_opened_by_its_own_sync(renv):
+    app, store, _, _, make_config = renv
+    app.shells.pop("HDMI-A-1")  # e.g. a hot-plug sync has not run yet
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "clock"}])}
+    )
+    app.reload()
+    assert FakeShell.opened == ["HDMI-A-1"]  # built from the new config
+    assert FakeShell.applied == []  # a panel-add on top would duplicate the clock
+
+
+def test_reload_apply_failure_closes_reports_and_rebuilds(renv):
+    app, store, errors, _, make_config = renv
+    FakeShell.fail_apply = {"HDMI-A-1"}
+    store.pending = make_config(
+        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+    )
+    app.reload()
+    assert FakeShell.closed == ["HDMI-A-1"]
+    assert FakeShell.opened == ["HDMI-A-1"]  # rebuilt from the new config
+    assert "HDMI-A-1" in app.shells
+    assert len(errors) == 1 and "HDMI-A-1" in errors[0]
+
+
+def test_reload_bad_config_reports_and_changes_nothing(renv):
+    app, store, errors, _, _ = renv
+    store.last_error = "theme.accent: must be a #rrggbb hex color"
+    app.reload()  # store.reload() returns None
+    assert errors == [store.last_error]
+    assert FakeShell.opened == [] and FakeShell.closed == [] and FakeShell.applied == []
+
+
+def test_reload_unexpected_exception_is_contained_and_reported(renv, monkeypatch):
+    app, store, errors, _, make_config = renv
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+
+    def explode():
+        raise OSError("kscreen gone")
+
+    monkeypatch.setattr(app, "sync_monitors", explode)
+    app.reload()  # must not raise inside a GLib callback
+    assert len(errors) == 1 and "kscreen gone" in errors[0]
+
+
+def test_run_refuses_a_second_instance_before_creating_windows(env, monkeypatch, capsys):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    monkeypatch.setattr(app_mod, "_already_running", lambda: True)
+    created = []
+    monkeypatch.setattr(app_mod, "Application", lambda *a, **k: created.append(a))
+    assert app.run() == 1
+    assert FakeShell.opened == [] and created == []
+    assert "already running" in capsys.readouterr().err
+
+
+def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
+    app, _ = env
+    calls = []
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda argv: calls.append(argv))
+    app._report_error("--urgency=critical looks like an option")
+    argv = calls[0]
+    assert argv[0] == "notify-send"
+    assert argv.index("--") < argv.index("--urgency=critical looks like an option")

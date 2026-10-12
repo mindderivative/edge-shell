@@ -1,0 +1,11 @@
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "system_bar"

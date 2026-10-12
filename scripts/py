@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Runs the project's Python (the shared global-base venv). Override with EDGE_SHELL_PYTHON;
+# falls back to python3 when the default interpreter is missing.
+default=/home/phil/Projects/pyDev/pyEnvs/global-base/bin/python
+if [ -z "${EDGE_SHELL_PYTHON:-}" ] && [ ! -x "$default" ]; then
+    default=python3
+fi
+exec "${EDGE_SHELL_PYTHON:-$default}" "$@"
