@@ -14,7 +14,7 @@ from fabric.widgets.box import Box
 from fabric.widgets.button import Button
 from fabric.widgets.overlay import Overlay
 from fabric.widgets.wayland import WaylandWindow
-from gi.repository import Gdk, Gtk, GtkLayerShell
+from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 from shell import geometry, panel_state
 from shell.anim import Tween
@@ -63,7 +63,7 @@ class EdgePanel(WaylandWindow):
         self._hovered = False
         self._d = 0.0
         self._last_rect: tuple[int, int, int, int] | None = None
-        self._press: tuple[float, float] | None = None  # drag state (used from Task 17)
+        self._press: tuple[float, float] | None = None  # drag state
         self._press_depth = 0.0
         self._dragging = False
         self._suppress_click = False
@@ -139,16 +139,22 @@ class EdgePanel(WaylandWindow):
 
     # ---- state -----------------------------------------------------------------
     def _on_enter(self, *_) -> None:
+        if self._dragging:  # the drag owns the depth until release
+            return
         self._hovered = True
         self._retarget()
 
     def _on_leave(self, _widget, event) -> None:
+        if self._dragging:
+            return
         if event.detail == Gdk.NotifyType.INFERIOR:  # pointer moved onto a child widget
             return
         self._hovered = False
         self._retarget()
 
     def _retarget(self) -> None:
+        if self._dragging:  # the drag owns the depth until release
+            return
         target = panel_state.target_depth(
             self._extended, self._hovered, self.spec.depth, self._theme.peek
         )
@@ -248,6 +254,11 @@ class EdgePanel(WaylandWindow):
     def _on_motion(self, _widget, event) -> bool:
         if self._press is None:
             return False
+        if not event.state & Gdk.ModifierType.BUTTON1_MASK:
+            # primary button not held: the release was lost (grab break, remap)
+            self._press = None
+            self._dragging = False
+            return False
         dx = event.x_root - self._press[0]
         dy = event.y_root - self._press[1]
         if not self._dragging:
@@ -264,14 +275,22 @@ class EdgePanel(WaylandWindow):
         return True
 
     def _on_release(self, _widget, event) -> bool:
+        if event.button != 1:
+            return False
         was_dragging = self._dragging
         self._press = None
-        self._dragging = False
-        if not was_dragging:
-            return False  # a plain click: the button's "clicked" signal toggles
-        self._extended = panel_state.snap_extended(self._d, self.spec.depth)
-        self._retarget()
-        return True
+        self._dragging = False  # must be cleared before _retarget()
+        if was_dragging:
+            self._extended = panel_state.snap_extended(self._d, self.spec.depth)
+            self._retarget()
+            # the button's own release handler still runs and may emit "clicked", which
+            # _on_clicked ignores; clear the flag once this event is fully dispatched
+            GLib.idle_add(self._clear_suppress)
+        return False  # always let Gtk.Button finish its release (resets pressed state)
+
+    def _clear_suppress(self) -> bool:
+        self._suppress_click = False
+        return GLib.SOURCE_REMOVE
 
     def _place_handle(self, d: float) -> None:
         inset = max(0, int(self._theme.thickness + d - HANDLE_DEPTH))  # rides the inner edge
