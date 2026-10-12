@@ -13,3 +13,6 @@ __pycache__/
 
 # Local config (shell reads ~/.config/edge-shell/ at runtime)
 config.local.toml
+
+# Spike renders
+spikes/out/
