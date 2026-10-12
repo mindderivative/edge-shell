@@ -1227,7 +1227,7 @@ def test_surface_size(edge, size):
 
 
 def test_join_radius_grows_from_zero_and_caps_at_R():
-    assert g.join_radius(7, R) == 7
+    assert g.join_radius(7, R) == 3.5
     assert g.join_radius(30, R) == 14
     assert g.join_radius(-3, R) == 0
 
@@ -1340,7 +1340,7 @@ def surface_size(edge: Edge, length: int, depth: int, thickness: int, radius: in
 
 
 def join_radius(d: float, radius: int) -> float:
-    return min(float(radius), max(0.0, float(d)))
+    return min(float(radius), max(0.0, float(d)) / 2)
 
 
 def to_canvas(edge: Edge, u: float, v: float, along: float, across: float) -> tuple[float, float]:

@@ -37,7 +37,7 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 | Token | Default | Notes |
 | --- | --- | --- |
 | `T` frame thickness | 10 px | Also the space reserved on each edge |
-| `R` corner and join radius | 14 px | Joins shrink to the panel's depth while it animates |
+| `R` corner and join radius | 14 px | Joins shrink to half the panel's depth while it animates (so the convex corner and concave join stack into a smooth S-curve instead of overlapping) |
 | Frame color | `#0b0c0d` | Panels use the same color so they read as part of the frame |
 | Text / secondary | `#e6e8ea` / `#9ba0a6` | |
 | Accent | `#8fd3b6` | Active workspace and focus rings only |
@@ -69,7 +69,7 @@ Three states per panel. Only **extended** shows content.
 | Peek | 14 px | Hidden; handle dots brighten | Pointer enters the strip | Pointer leaves, or handle clicked |
 | Extended | Full depth | Fades in | Handle click, or drag released at ≥50% | Handle click |
 
-**Timing.** Depth animates over 280 ms with `cubic-bezier(.2, .8, .2, 1)`. Content fades in over 170 ms starting 110 ms into the reveal; on collapse it fades out immediately. Join radius is `min(R, depth)` on every frame.
+**Timing.** Depth animates over 280 ms with `cubic-bezier(.2, .8, .2, 1)`. Content fades in over 170 ms starting 110 ms into the reveal; on collapse it fades out immediately. Join radius, for both the body's convex corners and the concave joins, is `min(R, depth/2)` on every frame, so the convex corner and concave join stack into a smooth S-curve instead of overlapping.
 
 **Drag.** Pressing the handle and moving along the panel's axis sets depth directly, clamped to `[0, full]`. On release the panel snaps at the 50% threshold. A press that moves less than 4 px is a click.
 
