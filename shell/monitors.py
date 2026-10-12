@@ -12,8 +12,11 @@ gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, GtkLayerShell
 
 from shell.config.models import Config
+from shell.edge_panel import EdgePanel
 from shell.frame import CORNERS, EDGES, FrameEdge, ScreenCorner
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
+from shell.panel_spec import PanelGeometry
+from shell.registry import panels_for, widget_class
 from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
@@ -66,22 +69,30 @@ def describe_monitors() -> list[str]:
 
 
 class MonitorShell:
-    """Every Edge Shell window for one monitor: 4 frame strips, 4 corners (panels: Task 15)."""
+    """Every Edge Shell window for one monitor: 4 frame strips, 4 corners, N panels."""
 
     def __init__(self, name: str, monitor: Gdk.Monitor, config: Config, register_window):
         self.name = name
         self.monitor = monitor
         self._register = register_window
+        self._scope = scope_class(name)
         self.windows: list = []
         self.corners: list[ScreenCorner] = []
+        self.panels: list[EdgePanel] = []
         theme = config.theme_for(name)
-        scope = scope_class(name)
         for edge in EDGES:
-            self._track(FrameEdge(edge, monitor, theme, scope))
+            self._track(FrameEdge(edge, monitor, theme, self._scope))
         for corner in CORNERS:
-            window = ScreenCorner(corner, monitor, theme, scope)
+            window = ScreenCorner(corner, monitor, theme, self._scope)
             self.corners.append(window)
             self._track(window)
+        for index, geo in enumerate(panels_for(config, name)):
+            self.panels.append(self._make_panel(index, geo, theme))
+
+    def _make_panel(self, index: int, geo: PanelGeometry, theme) -> EdgePanel:
+        panel = widget_class(geo.widget)(geo, theme, self.monitor, index, self._scope)
+        self._track(panel)
+        return panel
 
     def _track(self, window) -> None:
         self.windows.append(window)
@@ -106,3 +117,4 @@ class MonitorShell:
             except Exception:  # the compositor may already have closed it (monitor unplugged)
                 log.exception("failed to destroy window on %s", self.name)
         self.windows.clear()
+        self.panels.clear()

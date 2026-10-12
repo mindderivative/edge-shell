@@ -5,5 +5,7 @@ pytest.importorskip("fabric")
 
 
 def test_gtk_modules_import():
+    import shell.edge_panel  # noqa: F401
     import shell.frame  # noqa: F401
     import shell.monitors  # noqa: F401
+    import widgets  # noqa: F401
