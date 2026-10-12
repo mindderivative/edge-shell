@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import subprocess
+import traceback
 from collections import defaultdict
 
 import gi
@@ -50,12 +51,13 @@ class EdgeShellApp:
         elif self.app is not None:
             self.app.remove_window(window)  # call before destroy(): Gtk still lists it
 
-    def sync_monitors(self) -> None:
+    def sync_monitors(self) -> tuple[set[str], set[str]]:
+        """Open/close shells to match the config; return (closed, opened) connector names."""
         connected = monitors_by_name()
         if not connected and self.shells:
             # kscreen-doctor failed or a hot-plug flap; closing all would blank every frame
             log.warning("monitor mapping unavailable, keeping current shells")
-            return
+            return set(), set()
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -70,6 +72,7 @@ class EdgeShellApp:
             )
         if close or open_:
             self.refresh_css()
+        return set(close), set(open_)
 
     def watch_displays(self) -> None:
         display = Gdk.Display.get_default()
@@ -113,6 +116,14 @@ class EdgeShellApp:
         self._watcher = ConfigWatcher(path, self.reload)
 
     def reload(self) -> None:
+        # Runs from a GLib/watcher callback: never let an exception escape half-applied.
+        try:
+            self._reload()
+        except Exception:
+            log.exception("config reload failed")
+            self._report_error(f"reload failed:\n{traceback.format_exc(limit=-3)}")
+
+    def _reload(self) -> None:
         result = self.store.reload()
         if result is None:
             if self.store.last_error:
@@ -124,14 +135,29 @@ class EdgeShellApp:
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
         for name in rebuild & set(self.shells):
             self.shells.pop(name).close()
-        self.sync_monitors()  # opens rebuilt/new monitors with the new config
+        # Shells opened here are built from the new config already: never apply onto them.
+        _, opened = self.sync_monitors()
         grouped: dict[str, list] = defaultdict(list)
         for change in changes:
             if change.monitor not in rebuild:
                 grouped[change.monitor].append(change)
+        failed = False
         for name, items in grouped.items():
-            if name in self.shells:
+            if name in opened or name not in self.shells:
+                continue
+            try:
                 self.shells[name].apply(new, items)
+            except Exception:
+                log.exception("applying config to %s failed, rebuilding it", name)
+                self._report_error(f"{name}: could not apply the config in place; rebuilt it")
+                failed = True
+                shell = self.shells.pop(name)
+                try:
+                    shell.close()
+                except Exception:
+                    log.exception("closing the half-applied shell on %s failed", name)
+        if failed:
+            self.sync_monitors()  # rebuild the dropped shells from the new config
         self.refresh_css()
 
     def _report_error(self, message: str) -> None:
