@@ -76,10 +76,18 @@ def describe_monitors() -> list[str]:
 class MonitorShell:
     """Every Edge Shell window for one monitor: 4 frame strips, 4 corners, N panels."""
 
-    def __init__(self, name: str, monitor: Gdk.Monitor, config: Config, register_window):
+    def __init__(
+        self,
+        name: str,
+        monitor: Gdk.Monitor,
+        config: Config,
+        register_window,
+        unregister_window=None,
+    ):
         self.name = name
         self.monitor = monitor
         self._register = register_window
+        self._unregister = unregister_window or (lambda _window: None)
         self._scope = scope_class(name)
         self.windows: list = []
         self.corners: list[ScreenCorner] = []
@@ -142,13 +150,21 @@ class MonitorShell:
         GLib.timeout_add(RAISE_DELAY_MS, self._raise_one, panel)
         return panel
 
+    def _release(self, window) -> None:
+        """Drop the app's reference (Fabric keeps every added window) and destroy it."""
+        try:
+            self._unregister(window)
+        except Exception:  # e.g. ValueError if the app never held it
+            log.debug("could not unregister window on %s", self.name, exc_info=True)
+        try:
+            window.destroy()
+        except Exception:  # the compositor may already have closed it (monitor unplugged)
+            log.exception("failed to destroy window on %s", self.name)
+
     def _destroy(self, window) -> None:
         if window in self.windows:
             self.windows.remove(window)
-        try:
-            window.destroy()
-        except Exception:
-            log.exception("failed to destroy window on %s", self.name)
+        self._release(window)
 
     def apply(self, config: Config, changes: list[Change]) -> None:
         """Apply in-place changes for this monitor (the diff orders adds before removes)."""
@@ -173,9 +189,6 @@ class MonitorShell:
 
     def close(self) -> None:
         for window in self.windows:
-            try:
-                window.destroy()
-            except Exception:  # the compositor may already have closed it (monitor unplugged)
-                log.exception("failed to destroy window on %s", self.name)
+            self._release(window)
         self.windows.clear()
         self.panels.clear()

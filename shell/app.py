@@ -43,6 +43,13 @@ class EdgeShellApp:
         else:
             self.app.add_window(window)
 
+    def unregister_window(self, window) -> None:
+        """Forget a window that is about to be destroyed (Fabric's window list holds it forever)."""
+        if window in self._early:
+            self._early.remove(window)
+        elif self.app is not None:
+            self.app.remove_window(window)  # call before destroy(): Gtk still lists it
+
     def sync_monitors(self) -> None:
         connected = monitors_by_name()
         if not connected and self.shells:
@@ -58,7 +65,9 @@ class EdgeShellApp:
             self.shells.pop(name).close()
         for name in open_:
             log.info("opening Edge Shell on %s", name)
-            self.shells[name] = MonitorShell(name, desired[name], self.config, self.register_window)
+            self.shells[name] = MonitorShell(
+                name, desired[name], self.config, self.register_window, self.unregister_window
+            )
         if close or open_:
             self.refresh_css()
 

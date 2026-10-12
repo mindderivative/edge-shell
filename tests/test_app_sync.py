@@ -14,7 +14,7 @@ class FakeShell:
     opened: list = []
     closed: list = []
 
-    def __init__(self, name, monitor, config, register):
+    def __init__(self, name, monitor, config, register, unregister=None):
         self.name = name
         self.monitor = monitor
         FakeShell.opened.append(name)
@@ -114,3 +114,47 @@ def test_schedule_sync_only_removes_pending_ids(env, monkeypatch):
     app._schedule_sync()
     assert removed == [101]
     assert app._sync_timers == [102, 103]
+
+
+class FakeFabricApp:
+    def __init__(self):
+        self.windows = []
+
+    def add_window(self, window):
+        self.windows.append(window)
+
+    def remove_window(self, window):
+        self.windows.remove(window)  # like Fabric: ValueError if absent
+
+
+def test_unregister_before_application_exists_drops_early_window(env):
+    app, _ = env
+    win = object()
+    app.register_window(win)
+    app.unregister_window(win)
+    assert app._early == []
+
+
+def test_unregister_after_application_removes_it_from_fabric(env):
+    app, _ = env
+    app.app = FakeFabricApp()
+    win = object()
+    app.register_window(win)
+    assert app.app.windows == [win]
+    app.unregister_window(win)
+    assert app.app.windows == []
+
+
+def test_shell_receives_unregister_callback(env, monkeypatch):
+    app, mapping = env
+    got = {}
+
+    class Capturing(FakeShell):
+        def __init__(self, name, monitor, config, register, unregister=None):
+            super().__init__(name, monitor, config, register)
+            got["unregister"] = unregister
+
+    monkeypatch.setattr(app_mod, "MonitorShell", Capturing)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert got["unregister"] == app.unregister_window
