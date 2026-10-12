@@ -25,6 +25,7 @@
 - Pure modules import no GTK/`gi`: `shell/geometry.py`, `shell/draw.py`, `shell/anim.py`, `shell/theme.py`, `shell/panel_state.py`, `shell/panel_spec.py`, `shell/registry.py`, `shell/plan.py`, `shell/outputs.py`, `shell/config/*` (except `watcher.py`).
 - `widgets/*` never call cairo or GtkLayerShell. `services/*` never build widgets.
 - Never own a D-Bus name Plasma already holds. Do not use `fabric.system_tray`, `fabric.notifications`, `fabric.audio`, `fabric.bluetooth`.
+- Windows must be given their monitor as an **integer Gdk index** via `shell.gdk_util.monitor_index(monitor)`. Fabric's `monitor` property is an int; a `Gdk.Monitor` object is silently dropped and KWin then uses its default output (found at Gate A).
 - Never touch the Plasma panel on `DP-1` in this plan. All on-screen testing happens on `HDMI-A-1`.
 - Every commit message ends with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` (shown as a second `-m` below).
 - **VERIFY** (run before every commit): `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
@@ -2776,6 +2777,7 @@ from shell import geometry, panel_state
 from shell.anim import Tween
 from shell.config.models import Theme
 from shell.draw import draw_panel
+from shell.gdk_util import monitor_index
 from shell.panel_spec import PanelGeometry
 from shell.theme import hex_to_rgba
 
@@ -2801,7 +2803,8 @@ class EdgePanel(WaylandWindow):
             margin=margin,
             exclusivity="none",
             keyboard_mode="on-demand" if self.wants_keyboard else "none",
-            monitor=monitor,
+            # Fabric's monitor property is an int: a Gdk.Monitor object is silently ignored
+            monitor=monitor_index(monitor),
             title=f"edge-shell-{spec.label}-{index}",
             name="edge-panel",
             style_classes=[scope],
