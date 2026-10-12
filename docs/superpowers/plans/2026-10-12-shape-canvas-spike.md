@@ -196,6 +196,8 @@ State the machine (CPU model from `/proc/cpuinfo`, Python and pycairo versions).
 - [ ] **Step 1: Write the note:** the question and targets; the environment; the Task 3 table; the Task 2 look results (with the image paths) and the banding numbers; the Task 4 results from Phil; a **go / no-go** for option B with reasons; recommended defaults for the real feature (layers, alpha curve, border width, opacity, whether to cache the shadow, the redraw strategy); surprises (anything that changed the design assumptions: stacking, input region, outline construction); and the follow-up plan outline (canvas refactor tasks).
 - [ ] **Step 2: Commit** (`docs: shape canvas spike findings`). Do not push.
 
+Done: see docs/superpowers/findings/2026-10-12-shape-canvas-spike.md
+
 ## Review Focus (for the final reviewer of the findings)
 
 1. Do the benchmark scenarios measure what they claim (damaged region really clipped, cached shadow really not re-rendered, warm-up excluded, perf_counter around the draw AND the blit)?
