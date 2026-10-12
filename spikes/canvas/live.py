@@ -15,7 +15,7 @@ import argparse
 import math
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from spikes.canvas.effects import RGBA, draw_scene, parse_rgba_hex, reach_px
 from spikes.canvas.outline import Panel
@@ -32,8 +32,9 @@ PERIOD_S = 2.0
 
 CSS = """\
 window#probe-canvas { background-color: transparent; }
-window#probe-content { background-color: #202428; }
+window#probe-content { background-color: transparent; }
 window#probe-content label { color: #f2f2f2; font-weight: bold; }
+#probe-marker { background-color: #ffd23f; }
 """
 
 
@@ -48,6 +49,7 @@ class Settings:
     raise_ms: int
     seconds: float
     selftest: bool
+    stack_order: str = "canvas-first"
     simulate: int = 0
     sim_size: tuple[int, int] = (1920, 1080)
 
@@ -120,6 +122,12 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         "--seconds", type=_seconds, default=MAX_SECONDS, help=f"run time, max {MAX_SECONDS}"
     )
     p.add_argument(
+        "--stack-order",
+        choices=("canvas-first", "content-first"),
+        default="canvas-first",
+        help="which windows are created first",
+    )
+    p.add_argument(
         "--selftest", action="store_true", help="parse flags, print them, open no window"
     )
     p.add_argument(
@@ -141,6 +149,7 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         raise_ms=a.raise_ms,
         seconds=a.seconds,
         selftest=a.selftest,
+        stack_order=a.stack_order,
         simulate=a.simulate,
         sim_size=a.sim_size,
     )
@@ -251,18 +260,103 @@ def box_to_rect(b: Box) -> tuple[int, int, int, int]:
     return b[0], b[1], b[2] - b[0], b[3] - b[1]
 
 
+MARKER_LEN, MARKER_DEPTH = 44, 14  # same size as EdgePanel's handle (HANDLE_LENGTH/HANDLE_DEPTH)
+
+
+def marker_inset(d: float) -> int:
+    """Inset of the marker from the screen edge: rides the body's inner edge (EdgePanel)."""
+    return max(0, int(T + d - MARKER_DEPTH))
+
+
+@dataclass(frozen=True)
+class PanelSpec:
+    label: str
+    edge: str
+    pos: int
+    length: int
+    depth: int
+
+
+def panel_specs(w: int) -> list[PanelSpec]:
+    return [
+        PanelSpec("dock", "bottom", (w - DOCK_LEN) // 2, DOCK_LEN, DOCK_FULL),
+        PanelSpec("clock", "top", (w - CLOCK_LEN) // 2, CLOCK_LEN, CLOCK_FULL),
+        PanelSpec("bar", "right", BAR_POS, BAR_LEN, BAR_FULL),
+    ]
+
+
+def content_geometry(spec: PanelSpec, w: int, h: int) -> tuple[tuple[int, int], str, str]:
+    """(surface size, layer-shell anchor, margin) of a panel's content window: the panel's
+    FULL-depth surface, allocated once, positioned exactly like a real EdgePanel."""
+    from shell import geometry
+
+    size = geometry.surface_size(spec.edge, spec.length, spec.depth, T, R)
+    extent = w if geometry.is_horizontal(spec.edge) else h
+    anchor, margin = geometry.anchor_and_margin(spec.edge, spec.pos, spec.length + 2 * R, R, extent)
+    return size, anchor, margin
+
+
+def ticks_between_draws(tick_ts: list[int], draw_ts: list[int]) -> list[int]:
+    """For each pair of consecutive canvas draws, the number of content ticks in (prev, cur]."""
+    from bisect import bisect_right
+
+    ticks = sorted(tick_ts)
+    draws = sorted(draw_ts)
+    return [
+        bisect_right(ticks, cur) - bisect_right(ticks, prev)
+        for prev, cur in zip(draws, draws[1:], strict=False)
+    ]
+
+
+def sync_error(ticks: list[tuple[int, float]], draws: list[tuple[int, float]]) -> dict:
+    """|depth drawn by the canvas most recently (ts <= tick ts) - marker depth at that tick|, px.
+    Ticks before the first canvas draw are skipped. None values when nothing is comparable."""
+    from bisect import bisect_right
+
+    draws = sorted(draws)
+    keys = [d[0] for d in draws]
+    errs = []
+    for ts, depth in sorted(ticks):
+        i = bisect_right(keys, ts) - 1
+        if i >= 0:
+            errs.append(abs(draws[i][1] - depth))
+    if not errs:
+        return {"n": 0, "max_px": None, "mean_px": None}
+    return {"n": len(errs), "max_px": max(errs), "mean_px": statistics.fmean(errs)}
+
+
+def lag_stats(ticks: list[tuple[int, float]], draws: list[tuple[int, float]]) -> dict:
+    between = ticks_between_draws([t[0] for t in ticks], [d[0] for d in draws])
+    hist: dict[int, int] = {}
+    for n in between:
+        hist[n] = hist.get(n, 0) + 1
+    return {
+        "content_ticks": len(ticks),
+        "canvas_draws": len(draws),
+        "between_min": min(between) if between else None,
+        "between_mean": statistics.fmean(between) if between else None,
+        "between_max": max(between) if between else None,
+        "between_hist": dict(sorted(hist.items())),
+        "sync": sync_error(ticks, draws),
+    }
+
+
 @dataclass
 class ProbeResult:
-    timestamps_us: list[int]
+    timestamps_us: list[int]  # content-window tick timestamps (the animation frames)
     draws_ms: list[float]
     error: str | None = None
     wall: float = 0.0
     cpu: float = 0.0
     geometry: str = ""
+    ticks: list[tuple[int, float]] = field(default_factory=list)  # (ts, marker depth)
+    draws: list[tuple[int, float]] = field(default_factory=list)  # (ts, depth rendered)
+    extra: list[str] = field(default_factory=list)  # allocation / refresh rate lines
 
 
 def simulate(cfg: Settings, frames: int, size: tuple[int, int]) -> ProbeResult:
-    """Headless run of the live tick/draw loop: no window, fake 60 Hz clock, image surface."""
+    """Headless run of the live loop: no window, fake 60 Hz clock, image surface. The content
+    tick and the canvas draw happen in the same frame (lag 0 by construction)."""
     import cairo
 
     w, h = size
@@ -278,8 +372,9 @@ def simulate(cfg: Settings, frames: int, size: tuple[int, int]) -> ProbeResult:
             ft = round(i * FAKE_FRAME_US)
             if t0 is None:
                 t0 = ft
-            res.timestamps_us.append(ft)
             step = state.step((ft - t0) / 1e6)
+            res.timestamps_us.append(ft)
+            res.ticks.append((ft, step.depth))
             clip = None if i == 0 else box_to_rect(step.invalidate)  # first draw is full
             t_start = time.perf_counter()
             cr.save()
@@ -287,6 +382,7 @@ def simulate(cfg: Settings, frames: int, size: tuple[int, int]) -> ProbeResult:
             cr.restore()
             surface.flush()
             res.draws_ms.append((time.perf_counter() - t_start) * 1000)
+            res.draws.append((ft, step.depth))
     except Exception:
         import traceback
 
@@ -324,11 +420,34 @@ def run(cfg: Settings) -> ProbeResult:
     geo = mon.get_geometry()
     w, h = geo.width, geo.height
     res.geometry = f"{cfg.output}: {w}x{h} at +{geo.x}+{geo.y}"
+    refresh = mon.get_refresh_rate()  # mHz, 0 when unknown
+    res.extra.append(
+        f"refresh rate: {refresh / 1000:.3f} Hz" if refresh else "refresh rate: unknown"
+    )
     idx = monitor_index(mon)
     paint = make_painter(cfg, w, h)
     state = AnimationState(w, h, cfg.reach_px + cfg.border_width)
+    # shared between the content window (writes) and the canvas draw handler (reads)
+    st = {"depth": 0.0, "first": True, "t0": None, "app": None, "canvas": None, "alloc": None}
 
-    class Canvas(WaylandWindow):
+    def fail() -> None:
+        """Loud failure: traceback to stderr, record the reason, quit."""
+        traceback.print_exc()
+        if res.error is None:
+            res.error = traceback.format_exc().strip().splitlines()[-1]
+        if st["app"] is not None:
+            st["app"].quit()
+
+    class ClickThrough(WaylandWindow):
+        def make_click_through(self) -> None:
+            self.input_shape_combine_region(cairo.Region(cairo.RectangleInt()))
+
+        def do_size_allocate(self, alloc) -> None:
+            # Fabric's allocate resets the input shape to the whole surface; re-apply EMPTY.
+            WaylandWindow.do_size_allocate(self, alloc)
+            self.make_click_through()
+
+    class Canvas(ClickThrough):
         def __init__(self):
             super().__init__(
                 layer="top",
@@ -344,16 +463,12 @@ def run(cfg: Settings) -> ProbeResult:
             self.area = Gtk.DrawingArea()
             self.add(self.area)
 
-        def make_click_through(self) -> None:
-            self.input_shape_combine_region(cairo.Region(cairo.RectangleInt()))
+    class Content(ClickThrough):
+        """Transparent, click-through, FULL-depth panel surface with a label and a marker that
+        rides the body's inner edge (EdgePanel._place_handle). The dock one drives the animation."""
 
-        def do_size_allocate(self, alloc) -> None:
-            # Fabric's allocate resets the input shape to the whole surface; re-apply EMPTY.
-            WaylandWindow.do_size_allocate(self, alloc)
-            self.make_click_through()
-
-    class Content(WaylandWindow):
-        def __init__(self, text, anchor, margin, size):
+        def __init__(self, spec: PanelSpec):
+            size, anchor, margin = content_geometry(spec, w, h)
             super().__init__(
                 layer=cfg.content_layer,
                 anchor=anchor,
@@ -361,26 +476,63 @@ def run(cfg: Settings) -> ProbeResult:
                 exclusivity="none",
                 keyboard_mode="none",
                 monitor=idx,
-                title=f"edge-canvas-probe-{text}",
+                title=f"edge-canvas-probe-{spec.label}",
                 name="probe-content",
                 visible=False,
             )
             GtkLayerShell.set_exclusive_zone(self, -1)
-            label = Gtk.Label(label=text)
-            label.set_size_request(*size)
-            self.add(label)
+            self.spec = spec
+            self.set_size_request(*size)  # allocated once at full size; never resized
+            vertical = spec.edge in ("left", "right")
+            self.label = Gtk.Label(label=spec.label)
+            self.label.set_hexpand(True)
+            self.label.set_vexpand(True)
+            self.body = Gtk.Box()
+            self.body.add(self.label)
+            self.marker = Gtk.Box()
+            self.marker.set_name("probe-marker")
+            self.marker.set_size_request(
+                *((MARKER_DEPTH, MARKER_LEN) if vertical else (MARKER_LEN, MARKER_DEPTH))
+            )
+            self._place_body()
+            overlay = Gtk.Overlay()
+            overlay.add(Gtk.Box())
+            overlay.add_overlay(self.body)
+            overlay.add_overlay(self.marker)
+            self.add(overlay)
+            self.place(float(spec.depth))
 
-    st = {"depth": 0.0, "first": True, "t0": None, "app": None}
+        def _place_body(self) -> None:  # EdgePanel._place_content
+            s, b = self.spec, self.body
+            if s.edge in ("bottom", "top"):
+                b.set_size_request(s.length, s.depth)
+                b.set_halign(Gtk.Align.CENTER)
+                b.set_valign(Gtk.Align.END if s.edge == "bottom" else Gtk.Align.START)
+                (b.set_margin_bottom if s.edge == "bottom" else b.set_margin_top)(T)
+            else:
+                b.set_size_request(s.depth, s.length)
+                b.set_valign(Gtk.Align.CENTER)
+                b.set_halign(Gtk.Align.START if s.edge == "left" else Gtk.Align.END)
+                (b.set_margin_start if s.edge == "left" else b.set_margin_end)(T)
 
-    def fail() -> None:
-        """Loud failure: traceback to stderr, record the reason, quit."""
-        traceback.print_exc()
-        if res.error is None:
-            res.error = traceback.format_exc().strip().splitlines()[-1]
-        if st["app"] is not None:
-            st["app"].quit()
+        def place(self, d: float) -> None:  # EdgePanel._place_handle
+            inset = marker_inset(d)
+            m, edge = self.marker, self.spec.edge
+            if edge == "bottom":
+                m.set_halign(Gtk.Align.CENTER)
+                m.set_valign(Gtk.Align.END)
+                m.set_margin_bottom(inset)
+            elif edge == "top":
+                m.set_halign(Gtk.Align.CENTER)
+                m.set_valign(Gtk.Align.START)
+                m.set_margin_top(inset)
+            else:  # right (left is unused here)
+                m.set_halign(Gtk.Align.END)
+                m.set_valign(Gtk.Align.CENTER)
+                m.set_margin_end(inset)
+            self.label.set_opacity(max(0.0, (d / self.spec.depth - 0.6) / 0.4))
 
-    def on_draw(_area, cr) -> bool:
+    def on_draw(area, cr) -> bool:
         try:
             t_start = time.perf_counter()
             if st["first"]:
@@ -389,43 +541,59 @@ def run(cfg: Settings) -> ProbeResult:
             else:
                 ok, rect = Gdk.cairo_get_clip_rectangle(cr)
                 clip = (rect.x, rect.y, rect.width, rect.height) if ok else None
-            paint(cr, st["depth"], clip)
+            depth = st["depth"]
+            paint(cr, depth, clip)
             res.draws_ms.append((time.perf_counter() - t_start) * 1000)
+            fc = area.get_frame_clock()
+            ts = fc.get_frame_time() if fc is not None else GLib.get_monotonic_time()
+            res.draws.append((ts, depth))
+            st["alloc"] = (area.get_allocated_width(), area.get_allocated_height())
         except Exception:
             fail()
         return False
 
-    canvas = Canvas()
-    canvas.area.connect("draw", on_draw)
-
-    def on_tick(widget, frame_clock) -> bool:
+    def on_tick(content, frame_clock) -> bool:
+        """Dock content window's own frame-clock tick (like EdgePanel's Tween): moves the marker,
+        publishes the depth for the canvas and invalidates the damaged box on the canvas."""
         try:
             ft = frame_clock.get_frame_time()  # microseconds
             if st["t0"] is None:
                 st["t0"] = ft
-            res.timestamps_us.append(ft)
             step = state.step((ft - st["t0"]) / 1e6)
             st["depth"] = step.depth
-            widget.queue_draw_area(*box_to_rect(step.invalidate))
+            content.place(step.depth)
+            res.timestamps_us.append(ft)
+            res.ticks.append((ft, step.depth))
+            canvas = st["canvas"]
+            if canvas is not None:
+                canvas.area.queue_draw_area(*box_to_rect(step.invalidate))
         except Exception:
             fail()
             return False
         return True
 
-    canvas.area.add_tick_callback(on_tick)
-    canvas.show_all()
-    canvas.make_click_through()
+    def make_canvas() -> Canvas:
+        canvas = Canvas()
+        canvas.area.connect("draw", on_draw)
+        st["canvas"] = canvas
+        canvas.show_all()
+        canvas.make_click_through()
+        return canvas
 
-    # Content windows are created AFTER the canvas. Bodies at full depth (monitor-relative).
-    dock_x = (w - DOCK_LEN) // 2
-    clock_x = (w - CLOCK_LEN) // 2
-    contents = [
-        Content("dock", "bottom left", f"0px 0px {T}px {dock_x}px", (DOCK_LEN, DOCK_FULL)),
-        Content("clock", "top left", f"{T}px 0px 0px {clock_x}px", (CLOCK_LEN, CLOCK_FULL)),
-        Content("bar", "right top", f"{BAR_POS}px {T}px 0px 0px", (BAR_FULL, BAR_LEN)),
-    ]
-    for c in contents:
-        c.show_all()
+    def make_contents() -> list:
+        out = [Content(spec) for spec in panel_specs(w)]
+        for c in out:
+            c.show_all()
+            c.make_click_through()
+        out[0].add_tick_callback(on_tick)  # the dock animates; clock and bar stay at rest
+        return out
+
+    if cfg.stack_order == "canvas-first":
+        canvas = make_canvas()
+        contents = make_contents()
+    else:
+        contents = make_contents()
+        canvas = make_canvas()
 
     def raise_all() -> bool:
         for c in contents:  # same trick as EdgePanel.raise_to_top: remap puts us on top
@@ -436,7 +604,8 @@ def run(cfg: Settings) -> ProbeResult:
     if cfg.raise_ms > 0:
         GLib.timeout_add(cfg.raise_ms, raise_all)
 
-    app = Application(APP_NAME, canvas, *contents, open_client=False)
+    windows = [canvas, *contents] if cfg.stack_order == "canvas-first" else [*contents, canvas]
+    app = Application(APP_NAME, *windows, open_client=False)
     st["app"] = app
     app.set_stylesheet_from_string(CSS, compile=False)
 
@@ -453,6 +622,12 @@ def run(cfg: Settings) -> ProbeResult:
         res.error = res.error or traceback.format_exc().strip().splitlines()[-1]
     res.wall = time.perf_counter() - wall0
     res.cpu = time.process_time() - cpu0
+    if st["alloc"] is not None:
+        aw, ah = st["alloc"]
+        note = "" if (aw, ah) == (w, h) else "  <-- DIFFERS from the monitor geometry"
+        res.extra.append(f"canvas allocation: {aw}x{ah} (monitor {w}x{h}){note}")
+    else:
+        res.extra.append("canvas allocation: unknown (no draw happened)")
     return res
 
 
@@ -471,7 +646,9 @@ def report(cfg: Settings, res: ProbeResult, where: str) -> bool:
     print("=== canvas probe results ===")
     print(f"flags: {cfg}")
     print(f"monitor {where}; reach_px={cfg.reach_px}")
-    print(f"frames (ticks): {stats['frames']}")
+    for line in res.extra:
+        print(line)
+    print(f"frames (content-window ticks): {stats['frames']}")
     print(
         f"frame interval ms: mean {_fmt(stats['mean_ms'])} median {_fmt(stats['median_ms'])} "
         f"p95 {_fmt(stats['p95_ms'])}"
@@ -480,11 +657,25 @@ def report(cfg: Settings, res: ProbeResult, where: str) -> bool:
     d = res.draws_ms
     if d:
         print(
-            f"draw ms/frame: median {statistics.median(d):.2f} p95 {pct(d, 0.95):.2f} "
-            f"max {max(d):.2f} ({len(d)} draws)"
+            f"canvas draw ms/frame: median {statistics.median(d):.2f} p95 {pct(d, 0.95):.2f} "
+            f"max {max(d):.2f}"
         )
     else:
-        print("draw ms/frame: n/a (0 draws)")
+        print("canvas draw ms/frame: n/a (0 draws)")
+    lag = lag_stats(res.ticks, res.draws)
+    print(f"content ticks: {lag['content_ticks']}  canvas draws: {lag['canvas_draws']}")
+    print(
+        "content ticks between consecutive canvas draws: "
+        f"min {_fmt(lag['between_min'], 'd')} mean {_fmt(lag['between_mean'])} "
+        f"max {_fmt(lag['between_max'], 'd')}  histogram {lag['between_hist']}"
+        "  (mean > 1 = the canvas draws less often than the marker moves = lag)"
+    )
+    s = lag["sync"]
+    print(
+        f"|canvas depth - marker depth| px over {s['n']} ticks: max {_fmt(s['max_px'])} "
+        f"mean {_fmt(s['mean_px'])}  (a perfect pipeline still shows up to ~1 frame of motion, "
+        "about 1.7 px)"
+    )
     load = res.cpu / res.wall if res.wall > 0 else None
     print(f"CPU: {res.cpu:.2f} s over {res.wall:.2f} s wall = {_fmt(load)} of one core")
     if not cfg.simulate:
@@ -494,14 +685,15 @@ def report(cfg: Settings, res: ProbeResult, where: str) -> bool:
 
 CHECKLIST = """
 CHECKLIST for the tester (answer each):
- (a) Smooth: no flicker, no tearing while the dock grows and shrinks?
- (b) Shadow and border follow the animating dock with no seams at the joins
-     (dock/frame fillets, clock, bar)?
- (c) The three labels (dock, clock, bar) are visible ABOVE the canvas? If one is hidden,
-     stacking failed: did --raise-ms (default 500) or --content-layer overlay help?
-     (compare with: --raise-ms 0   and   --content-layer overlay --raise-ms 0)
- (d) Click-through: clicks on windows or desktop icons everywhere (over the shadow and the
-     dock region too, except on the three label windows) reach them?
+ (a) Smooth: no flicker, no tearing while the dock bump grows and shrinks?
+ (b) The bright marker stays glued to the bump's inner edge while it animates (no lag,
+     shear or gap between the canvas edge and the marker), and the border and shadow follow
+     the bump with no seams at the joins (dock/frame fillets, clock, bar)?
+ (c) The labels (dock, clock, bar) and the three markers are visible ABOVE the canvas? If
+     not, stacking failed: did --raise-ms (default 500), --content-layer overlay or
+     --stack-order content-first help? (baseline: --raise-ms 0)
+ (d) Click-through: clicks on windows or desktop icons everywhere (over the shadow, the
+     bump and the markers too) reach them? (content windows are fully click-through)
  (e) Optional: a fullscreen window should cover the canvas (top layer). What happened?
 """
 
