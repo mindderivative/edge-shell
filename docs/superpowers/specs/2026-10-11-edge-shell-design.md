@@ -267,3 +267,24 @@ A normal window (opened from a key binding, tray icon or frame handle) for editi
 
 - Should a pinned panel reserve space (push windows) or float over them? This spec assumes **float**.
 - Should the settings window also expose a drag-and-drop layout editor, or only form fields? Deferred to its own design.
+
+## 15. Planned: handle customization and per-interaction toggles
+
+Requested by Phil at Gate D of the core plan. It is not part of the core plan, but the core must not paint this into a corner.
+
+**Requirements**
+
+- The handle (today: three 3 px dots) is customizable per panel: shape, color (rest and hover), size, and position along the edge.
+- Handle shapes include at least: dots, a thin bar, and a chevron/arrow. A chevron can **morph with the panel's depth**: pointing one way when collapsed, rotating to point the other way when expanded.
+- The three interactions are individually opt-in/opt-out per panel: **click to toggle**, **hover to peek**, **drag to open**. Defaults stay all-on, so existing configs behave as today.
+- A handle style may depend on which interactions are enabled (e.g. a thin bar when only drag is on, an arrow when only click is on).
+
+**Design implications (for the future plan; nothing here changes the current core)**
+
+- Config: a per-panel `[handle]` table (`shape`, `size`, `offset`, `color`, `hover_color`) and an `[interaction]` table (`click`, `hover`, `drag`, all default true) in the Pydantic models; the registry can supply per-widget defaults. Unknown shapes fail validation with the key path as elsewhere.
+- Rendering: the handle moves from CSS-styled widgets to cairo drawing inside the panel canvas (or a dedicated drawing area), driven by a pure `draw_handle(cr, shape, ...)` plus a morph parameter derived from `d / depth`. That makes the arrow morph free and keeps shapes testable with the same headless pixel tests as the panels.
+- Hit area vs visual: the clickable/hover/drag area stays a separate, larger target than the drawn shape.
+- Behavior: `panel_state` and `EdgePanel` consult the interaction flags (no hover peek when hover is off; ignore press-drag when drag is off; the handle is not a button when click is off). Keyboard activation still follows the click flag.
+- Diffing: handle and interaction changes are cheap in-place updates (restyle or flag change), not window rebuilds.
+- Today's code touch points: `EdgePanel._build_handle`, `_place_handle`, the pointer handlers, the `.handle-dot` CSS in `shell/theme.py`, and the `handle`/`handle_hover` theme tokens.
+- The settings window (section 13) exposes these controls.
