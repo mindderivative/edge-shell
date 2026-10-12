@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 
 import gi
@@ -11,10 +12,11 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, GLib, GtkLayerShell
 
+from shell.canvas.canvas import ShapeCanvas
 from shell.config.diff import Change
 from shell.config.models import Config
 from shell.edge_panel import EdgePanel
-from shell.frame import CORNERS, EDGES, FrameEdge, ScreenCorner
+from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.panel_spec import PanelGeometry
 from shell.registry import panels_for, widget_class
@@ -22,13 +24,21 @@ from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
 
-# Timing workaround, not an event-driven fix. The frame strips otherwise stack above the
-# panels (KWin restacks same-layer surfaces when it first configures them) and cover a
-# collapsed panel's handle. Re-mapping the panels puts them back on top. Empirical: 50 ms
-# was too early; 500 ms is reliably after the restack (checked by screenshot). The second,
-# later raise is a safety net for a slow compositor; both are no-ops after close().
+# Timing workaround, not an event-driven fix (core build): KWin restacks same-layer surfaces
+# when it first configures them, which put the old frame strips above the panels. The strips
+# now live on the bottom layer, but the canvas shares the panels' layer, so the re-map stays
+# until Gates 1-2 show it is not needed. Empirical: 50 ms was too early, 500 ms reliable; the
+# second raise is a safety net for a slow compositor; both are no-ops after close().
 RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
+
+
+def raise_delays(env=os.environ) -> tuple[int, ...]:
+    """Re-raise delays. EDGE_SHELL_RAISE_MS=0 turns the re-raise off, so Gates 1-2 can test
+    whether the canvas design still needs it (temporary switch, removed with the raise)."""
+    if env.get("EDGE_SHELL_RAISE_MS", "").strip() == "0":
+        return ()
+    return (RAISE_DELAY_MS, RAISE_FALLBACK_MS)
 
 
 def _geometry(monitor) -> tuple[int, int, int, int]:
@@ -78,7 +88,7 @@ def describe_monitors() -> list[str]:
 
 
 class MonitorShell:
-    """Every Edge Shell window for one monitor: 4 frame strips, 4 corners, N panels."""
+    """Every Edge Shell window for one monitor: the shape canvas, 4 zone strips, N panels."""
 
     def __init__(
         self,
@@ -95,23 +105,21 @@ class MonitorShell:
         self._scope = scope_class(name)
         self._closed = False
         self.windows: list = []
-        self.corners: list[ScreenCorner] = []
         self.panels: list[EdgePanel] = []
         theme = config.theme_for(name)
+        # The canvas first: it draws the frame and corners and must stay below every panel.
+        self.canvas = ShapeCanvas(monitor, theme, self._scope)
+        self._track(self.canvas)
         for edge in EDGES:
             self._track(FrameEdge(edge, monitor, theme, self._scope))
-        for corner in CORNERS:
-            window = ScreenCorner(corner, monitor, theme, self._scope)
-            self.corners.append(window)
-            self._track(window)
         for index, geo in enumerate(panels_for(config, name)):
             self.panels.append(self._make_panel(index, geo, theme))
         if self.panels:
-            for delay in (RAISE_DELAY_MS, RAISE_FALLBACK_MS):
+            for delay in raise_delays():
                 GLib.timeout_add(delay, self._raise_panels)
 
     def _raise_panels(self) -> bool:
-        """Re-map the live panels so they stack above the frame strips (see RAISE_DELAY_MS)."""
+        """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS)."""
         if not self._closed:
             for panel in self.panels:
                 panel.raise_to_top()
@@ -147,7 +155,8 @@ class MonitorShell:
     def _add_panel(self, index: int, geo: PanelGeometry, theme) -> EdgePanel:
         """Create a panel after startup and re-raise it above the strips, like the first ones."""
         panel = self._make_panel(index, geo, theme)
-        GLib.timeout_add(RAISE_DELAY_MS, self._raise_one, panel)
+        for delay in raise_delays()[:1]:
+            GLib.timeout_add(delay, self._raise_one, panel)
         return panel
 
     def _release(self, window) -> None:
@@ -173,8 +182,7 @@ class MonitorShell:
         for change in changes:
             i = change.index
             if change.kind == "restyle":
-                for corner in self.corners:
-                    corner.set_theme(theme)
+                self.canvas.set_theme(theme)
                 for panel in self.panels:
                     panel.apply_theme(theme)
             elif change.kind == "panel-state":

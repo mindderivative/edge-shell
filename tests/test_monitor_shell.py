@@ -16,6 +16,13 @@ class FakeWindow:
         self.raises = raises
         self.raised = 0
         self.title = "w"
+        self.themes = []
+
+    def set_theme(self, theme):
+        self.themes.append(theme)
+
+    def apply_theme(self, theme):
+        self.themes.append(theme)
 
     def destroy(self):
         self.destroyed = True
@@ -34,7 +41,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.name = "HDMI-A-1"
     shell.windows = list(windows)
     shell.panels = list(panels)
-    shell.corners = []
+    shell.canvas = FakeWindow()
     shell._closed = False
     shell._unregister = unregister or (lambda _w: None)
     return shell
@@ -108,9 +115,10 @@ def test_raise_is_a_noop_after_close():
 
 
 def test_init_schedules_primary_and_fallback_raise(monkeypatch, make_config, fake_registry):
+    monkeypatch.delenv("EDGE_SHELL_RAISE_MS", raising=False)
     timers = []
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
-    monkeypatch.setattr(mon_mod, "ScreenCorner", FakeWindow)
+    monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeWindow)
     monkeypatch.setattr(mon_mod, "widget_class", lambda _w: FakeWindow)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     monkeypatch.setattr(
@@ -133,12 +141,65 @@ def test_init_schedules_primary_and_fallback_raise(monkeypatch, make_config, fak
 def test_init_without_panels_schedules_no_raise(monkeypatch, make_config):
     timers = []
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
-    monkeypatch.setattr(mon_mod, "ScreenCorner", FakeWindow)
+    monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeWindow)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: timers.append(a) or 1)
     cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge"}})
     mon_mod.MonitorShell("HDMI-A-1", object(), cfg, lambda w: None)
     assert timers == []
+
+
+# ---- shape canvas -------------------------------------------------------------------
+
+
+class Built(FakeWindow):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.kind = kwargs.get("kind")
+
+
+def build(monkeypatch, make_config, monitors):
+    monkeypatch.setattr(mon_mod, "ShapeCanvas", lambda *a, **k: Built(kind="canvas"))
+    monkeypatch.setattr(mon_mod, "FrameEdge", lambda *a, **k: Built(kind="strip"))
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: lambda *a, **k: Built(kind="panel"))
+    monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
+    monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
+    cfg = make_config(monitors=monitors)
+    tracked = []
+    shell = mon_mod.MonitorShell("HDMI-A-1", object(), cfg, tracked.append)
+    return shell, cfg, tracked
+
+
+def test_canvas_is_created_first_then_strips_then_panels(monkeypatch, make_config, fake_registry):
+    _, _, tracked = build(
+        monkeypatch, make_config, {"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock"}]}}
+    )
+    assert [w.kind for w in tracked] == ["canvas"] + ["strip"] * 4 + ["panel"]
+
+
+def test_restyle_redraws_the_canvas_with_the_monitor_theme(monkeypatch, make_config):
+    from shell.config.diff import Change
+
+    shell, _, _ = build(monkeypatch, make_config, {"HDMI-A-1": {"shell": "edge"}})
+    new = make_config(
+        theme={"shadow": {"enabled": True}},
+        monitors={"HDMI-A-1": {"shell": "edge", "theme": {"shadow": {"elevation": 90}}}},
+    )
+    shell.apply(new, [Change("restyle", "HDMI-A-1")])
+    (theme,) = shell.canvas.themes
+    assert theme.shadow.enabled and theme.shadow.elevation == 90
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, (500, 2000)),
+        ({"EDGE_SHELL_RAISE_MS": "0"}, ()),
+        ({"EDGE_SHELL_RAISE_MS": "x"}, (500, 2000)),
+    ],
+)
+def test_raise_delays_switch(env, expected):
+    assert mon_mod.raise_delays(env) == expected
 
 
 # ---- EdgePanel.raise_to_top (plain function called on a stand-in) --------------------

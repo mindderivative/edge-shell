@@ -1,23 +1,24 @@
-"""Frame strips and rounded screen corners (GTK / Fabric windows)."""
+"""Zone-reserving frame strips (GTK / Fabric windows). The frame itself is drawn by the shape
+canvas (shell/canvas/canvas.py); these strips are invisible and take no input."""
 
 from __future__ import annotations
 
-import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from fabric.widgets.box import Box
 from fabric.widgets.wayland import WaylandWindow
-from gi.repository import Gtk, GtkLayerShell
 
 from shell.config.models import Theme
-from shell.draw import draw_screen_corner
 from shell.gdk_util import monitor_index
-from shell.theme import hex_to_rgba
 
 EDGES = ("top", "bottom", "left", "right")
-CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+# Below the canvas and the panels (both on "top"): an invisible strip can then never cover a
+# panel, whatever order KWin stacks same-layer surfaces in. Exclusive zones count on every
+# layer (verified at Gate 1; the fallback, plan Task 11 A, moves them back to "top").
+STRIP_LAYER = "bottom"
 
 _STRIP_ANCHOR = {
     "top": "top left right",
@@ -27,62 +28,30 @@ _STRIP_ANCHOR = {
 }
 
 
+def strip_window(edge: str) -> dict:
+    """Layer-shell setup of one strip: reserves its size ("auto"; NOT "normal", which reserves
+    1 px) and takes no input (pass_through: Fabric re-applies it after every allocate)."""
+    return {
+        "layer": STRIP_LAYER,
+        "anchor": _STRIP_ANCHOR[edge],
+        "exclusivity": "auto",
+        "keyboard_mode": "none",
+        "pass_through": True,
+    }
+
+
 class FrameEdge(WaylandWindow):
-    """One side of the frame. The only surface that reserves screen space."""
+    """One side of the frame: reserves T px so maximized windows stop at the frame."""
 
     def __init__(self, edge: str, monitor, theme: Theme, scope: str):
         horizontal = edge in ("top", "bottom")
         t = theme.thickness
         # Fabric's `monitor` property is an int; a Gdk.Monitor object is silently ignored.
         super().__init__(
-            layer="top",
-            anchor=_STRIP_ANCHOR[edge],
-            exclusivity="auto",  # NOT "normal": that reserves 1 px
-            keyboard_mode="none",
+            **strip_window(edge),
             monitor=monitor_index(monitor),
             title=f"edge-shell-frame-{edge}",
             style_classes=[scope],
             child=Box(name="frame-strip", size=(-1, t) if horizontal else (t, -1)),
             all_visible=True,
         )
-
-
-class ScreenCorner(WaylandWindow):
-    """The rounded desktop corner: click-through, placed just inside the frame."""
-
-    def __init__(self, corner: str, monitor, theme: Theme, scope: str):
-        vertical, horizontal = corner.split("-")
-        t, r = theme.thickness, theme.radius
-        area = Gtk.DrawingArea()
-        area.set_size_request(r, r)
-        # Fabric's `monitor` property is an int; a Gdk.Monitor object is silently ignored.
-        super().__init__(
-            layer="top",
-            anchor=f"{vertical} {horizontal}",
-            margin=f"{t}px {t}px {t}px {t}px",
-            exclusivity="none",
-            pass_through=True,
-            monitor=monitor_index(monitor),
-            title=f"edge-shell-corner-{corner}",
-            style_classes=[scope],
-            child=area,
-            all_visible=True,
-        )
-        GtkLayerShell.set_exclusive_zone(self, -1)  # place by margin, not by other zones
-        self._corner = corner
-        self._radius = r
-        self._rgba = hex_to_rgba(theme.frame)
-        self._area = area
-        area.connect("draw", self._on_draw)
-
-    def set_theme(self, theme: Theme) -> None:
-        self._rgba = hex_to_rgba(theme.frame)
-        self._area.queue_draw()
-
-    def _on_draw(self, _area, cr) -> bool:
-        cr.save()
-        cr.set_operator(cairo.OPERATOR_CLEAR)
-        cr.paint()
-        cr.restore()
-        draw_screen_corner(cr, self._corner, self._radius, self._rgba)
-        return False

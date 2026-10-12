@@ -45,7 +45,6 @@ def to_css(theme: Theme, scope: str) -> str:
     return f"""\
 window{s}, {s} * {{ all: unset; font-family: {_font_stack(theme.font)}; color: {c["text"]}; }}
 window{s} {{ background-color: transparent; }}
-{s} #frame-strip {{ background-color: {c["frame"]}; }}
 {s} #handle {{ min-width: 0; min-height: 0; padding: 0; }}
 {s} .handle-dot {{ min-width: 3px; min-height: 3px; border-radius: 50%; background-color: {c["handle"]}; }}
 {s} #handle:hover .handle-dot, {s} #handle:focus .handle-dot {{ background-color: {c["handle_hover"]}; }}

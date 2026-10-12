@@ -24,8 +24,9 @@ def test_css_font_stack_quotes_names_but_not_generics(make_config):
 
 
 def test_css_is_scoped_and_uses_theme_colors(make_config):
-    css = to_css(make_config(theme={"frame": "#112233"}).theme, "mon-x")
-    assert ".mon-x #frame-strip { background-color: #112233; }" in css
+    css = to_css(make_config(theme={"accent": "#112233"}).theme, "mon-x")
+    assert ".mon-x .active { color: #112233; }" in css
+    assert "frame-strip" not in css  # the strips are invisible; the canvas draws the frame
     assert "window.mon-x" in css
     for line in css.splitlines():
         if "{" in line and not line.startswith("}"):
@@ -33,7 +34,7 @@ def test_css_is_scoped_and_uses_theme_colors(make_config):
 
 
 def test_two_monitors_do_not_share_rules(make_config):
-    cfg = make_config(monitors={"HDMI-A-1": {"theme": {"frame": "#111111"}}})
+    cfg = make_config(monitors={"HDMI-A-1": {"theme": {"accent": "#111111"}}})
     a = to_css(cfg.theme_for("HDMI-A-1"), scope_class("HDMI-A-1"))
     b = to_css(cfg.theme_for("DP-1"), scope_class("DP-1"))
     assert "#111111" in a and "#111111" not in b
