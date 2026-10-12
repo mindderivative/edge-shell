@@ -26,7 +26,12 @@ def surface_size(
 
 
 def join_radius(d: float, radius: int) -> float:
-    return min(float(radius), max(0.0, float(d)))
+    """Radius of the body's convex corners and the concave joins: min(R, d/2).
+
+    Half the depth, so the convex corner and the concave join stack into a smooth
+    S-curve (they need 2r of height) instead of overlapping while the panel is shallow.
+    """
+    return min(float(radius), max(0.0, float(d)) / 2)
 
 
 def to_canvas(edge: Edge, u: float, v: float, along: float, across: float) -> tuple[float, float]:

@@ -64,10 +64,32 @@ def test_collapsed_panel_is_just_the_frame_strip(edge):
 
 @pytest.mark.parametrize("edge", EDGES)
 def test_shallow_panel_joins_shrink_to_its_depth(edge):
-    s = render_panel(edge, 7)  # join radius 7: square x 7..14, y 43..50
+    s = render_panel(edge, 7)  # join radius 3.5: square x 10.5..14, y 46.5..50
     assert canon_alpha(s, edge, 13.5, 49.5) > FILLED
-    assert canon_alpha(s, edge, 7.5, 43.5) < EMPTY
-    assert canon_alpha(s, edge, 3.5, 46.5) < EMPTY  # nothing sticks out past the shallow join
+    assert canon_alpha(s, edge, 10.5, 46.5) < EMPTY  # circle centre stays clear
+    assert canon_alpha(s, edge, 7.5, 48.5) < EMPTY  # nothing sticks out past the shallow join
+    assert canon_alpha(s, edge, 12.5, 44.5) < EMPTY  # nor above it
+
+
+SILHOUETTE_DEPTHS = [2, 4, 7, 10, 14, 20, 27, 28, 40]
+
+
+@pytest.mark.parametrize("edge", EDGES)
+@pytest.mark.parametrize("d", SILHOUETTE_DEPTHS)
+def test_silhouette_is_one_contiguous_symmetric_run(edge, d):
+    import math
+
+    s = render_panel(edge, d)
+    span = L + 2 * R
+    first_row = math.ceil(DEPTH - d)
+    for v in range(first_row, DEPTH):  # rows strictly above the frame line (v < across - T)
+        mask = [canon_alpha(s, edge, u + 0.5, v + 0.5) > 128 for u in range(span)]
+        runs = sum(1 for u in range(span) if mask[u] and (u == 0 or not mask[u - 1]))
+        assert runs == 1, f"row {v}: {runs} runs"
+        for u in range(span):
+            mirror = span - 1 - u
+            near = mask[max(0, mirror - 1) : mirror + 2]
+            assert mask[u] in near, f"row {v}: asymmetric at u={u}"
 
 
 @pytest.mark.parametrize(
