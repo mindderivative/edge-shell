@@ -1,0 +1,17 @@
+# Defaults for every key. The user config (~/.config/edge-shell/config.toml) is overlaid on this.
+# A monitor that is not listed behaves as shell = "plasma" (Edge Shell builds nothing there).
+
+[theme]
+frame = "#0b0c0d"
+text = "#e6e8ea"
+text_secondary = "#9ba0a6"
+accent = "#8fd3b6"
+handle = "#7b7f84"
+handle_hover = "#e6e8ea"
+surface_hover = "#1d2024"
+thickness = 10      # T, px
+radius = 14         # R, px
+peek = 14           # hover peek depth, px
+hover_zone = 16     # invisible hover target past the frame, px
+duration_ms = 280
+font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]
