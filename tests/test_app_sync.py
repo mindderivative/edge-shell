@@ -15,6 +15,7 @@ class FakeShell:
     closed: list = []
     applied: list = []
     fail_apply: set = set()
+    layout_warnings: list = []
 
     def __init__(self, name, monitor, config, register, unregister=None):
         self.name = name
@@ -302,3 +303,48 @@ def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
     argv = calls[0]
     assert argv[0] == "notify-send"
     assert argv.index("--") < argv.index("--urgency=critical looks like an option")
+
+
+def test_layout_warnings_are_notified_when_a_shell_opens(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
+    )
+    monkeypatch.setattr(FakeShell, "layout_warnings", ["monitors.HDMI-A-1.panels.1 (dock): x"])
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes == [("Panels adjusted", "monitors.HDMI-A-1.panels.1 (dock): x")]
+
+
+def test_no_notification_without_layout_warnings(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_layout_warnings_are_notified_only_when_they_change(renv, monkeypatch):
+    app, _, _, _, _ = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    shell = app.shells["HDMI-A-1"]
+    for warnings in (["w1"], ["w1"], ["w1", "w2"], [], ["w1"]):
+        shell.layout_warnings = warnings
+        app._report_layout("HDMI-A-1", shell)
+    assert notes == ["w1", "w1\nw2", "w1"]  # unchanged: silent; cleared: silent; back: again
+
+
+def test_unrelated_reload_does_not_repeat_the_layout_notification(renv, monkeypatch):
+    app, store, _, _, make_config = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    app.shells["HDMI-A-1"].layout_warnings = ["w"]
+    app._report_layout("HDMI-A-1", app.shells["HDMI-A-1"])
+    store.pending = make_config(
+        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+    )
+    app.reload()
+    assert len(notes) == 1

@@ -42,6 +42,7 @@ class EdgeShellApp:
         self._watcher: ConfigWatcher | None = None
         self._early: list = []  # windows created before the Application exists
         self._sync_timers: list[int] = []  # pending hot-plug sync timer ids
+        self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
 
     @property
     def config(self):
@@ -79,6 +80,7 @@ class EdgeShellApp:
             self.shells[name] = MonitorShell(
                 name, desired[name], self.config, self.register_window, self.unregister_window
             )
+            self._report_layout(name, self.shells[name])
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
@@ -156,6 +158,7 @@ class EdgeShellApp:
                 continue
             try:
                 self.shells[name].apply(new, items)
+                self._report_layout(name, self.shells[name])
             except Exception:
                 log.exception("applying config to %s failed, rebuilding it", name)
                 self._report_error(f"{name}: could not apply the config in place; rebuilt it")
@@ -169,14 +172,25 @@ class EdgeShellApp:
             self.sync_monitors()  # rebuild the dropped shells from the new config
         self.refresh_css()
 
+    def _report_layout(self, name: str, shell) -> None:
+        """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but
+        only when that monitor's warnings changed, not on every unrelated reload."""
+        warnings = list(shell.layout_warnings)
+        if warnings == self._layout_reported.get(name, []):
+            return
+        self._layout_reported[name] = warnings
+        if warnings:
+            self._notify("Panels adjusted", "\n".join(warnings))
+
+    def _notify(self, title: str, message: str) -> None:
+        try:
+            subprocess.Popen(["notify-send", "-a", "Edge Shell", "--", title, message[:400]])
+        except OSError:
+            pass  # no notify-send; the log line is enough
+
     def _report_error(self, message: str) -> None:
         log.error("config not applied (keeping the previous config):\n%s", message)
-        try:
-            subprocess.Popen(
-                ["notify-send", "-a", "Edge Shell", "--", "Config not applied", message[:400]]
-            )
-        except OSError:
-            pass  # no notify-send; the log line above is enough
+        self._notify("Config not applied", message)
 
     def run(self) -> int:
         """Run until quit; returns the process exit code."""
