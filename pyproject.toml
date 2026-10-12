@@ -1,0 +1,24 @@
+[project]
+name = "edge-shell"
+version = "0.1.0"
+description = "Customizable Fabric desktop shell for KDE Plasma (Wayland)"
+requires-python = ">=3.12"
+# Fabric (Fabric-Development/fabric) is installed from git into global-base; the PyPI
+# package named "fabric" is a different project. PyGObject must stay below 3.52.
+dependencies = ["pydantic>=2.6", "PyGObject<3.52", "pycairo"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs", ".claude", ".superpowers", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E402"]  # gi.require_version() must precede imports in GTK modules

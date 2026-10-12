@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Runs the project's Python (the shared global-base venv). Override with EDGE_SHELL_PYTHON.
+exec "${EDGE_SHELL_PYTHON:-/home/phil/Projects/pyDev/pyEnvs/global-base/bin/python}" "$@"
