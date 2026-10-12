@@ -8,7 +8,8 @@ import subprocess
 import gi
 
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, GtkLayerShell
 
 from shell.config.models import Config
 from shell.frame import CORNERS, EDGES, FrameEdge, ScreenCorner
@@ -16,6 +17,11 @@ from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
+
+
+def _geometry(monitor) -> tuple[int, int, int, int]:
+    g = monitor.get_geometry()
+    return (g.x, g.y, g.width, g.height)
 
 
 def gdk_monitors() -> list[Gdk.Monitor]:
@@ -80,6 +86,18 @@ class MonitorShell:
     def _track(self, window) -> None:
         self.windows.append(window)
         self._register(window)
+        self._check_monitor(window)
+
+    def _check_monitor(self, window) -> None:
+        got = GtkLayerShell.get_monitor(window)
+        want = _geometry(self.monitor)
+        if got is None or _geometry(got) != want:
+            log.error(
+                "window %s is not on the requested monitor: layer-shell has %s, wanted %s",
+                window.get_title(),
+                _geometry(got) if got else None,
+                want,
+            )
 
     def close(self) -> None:
         for window in self.windows:

@@ -13,6 +13,7 @@ from gi.repository import Gtk, GtkLayerShell
 
 from shell.config.models import Theme
 from shell.draw import draw_screen_corner
+from shell.gdk_util import monitor_index
 from shell.theme import hex_to_rgba
 
 EDGES = ("top", "bottom", "left", "right")
@@ -32,12 +33,13 @@ class FrameEdge(WaylandWindow):
     def __init__(self, edge: str, monitor, theme: Theme, scope: str):
         horizontal = edge in ("top", "bottom")
         t = theme.thickness
+        # Fabric's `monitor` property is an int; a Gdk.Monitor object is silently ignored.
         super().__init__(
             layer="top",
             anchor=_STRIP_ANCHOR[edge],
             exclusivity="auto",  # NOT "normal": that reserves 1 px
             keyboard_mode="none",
-            monitor=monitor,
+            monitor=monitor_index(monitor),
             title=f"edge-shell-frame-{edge}",
             style_classes=[scope],
             child=Box(name="frame-strip", size=(-1, t) if horizontal else (t, -1)),
@@ -53,13 +55,14 @@ class ScreenCorner(WaylandWindow):
         t, r = theme.thickness, theme.radius
         area = Gtk.DrawingArea()
         area.set_size_request(r, r)
+        # Fabric's `monitor` property is an int; a Gdk.Monitor object is silently ignored.
         super().__init__(
             layer="top",
             anchor=f"{vertical} {horizontal}",
             margin=f"{t}px {t}px {t}px {t}px",
             exclusivity="none",
             pass_through=True,
-            monitor=monitor,
+            monitor=monitor_index(monitor),
             title=f"edge-shell-corner-{corner}",
             style_classes=[scope],
             child=area,
