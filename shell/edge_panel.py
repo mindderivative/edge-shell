@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import cairo
 import gi
 
@@ -223,7 +225,53 @@ class EdgePanel(WaylandWindow):
         )
         size = (HANDLE_DEPTH, HANDLE_LENGTH) if vertical else (HANDLE_LENGTH, HANDLE_DEPTH)
         handle = Button(name="handle", child=dots, size=size, on_clicked=self._on_clicked)
+        handle.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+        )
+        handle.connect("button-press-event", self._on_press)
+        handle.connect("motion-notify-event", self._on_motion)
+        handle.connect("button-release-event", self._on_release)
         return handle
+
+    # ---- drag ------------------------------------------------------------------
+    def _on_press(self, _widget, event) -> bool:
+        if event.button != 1:
+            return False
+        self._press = (event.x_root, event.y_root)
+        self._press_depth = self._d
+        self._dragging = False
+        self._suppress_click = False
+        return False  # let the button track the press so a plain click still toggles
+
+    def _on_motion(self, _widget, event) -> bool:
+        if self._press is None:
+            return False
+        dx = event.x_root - self._press[0]
+        dy = event.y_root - self._press[1]
+        if not self._dragging:
+            if panel_state.is_click(math.hypot(dx, dy)):
+                return False
+            self._dragging = True
+            self._suppress_click = True
+            self._hovered = False
+        delta = dy if geometry.is_horizontal(self.spec.edge) else dx
+        d = panel_state.drag_depth(self._press_depth, delta, self.spec.depth, self.spec.edge)
+        self._tween.jump_to(d)  # follow the pointer exactly; cancels any running animation
+        fraction = d / self.spec.depth
+        self._fade.jump_to(max(0.0, (fraction - 0.6) / 0.4))
+        return True
+
+    def _on_release(self, _widget, event) -> bool:
+        was_dragging = self._dragging
+        self._press = None
+        self._dragging = False
+        if not was_dragging:
+            return False  # a plain click: the button's "clicked" signal toggles
+        self._extended = panel_state.snap_extended(self._d, self.spec.depth)
+        self._retarget()
+        return True
 
     def _place_handle(self, d: float) -> None:
         inset = max(0, int(self._theme.thickness + d - HANDLE_DEPTH))  # rides the inner edge
