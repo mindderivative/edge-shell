@@ -1,6 +1,8 @@
+import re
+
 import pytest
 
-from shell.theme import hex_to_rgba, scope_class, to_css
+from shell.theme import css_color, hex_to_rgba, scope_class, to_css
 
 
 def test_hex_to_rgba():
@@ -35,3 +37,43 @@ def test_two_monitors_do_not_share_rules(make_config):
     a = to_css(cfg.theme_for("HDMI-A-1"), scope_class("HDMI-A-1"))
     b = to_css(cfg.theme_for("DP-1"), scope_class("DP-1"))
     assert "#111111" in a and "#111111" not in b
+
+
+# ---- alpha colours (#rrggbbaa) ----------------------------------------------------
+
+
+def test_hex_to_rgba_reads_the_alpha_digits():
+    expected = (0x8F / 255, 0xD3 / 255, 0xB6 / 255, 0x80 / 255)
+    assert hex_to_rgba("#8fd3b680") == pytest.approx(expected)
+    assert hex_to_rgba("#000000ff") == (0.0, 0.0, 0.0, 1.0)
+    assert hex_to_rgba("#ffffff80", 0.5) == pytest.approx((1.0, 1.0, 1.0, 0x80 / 255 * 0.5))
+
+
+@pytest.mark.parametrize("bad", ["", "#fff", "#8fd3b", "#8fd3b6800"])
+def test_hex_to_rgba_rejects_other_lengths(bad):
+    with pytest.raises(ValueError):
+        hex_to_rgba(bad)
+
+
+def test_css_color_keeps_six_digits_and_converts_eight():
+    assert css_color("#8fd3b6") == "#8fd3b6"
+    assert css_color("#8fd3b680") == "rgba(143, 211, 182, 0.502)"
+    assert css_color("#000000ff") == "rgba(0, 0, 0, 1.000)"
+
+
+def test_css_never_contains_eight_digit_hex(make_config):
+    css = to_css(make_config(theme={"accent": "#8fd3b680", "text": "#e6e8eaff"}).theme, "mon-x")
+    assert ".mon-x .active { color: rgba(143, 211, 182, 0.502); }" in css
+    assert re.search(r"#[0-9a-fA-F]{8}\b", css) is None
+
+
+def test_every_css_colour_parses_in_gtk3(make_config):
+    gi = pytest.importorskip("gi")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk
+
+    theme = make_config(theme={"accent": "#8fd3b680", "handle": "#7b7f84ff"}).theme
+    values = re.findall(r"(?:color|background-color): ([^;]+);", to_css(theme, "mon-x"))
+    assert len(values) >= 6
+    for value in (v for v in values if v != "transparent"):
+        assert Gdk.RGBA().parse(value), value

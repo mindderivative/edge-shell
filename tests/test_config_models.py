@@ -101,3 +101,15 @@ def test_font_override_with_bad_name_fails_at_load(make_config):
 
 def test_ordinary_font_names_accepted(make_config):
     assert make_config(theme={"font": ["JetBrains Mono", "Hack Nerd Font Mono"]})
+
+
+def test_eight_digit_colour_accepted_and_lowercased(make_config):
+    assert make_config(theme={"frame": "#0B0C0D80"}).theme.frame == "#0b0c0d80"
+
+
+@pytest.mark.parametrize("bad", ["#0b0c0d8", "#0b0c0d800", "0b0c0d80", "#0b0c0g80"])
+def test_bad_alpha_colour_rejected_with_key_path(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"frame": bad})
+    assert exc.value.errors()[0]["loc"] == ("theme", "frame")
+    assert "#rrggbbaa" in str(exc.value)

@@ -19,9 +19,9 @@ Edge = Literal["top", "bottom", "left", "right"]
 PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
 
-_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
-_COLOR_FIELDS = (
+COLOR_FIELDS = (
     "frame",
     "text",
     "text_secondary",
@@ -40,6 +40,12 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def check_hex(value: str) -> str:
+    if not _HEX.match(value):
+        raise ValueError("must be a #rrggbb or #rrggbbaa hex color")
+    return value.lower()
+
+
 class Theme(_Strict):
     frame: str
     text: str
@@ -55,12 +61,10 @@ class Theme(_Strict):
     duration_ms: Annotated[int, Field(ge=0, le=5000)]
     font: Annotated[list[str], Field(min_length=1)]
 
-    @field_validator(*_COLOR_FIELDS)
+    @field_validator(*COLOR_FIELDS)
     @classmethod
     def _hex(cls, value: str) -> str:
-        if not _HEX.match(value):
-            raise ValueError("must be a #rrggbb hex color")
-        return value.lower()
+        return check_hex(value)
 
     @field_validator("font")
     @classmethod
