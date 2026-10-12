@@ -6,4 +6,5 @@ around each monitor and grows panels out of that frame. It runs alongside
 Plasma and does not replace it.
 
 Status: design phase. See the
-[design spec](docs/superpowers/specs/2026-10-11-edge-shell-design.md).
+[design spec](docs/superpowers/specs/2026-10-11-edge-shell-design.md) and the
+[implementation plan](docs/superpowers/plans/2026-10-11-edge-shell-core.md).
