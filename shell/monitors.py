@@ -9,7 +9,7 @@ import gi
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gdk, GtkLayerShell
+from gi.repository import Gdk, GLib, GtkLayerShell
 
 from shell.config.models import Config
 from shell.edge_panel import EdgePanel
@@ -20,6 +20,10 @@ from shell.registry import panels_for, widget_class
 from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
+
+# Empirical: re-mapping at 50 ms still left the strips on top (KWin restacks them when it
+# first configures them); 500 ms is reliably after that (checked by screenshot).
+RAISE_DELAY_MS = 500
 
 
 def _geometry(monitor) -> tuple[int, int, int, int]:
@@ -88,6 +92,21 @@ class MonitorShell:
             self._track(window)
         for index, geo in enumerate(panels_for(config, name)):
             self.panels.append(self._make_panel(index, geo, theme))
+        if self.panels:
+            self._raise_tries = 0
+            GLib.timeout_add(RAISE_DELAY_MS, self._raise_panels)
+
+    def _raise_panels(self) -> bool:
+        """Once the frame strips are mapped, re-map panels so they stack above them."""
+        if not self.panels:  # closed meanwhile
+            return False
+        self._raise_tries += 1
+        strips = self.windows[: len(EDGES)]
+        if not all(w.get_mapped() for w in strips) and self._raise_tries < 40:
+            return True
+        for panel in self.panels:
+            panel.raise_to_top()
+        return False
 
     def _make_panel(self, index: int, geo: PanelGeometry, theme) -> EdgePanel:
         panel = widget_class(geo.widget)(geo, theme, self.monitor, index, self._scope)

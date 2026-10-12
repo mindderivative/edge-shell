@@ -103,6 +103,17 @@ class EdgePanel(WaylandWindow):
         self._hovered = False
         self._retarget()
 
+    def raise_to_top(self) -> None:
+        """Re-map the window so the compositor stacks it above the frame strips.
+
+        Same layer, so stacking follows map order; a panel's handle sits inside the
+        strip band when collapsed and is hidden if a strip lands above it.
+        """
+        self.hide()
+        self.show_all()
+        self._last_rect = None
+        self._update_input_region(self._d)
+
     def apply_theme(self, theme: Theme) -> None:
         """Colors only; geometry changes rebuild the panel instead."""
         self._theme = theme
