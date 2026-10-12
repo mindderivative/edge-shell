@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editor / local tooling (machine-specific)
+.vscode/
+.claude/settings.local.json
+
+# Local config (shell reads ~/.config/edge-shell/ at runtime)
+config.local.toml
