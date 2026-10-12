@@ -340,3 +340,34 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
 - Models: `PanelConfig` gains `align`, `offset`, `length: int | "fill" | "content" | str-percent`, `min_length`, `max_length`; `pos` is kept as a deprecated alias for start-aligned offset until removed.
 - The free span depends on the monitor extent, so geometry/scale changes (see README limitation) must trigger a re-layout; the same hook should handle that known gap.
 - Tests: headless unit tests for the layout function (align/offset/fill/content/percent/min/max/clamping/corner clearance) plus a render test for a panel at the end of an edge next to the corner piece.
+
+## 18. Planned: frame/panel border and shadow (drawing architecture)
+
+Raised by Phil after the core PR; requirements are Phil's, the architecture options are the controller's analysis and need a spike before a decision.
+
+**Requirements**
+
+- **Inner border:** a stroke along the *inner* edge of the frame (the edge facing the desktop) that flows seamlessly around the rounded screen corners, down into each panel's joins, along the panel body, and back out, as one continuous line. Configurable `width` (px) and `color`.
+- **Shadow:** a soft shadow cast by the frame and by the panels onto the desktop, as one smooth shape that flows into the panels' joins. Configurable `color`, `opacity`, `elevation` (offset/blur), and related shape controls (e.g. spread). It must **move with the animation**: as a panel's depth changes, its border and shadow follow it every frame.
+- **Opt-in/opt-out:** border and shadow are independent toggles (`enabled`), off by default so today's look is unchanged; overridable per monitor via the theme, and per panel later.
+
+**Why this is an architecture decision.** Today the outline is drawn by separate windows (CSS frame strips, cairo screen corners, one cairo window per panel). A border only reads as one line if every piece hands off exactly where the next begins, and a shadow of a *union* of shapes is not the sum of per-window shadows: overlapping per-window shadows darken twice at joins and show seams, and every window would also have to grow by the shadow extent and animate it.
+
+**Options**
+
+- **A. Keep per-window drawing** and add border/shadow per piece: strips, corners and panels each draw their part, with matching end caps. Smallest change, but seam-prone (the same class of problem as the spec's seam risk), double-darkened shadows at overlaps, and every window must grow by the shadow extent.
+- **B. One click-through shape canvas per monitor (recommended):** a single monitor-sized, input-transparent layer surface draws the frame, corners and all panel shapes as one outline, plus the border stroke and the shadow, in one cairo pass. Panels stop drawing their own bodies and become content/handle/input windows stacked above the canvas, reading their current depth from a shared per-panel value. This is the single-canvas approach already named as the fallback in 5.1. Seams are impossible by construction (one fill, one stroke), the shadow is of the union, border and shadow animate for free with depth, and the panel-over-strip stacking workaround (`raise_to_top`) disappears because the canvas is a single surface under all content windows. Costs: a larger refactor (`EdgePanel` loses its draw routine; depth is shared with the canvas; stacking and input regions change) and per-frame redraw cost of a large surface.
+
+**Shadow rendering note.** Cairo has no blur, but every shape here is axis-aligned rectangles and circular arcs, so the shadow can be built analytically: linear gradients with multi-stop Gaussian-like falloff along straight edges and radial gradients at rounded corners and joins, combined without double-darkening. No pixel blur is needed. Redraw is limited to the damaged region (the animating panel's bounding box plus the shadow extent).
+
+**Spike required before choosing B (throwaway scripts, then a report):**
+1. Can one monitor-sized transparent layer surface redraw a panel's bounding box plus shadow at 60 fps on this machine (damage regions, cairo software rendering)?
+2. Does the union shadow from gradients look right at joins and corners (render tests plus a visual check by Phil)?
+3. Stacking: does a click-through canvas under per-panel content windows stay below them and above the desktop on KWin, without needing the raise workaround?
+
+**Design implications**
+
+- Config: `[theme.border]` (`enabled`, `width`, `color`) and `[theme.shadow]` (`enabled`, `color`, `opacity`, `elevation`, `blur`, `spread`), all optional, defaults off; per-monitor overrides through the existing theme-override mechanism.
+- Pure drawing layer: `draw_outline(cr, shapes, border, shadow)` taking resolved geometry for the frame and each panel at their current depth; headless pixel tests like `draw.py`'s today.
+- Interplay: panel anchoring/sizing (section 17) produces the resolved panel rectangles the canvas draws; handle customization (section 15) stays on the content windows; layout (section 16) feeds the same resolved rectangles.
+- Reload: border/shadow changes are colour/parameter updates (a canvas redraw), not window rebuilds.
