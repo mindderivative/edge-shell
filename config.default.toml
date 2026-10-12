@@ -15,3 +15,15 @@ peek = 14           # hover peek depth, px
 hover_zone = 16     # invisible hover target past the frame, px
 duration_ms = 280
 font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]
+
+# Inner border along the frame and panel outline (spec section 18). Opt-in.
+[theme.border]
+enabled = false
+width = 2               # px, drawn on the frame side of the outline
+color = "#8fd3b6ff"     # #rrggbb or #rrggbbaa (the alpha makes it translucent)
+
+# Uniform shadow of the frame and panels onto the desktop. Opt-in.
+[theme.shadow]
+enabled = false
+elevation = 50          # 0-100 %; 100 % reaches 48 px
+color = "#00000080"     # #rrggbb or #rrggbbaa; the alpha is the shadow's strength
