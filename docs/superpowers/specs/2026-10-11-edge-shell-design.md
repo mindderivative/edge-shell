@@ -288,3 +288,25 @@ Requested by Phil at Gate D of the core plan. It is not part of the core plan, b
 - Diffing: handle and interaction changes are cheap in-place updates (restyle or flag change), not window rebuilds.
 - Today's code touch points: `EdgePanel._build_handle`, `_place_handle`, the pointer handlers, the `.handle-dot` CSS in `shell/theme.py`, and the `handle`/`handle_hover` theme tokens.
 - The settings window (section 13) exposes these controls.
+
+## 16. Planned: several panels on one edge (layout and separation)
+
+Raised by Phil at Gate E of the core plan.
+
+**Today (core plan, as built).** Each panel positions itself independently: `edge` plus `pos`, the distance in pixels along the edge where the panel body starts; no `pos` means centred. Nothing arranges panels relative to each other and nothing detects overlap: two centred panels on one edge sit on top of each other, and side-by-side placement means hand-computing `pos` values. The default layout avoids this by using a different edge per panel.
+
+**Requirements**
+
+- Several panels can share an edge and be separated predictably, without hand-computed pixel offsets.
+- Each panel can be placed by **alignment slot** (`start`, `center`, `end` of the edge), with an **order** within a slot and a configurable **gap** between neighbours. Explicit `pos` stays available as an override.
+- Overlap is detected and reported (log plus notification, like config errors) instead of silently stacking; the shell still runs.
+- Panels keep their own length and depth; the layout only decides the position along the edge.
+- Corner interaction: the length available to an edge is the monitor extent minus the corner radius on each end, so slotted panels never run into the screen corners.
+
+**Design implications (for the future plan)**
+
+- Config: panel entries gain `align` (default `center`) and optionally `order`; a per-edge/per-monitor `gap` setting; `pos` remains and wins when present.
+- Layout: a pure function `layout_edge(panels, extent, gap, radius) -> {panel: pos}` (no GTK) computes positions per edge, so it is unit-testable like the geometry; `EdgePanel` keeps taking a resolved `pos`.
+- Reload: reordering or changing `align`/`gap` moves panels, which today means rebuilding the affected panels' windows (their surface margin changes); the diff gains a `panel-move` change kind if rebuild flicker proves annoying.
+- Handle placement (section 15) should be relative to the panel body, independent of the slot.
+- The settings window (section 13) exposes slot, order and gap, and shows the overlap warning.
