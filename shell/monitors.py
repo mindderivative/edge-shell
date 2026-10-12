@@ -11,6 +11,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, GLib, GtkLayerShell
 
+from shell.config.diff import Change
 from shell.config.models import Config
 from shell.edge_panel import EdgePanel
 from shell.frame import CORNERS, EDGES, FrameEdge, ScreenCorner
@@ -128,6 +129,47 @@ class MonitorShell:
                 _geometry(got) if got else None,
                 want,
             )
+
+    def _raise_one(self, panel: EdgePanel) -> bool:
+        # The panel may have been rebuilt or removed during the delay: only raise live ones.
+        if panel in self.panels:
+            panel.raise_to_top()
+        return False
+
+    def _add_panel(self, index: int, geo: PanelGeometry, theme) -> EdgePanel:
+        """Create a panel after startup and re-raise it above the strips, like the first ones."""
+        panel = self._make_panel(index, geo, theme)
+        GLib.timeout_add(RAISE_DELAY_MS, self._raise_one, panel)
+        return panel
+
+    def _destroy(self, window) -> None:
+        if window in self.windows:
+            self.windows.remove(window)
+        try:
+            window.destroy()
+        except Exception:
+            log.exception("failed to destroy window on %s", self.name)
+
+    def apply(self, config: Config, changes: list[Change]) -> None:
+        """Apply in-place changes for this monitor (the diff orders adds before removes)."""
+        theme = config.theme_for(self.name)
+        geos = panels_for(config, self.name)
+        for change in changes:
+            i = change.index
+            if change.kind == "restyle":
+                for corner in self.corners:
+                    corner.set_theme(theme)
+                for panel in self.panels:
+                    panel.apply_theme(theme)
+            elif change.kind == "panel-state":
+                self.panels[i].set_state(geos[i].state)
+            elif change.kind == "panel-rebuild":
+                self._destroy(self.panels[i])
+                self.panels[i] = self._add_panel(i, geos[i], theme)
+            elif change.kind == "panel-add":
+                self.panels.append(self._add_panel(i, geos[i], theme))
+            elif change.kind == "panel-remove":
+                self._destroy(self.panels.pop(i))
 
     def close(self) -> None:
         for window in self.windows:
