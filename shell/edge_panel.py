@@ -103,6 +103,15 @@ class EdgePanel(WaylandWindow):
         self._hovered = False
         self._retarget()
 
+    def do_size_allocate(self, alloc) -> None:
+        # Fabric's Window.do_size_allocate resets the input shape to the whole surface
+        # (set_pass_through(False) -> input_shape_combine_region(None)) on EVERY allocate,
+        # which would undo our region after the per-frame margin changes. Re-apply it here.
+        WaylandWindow.do_size_allocate(self, alloc)
+        if hasattr(self, "_theme") and hasattr(self, "_d"):
+            self._last_rect = None
+            self._update_input_region(self._d)
+
     def raise_to_top(self) -> None:
         """Re-map the window so the compositor stacks it above the frame strips.
 
