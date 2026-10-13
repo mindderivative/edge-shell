@@ -86,7 +86,7 @@ def test_default_shapes_fit_the_simulated_surface(size):
     assert layout.warnings == []  # nothing clamped, shrunk or hidden
     assert [(p.pos, p.length) for p in layout.panels] == [(s.pos, s.length) for s in shapes]
     if size == (1920, 1080):  # the registered widget defaults
-        assert [(s.pos, s.length) for s in shapes] == [(680, 560), (876, 168), (638, 300)]
+        assert [(s.pos, s.length) for s in shapes] == [(680, 560), (876, 168), (600, 300)]
 
 
 def test_cli_prints_a_report(capsys):

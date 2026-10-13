@@ -167,7 +167,8 @@ def default_shapes(width: int, height: int) -> list[PanelShape]:
     return [
         PanelShape("bottom", (width - dock) // 2, dock, 64),
         PanelShape("top", (width - 168) // 2, 168, 46),
-        PanelShape("right", height - 142 - bar, bar, 56),  # end-aligned, clear of the dock
+        # end-aligned: the free span ends 38 px (T + R + r) short of the screen edge, then 142 px
+        PanelShape("right", height - 38 - 142 - bar, bar, 56),
     ]
 
 
