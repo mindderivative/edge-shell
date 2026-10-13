@@ -294,8 +294,9 @@ def test_a_fill_without_room_gets_the_floor_and_the_later_neighbour_goes():
     got, warnings = placed(a, fill, c)
     assert got == [(38, 1100), (38 + 1100 + 36, MIN_LENGTH), None]
     assert warnings == [
+        f"monitors.X.panels.1 (f): no room to fill; shown at {MIN_LENGTH} px",
         "monitors.X.panels.2 (c): overlaps monitors.X.panels.1 (f) or leaves less than the "
-        "minimum gap between their joins; not shown"
+        "minimum gap between their joins; not shown",
     ]
 
 
@@ -391,4 +392,51 @@ def test_the_centre_offset_warning_reports_the_position_the_panel_ends_up_at():
     assert warnings[0] == (
         "monitors.X.panels.1 (b): offset 299 would run into a screen corner or a neighbour; "
         "moved to 1199"
+    )
+
+
+# ---- fix round 1: half-pixel joins, stub fills, later-slot offsets ---------------------------
+
+
+def test_fill_room_counts_each_pair_rounded_up_as_the_placement_does():
+    # depth 17 -> r = 8.5: the fill/end pair spaces 16.5 and places 17; the fill must not run
+    # 1 px long into the end panel
+    a = req("a", "top", "start", length=100, depth=16)
+    f = req("f", "top", length="fill", depth=17)
+    c = req("c", "top", "end", length=100, depth=16)
+    assert placed(a, f, c, gap=0) == ([(32, 100), (149, 1622), (1788, 100)], [])
+
+
+def test_a_fill_floored_for_lack_of_room_says_so():
+    got, warnings = placed(req(length="fill", offset=2000), gap=0)
+    assert got == [(1882 - MIN_LENGTH, MIN_LENGTH)]
+    assert warnings == [f"monitors.X.panels.0 (dock): no room to fill; shown at {MIN_LENGTH} px"]
+
+
+def test_a_later_start_panels_own_offset_into_the_corner_gets_the_corner_text():
+    a = req("a", "top", "start", length=100, depth=46)
+    b = req("b", "top", "start", offset=1800, length=800, depth=46)
+    got, warnings = placed(a, b)
+    assert got[1] == (1082, 800)
+    assert warnings == [
+        "monitors.X.panels.1 (b): offset 1800 would run into a screen corner; moved to 1082"
+    ]
+
+
+def test_the_centre_group_total_rounds_every_pair_up_with_half_pixel_joins():
+    # depths 17, 16, 17 -> pair spacing 16.5 each, placed as 17 each: the group is 334 long
+    # and centred on that, not on 333
+    a = req("a", "top", length=100, depth=17)
+    b = req("b", "top", length=100, depth=16)
+    c = req("c", "top", length=100, depth=17)
+    got, warnings = placed(a, b, c, gap=0)
+    assert got == [(793, 100), (910, 100), (1027, 100)] and warnings == []
+    assert got[0][0] - 0 == 1920 - (got[2][0] + got[2][1])  # centred
+
+
+@pytest.mark.parametrize(("offset", "expected"), [(100, (810, 500)), (-100, (610, 500))])
+def test_a_max_length_fill_in_the_centre_still_moves_with_its_offset(offset, expected):
+    assert placed(req("f", "top", length="fill", max_length=500, offset=offset, depth=46)) == (
+        [expected],
+        [],
     )

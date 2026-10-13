@@ -31,6 +31,11 @@ one needs an offset of at least the other's depth + r - R), and `pos` panels dro
 slotted ones. Touching is allowed. A hidden panel keeps the slot space it was given: its
 neighbours do not close up.
 
+Gaps between slot groups: the `gap` is honoured between neighbours inside one slot, but
+between different groups (start / center / end) only the minimum `r1 + r2` is guaranteed,
+not `r1 + r2 + gap` (the center group is pushed clear of the start and end groups by the
+minimum, and a fill sizes against the full spacing). Raised for a decision.
+
 Every warning names the key path (`where`.panels.N (widget)).
 
 `resolve_layout` is the interim rule set (pos only) that MonitorShell still uses; it goes when
@@ -162,7 +167,7 @@ def layout_edge(
     fills = [it for it in seq if it.req.length == "fill"]
     if fills:
         fixed = sum(it.length for it in seq if it.req.length != "fill")
-        gaps = sum(space(a, b) for a, b in pairwise(seq))
+        gaps = sum(math.ceil(space(a, b)) for a, b in pairwise(seq))
         offsets = sum(it.req.offset for it in start + end) + sum(
             max(0, it.req.offset) for it in center[1:]
         )
@@ -171,7 +176,10 @@ def layout_edge(
         room = math.floor(seq[-1].hi - seq[0].lo - fixed - gaps - offsets)
         share, extra = divmod(max(0, room), len(fills))
         for k, it in enumerate(fills):
-            it.length = _fit(it, share + (extra if k == 0 else 0), notes)
+            part = share + (extra if k == 0 else 0)
+            if part < MIN_LENGTH:
+                notes.append((it.index, f"{it.name}: no room to fill; shown at {MIN_LENGTH} px"))
+            it.length = _fit(it, part, notes)
 
     def place(it: _Item, wanted: int, alone: int, align: str) -> int:
         """Clamp a slotted panel; a move is always reported, as the user's own offset running
@@ -204,8 +212,8 @@ def layout_edge(
             cursor = it.pos - space(it, end[k + 1])
     if center:
         head, shift = center[0], center[0].req.offset
-        inner = sum(space(a, b) for a, b in pairwise(center))
-        total = math.ceil(
+        inner = sum(math.ceil(space(a, b)) for a, b in pairwise(center))
+        total = (
             sum(it.length for it in center)
             + inner
             + sum(max(0, it.req.offset) for it in center[1:])
