@@ -49,11 +49,11 @@ class PanelRequest:
 
 @dataclass(frozen=True)
 class PanelGeometry:
-    """A panel with every value resolved (widget defaults + config overrides)."""
+    """A panel resolved by shell.panel_layout: exact body start and length in px."""
 
     widget: str
     edge: Edge
-    pos: int | None
+    pos: int
     length: int
     depth: int
     state: PanelState

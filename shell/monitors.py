@@ -21,9 +21,9 @@ from shell.config.models import Config
 from shell.edge_panel import EdgePanel
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
-from shell.panel_layout import Layout, resolve_layout
+from shell.panel_layout import Layout, layout_monitor
 from shell.panel_spec import PanelGeometry
-from shell.registry import panels_for, widget_class
+from shell.registry import requests_for, widget_class
 from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
@@ -142,12 +142,13 @@ class MonitorShell:
     # ---- panels ---------------------------------------------------------------------------
     def _layout(self, config: Config, theme) -> Layout:
         g = self.monitor.get_geometry()
-        return resolve_layout(
-            panels_for(config, self.name),
+        return layout_monitor(
+            requests_for(config, self.name),
             g.width,
             g.height,
             theme.thickness,
             theme.radius,
+            config.layout_for(self.name).gap,
             where=f"monitors.{self.name}",
         )
 

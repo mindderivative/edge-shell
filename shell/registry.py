@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from shell.config.models import Config, ConfigError, PanelConfig
-from shell.panel_spec import PanelDefaults, PanelGeometry, PanelRequest
+from shell.panel_spec import PanelDefaults, PanelRequest
 
 _WIDGETS: dict[str, type] = {}
 _DEFAULTS: dict[str, PanelDefaults] = {}
@@ -29,30 +29,6 @@ def widget_names() -> list[str]:
 
 def widget_class(name: str) -> type:
     return _WIDGETS[name]
-
-
-def resolve_panel(cfg: PanelConfig) -> PanelGeometry:
-    d = _DEFAULTS.get(cfg.widget)
-    if d is None:
-        known = ", ".join(widget_names()) or "none"
-        raise ConfigError(f"unknown widget {cfg.widget!r} (known: {known})")
-    if cfg.pos is None:
-        pos = d.pos
-    else:
-        pos = None if cfg.pos == "center" else cfg.pos
-    return PanelGeometry(
-        widget=cfg.widget,
-        edge=cfg.edge or d.edge,
-        pos=pos,
-        length=cfg.length or d.length,
-        depth=cfg.depth or d.depth,
-        state=cfg.state or d.state,
-        label=d.label,
-    )
-
-
-def panels_for(config: Config, monitor: str) -> list[PanelGeometry]:
-    return [resolve_panel(p) for p in config.monitor(monitor).panels]
 
 
 def request_for(cfg: PanelConfig) -> PanelRequest:

@@ -37,16 +37,13 @@ not `r1 + r2 + gap` (the center group is pushed clear of the start and end group
 minimum, and a fill sizes against the full spacing). Raised for a decision.
 
 Every warning names the key path (`where`.panels.N (widget)).
-
-`resolve_layout` is the interim rule set (pos only) that MonitorShell still uses; it goes when
-MonitorShell switches to `layout_monitor`.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from itertools import pairwise
 
 from shell import geometry
@@ -324,54 +321,3 @@ def layout_monitor(
         out.append(geo)
     notes.sort(key=lambda note: note[0])  # stable: per panel, in the order they arose
     return Layout(out, [message for _, message in notes])
-
-
-def resolve_layout(
-    geos: list[PanelGeometry],
-    width: int,
-    height: int,
-    thickness: int,
-    radius: int,
-    where: str = "monitor",
-) -> Layout:
-    """Interim rules (pos only). `where` prefixes warnings, e.g. "monitors.HDMI-A-1"."""
-    out: list[PanelGeometry | None] = []
-    warnings: list[str] = []
-    placed: list[tuple[int, PanelGeometry, Box]] = []
-    for i, geo in enumerate(geos):
-        name = f"{where}.panels.{i} ({geo.widget})"
-        extent = width if geometry.is_horizontal(geo.edge) else height
-        r = geometry.join_radius(geo.depth, radius)
-        clearance = thickness + radius + r  # corner clearance at each end of the edge
-        lo, hi = math.ceil(clearance), math.floor(extent - clearance)  # body start / end limits
-        span = hi - lo
-        length = geo.length
-        if length > span:
-            if span < MIN_LENGTH:
-                warnings.append(
-                    f"{name}: the {geo.edge} edge ({extent} px) has no room for it; not shown"
-                )
-                out.append(None)
-                continue
-            warnings.append(
-                f"{name}: length {length} px does not fit the {geo.edge} edge; shrunk to {span}"
-            )
-            length = span
-        wanted = (extent - length) // 2 if geo.pos is None else geo.pos
-        pos = min(max(wanted, lo), hi - length)
-        if geo.pos is not None and pos != geo.pos:
-            warnings.append(f"{name}: pos {geo.pos} would run into a screen corner; moved to {pos}")
-        resolved = replace(geo, pos=pos, length=length)
-        box = _grown_body(resolved, width, height, thickness, r)
-        clash = next((j for j, _g, other in placed if _overlap(box, other)), None)
-        if clash is not None:
-            other = next(g for j, g, _b in placed if j == clash)
-            warnings.append(
-                f"{name}: overlaps {where}.panels.{clash} ({other.widget}) or leaves less than "
-                f"the minimum gap between their joins; not shown"
-            )
-            out.append(None)
-            continue
-        placed.append((i, resolved, box))
-        out.append(resolved)
-    return Layout(out, warnings)

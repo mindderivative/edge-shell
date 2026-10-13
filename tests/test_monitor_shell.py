@@ -173,8 +173,15 @@ def test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback(build):
     assert shell.canvas.depths == [(dock.scene_key, 12.5)]
 
 
+def test_two_centred_panels_on_one_edge_are_both_shown(build):
+    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "length": 300}))
+    a, b = shell.panels
+    assert a.args[0].pos + 560 + 14 + 14 + 8 == b.args[0].pos  # packed: joins + default gap
+    assert shell.layout_warnings == [] and len(shell.canvas.shapes) == 2
+
+
 def test_panel_that_breaks_the_layout_rules_is_hidden_and_reported(build):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock"}))
+    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "pos": 700}))
     assert shell.panels[1] is None and len(shell.canvas.shapes) == 1
     assert "monitors.HDMI-A-1.panels.1 (dock): overlaps" in shell.layout_warnings[0]
 
@@ -278,11 +285,11 @@ def test_add_and_remove_keep_canvas_and_panels_in_step(build, make_config):
 
 
 def test_a_neighbour_change_rebuilds_the_panel_it_unhides(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock"}))
+    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "pos": 700}))
     assert shell.panels[1] is None
     shell.apply(
         make_config(
-            monitors=edge({"widget": "dock", "pos": 100, "length": 300}, {"widget": "dock"})
+            monitors=edge({"widget": "dock", "align": "end"}, {"widget": "dock", "pos": 700})
         ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
@@ -352,3 +359,22 @@ def test_raise_to_top_never_interrupts_a_drag():
     p = _panel_stub(dragging=True)
     EdgePanel.raise_to_top(p)
     assert p.calls == []
+
+
+def test_the_monitor_gap_spaces_slotted_panels(build):
+    mons = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    mons["HDMI-A-1"]["layout"] = {"gap": 30}
+    shell, _, _ = build(mons)
+    a, b = (p.args[0] for p in shell.panels)
+    assert b.pos - (a.pos + a.length) == 14 + 14 + 30
+
+
+def test_a_gap_change_moves_the_neighbours(build, make_config):
+    two = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    shell, _, _ = build(two)
+    first, second = shell.panels
+    wider = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    wider["HDMI-A-1"]["layout"] = {"gap": 40}
+    shell.apply(make_config(monitors=wider), [Change("relayout", "HDMI-A-1")])
+    assert shell.panels[0] is first and not first.destroyed  # did not move: kept
+    assert second.destroyed and shell.panels[1].args[0].pos == second.args[0].pos + 32

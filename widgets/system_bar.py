@@ -15,7 +15,8 @@ from shell.registry import register
 
 @register(
     "system_bar",
-    PanelDefaults(edge="right", length=300, depth=56, pos=600, label="system bar"),
+    # y = 600 on a 1080 px tall monitor (free span ends at 1042: 1042 - 142 - 300 = 600)
+    PanelDefaults(edge="right", length=300, depth=56, label="system bar", align="end", offset=142),
 )
 class SystemBarPanel(EdgePanel):
     def build_content(self):

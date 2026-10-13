@@ -71,13 +71,18 @@ def test_simulation_draws_once_per_tick(make_config):
 
 @pytest.mark.parametrize("size", [(1920, 1080), (640, 400)])
 def test_default_shapes_fit_the_simulated_surface(size):
-    from shell.panel_layout import resolve_layout
-    from shell.panel_spec import PanelGeometry
+    from shell.panel_layout import layout_monitor
+    from shell.panel_spec import PanelRequest
 
     w, h = size
     shapes = default_shapes(w, h)
-    geos = [PanelGeometry("p", s.edge, s.pos, s.length, s.depth, "extended", "p") for s in shapes]
-    layout = resolve_layout(geos, w, h, 10, 14)
+    requests = [
+        PanelRequest(
+            "p", s.edge, "start", 0, s.pos, 0, s.length, None, None, s.depth, "extended", "p", 60
+        )
+        for s in shapes
+    ]
+    layout = layout_monitor(requests, w, h, 10, 14, 8)
     assert layout.warnings == []  # nothing clamped, shrunk or hidden
     assert [(p.pos, p.length) for p in layout.panels] == [(s.pos, s.length) for s in shapes]
     if size == (1920, 1080):  # the registered widget defaults

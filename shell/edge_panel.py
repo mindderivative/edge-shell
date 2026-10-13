@@ -42,8 +42,9 @@ class EdgePanel(WaylandWindow):
         scope: str,
         on_depth: Callable[[float], None] | None = None,
     ):
-        """`spec.pos` must be resolved (shell.panel_layout); `on_depth(d)` is called on every
-        animation frame with the current depth (MonitorShell forwards it to the canvas)."""
+        """`spec` is resolved by shell.panel_layout (exact pos and length in px); `on_depth(d)`
+        is called on every animation frame with the current depth (MonitorShell forwards it to
+        the canvas)."""
         t, r = theme.thickness, theme.radius
         mon = monitor.get_geometry()
         extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
