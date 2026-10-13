@@ -3,6 +3,7 @@ monitor's shape canvas; the panel reports its animated depth through `on_depth`.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable
 
@@ -19,14 +20,21 @@ from fabric.widgets.wayland import WaylandWindow
 from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 from shell import geometry, panel_state
+from shell import handle as hd
 from shell.anim import Tween
 from shell.config.models import Theme
 from shell.gdk_util import monitor_index
+from shell.handle_draw import draw_handle
 from shell.panel_layout import content_length
-from shell.panel_spec import PanelGeometry
+from shell.panel_spec import (
+    ALL_INTERACTIONS,
+    THEME_HANDLE,
+    HandleSpec,
+    Interaction,
+    PanelGeometry,
+)
 
-HANDLE_DEPTH = 14  # handle size across the depth axis
-HANDLE_LENGTH = 44  # handle size along the edge
+log = logging.getLogger(__name__)
 
 
 def _centre_view(adjustment) -> None:
@@ -75,10 +83,15 @@ class EdgePanel(WaylandWindow):
         index: int,
         scope: str,
         on_depth: Callable[[float], None] | None = None,
+        handle: HandleSpec = THEME_HANDLE,
+        interaction: Interaction = ALL_INTERACTIONS,
     ):
         """`spec` is resolved by shell.panel_layout (exact pos and length in px); `on_depth(d)`
         is called on every animation frame with the current depth (MonitorShell forwards it to
-        the canvas)."""
+        the canvas). `handle` and `interaction` come from the PanelRequest (spec 15); both can
+        change later in place (set_handle)."""
+        # resolved before the window exists: a bad look fails without leaving a half-built window
+        look = hd.resolve_handle(handle, interaction, theme)
         t, r = theme.thickness, theme.radius
         mon = monitor.get_geometry()
         extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
@@ -105,6 +118,9 @@ class EdgePanel(WaylandWindow):
         self.spec = spec
         self._theme = theme
         self._on_depth = on_depth
+        self._handle_spec = handle
+        self._interaction = interaction
+        self._look = look
         self._extended = spec.state == "extended"
         self._hovered = False
         self._d = 0.0
@@ -124,6 +140,7 @@ class EdgePanel(WaylandWindow):
         self._inner = inner
         self._content = Box(name="panel-content", children=[clip_container(inner)])
         self._handle = self._build_handle()
+        self._size_handle()
         # Transparent base: the body is painted by the shape canvas underneath this window.
         self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
 
@@ -193,8 +210,10 @@ class EdgePanel(WaylandWindow):
         self._update_input_region(self._d)
 
     def apply_theme(self, theme: Theme) -> None:
-        """Colors only (CSS and the canvas repaint them); geometry changes rebuild the panel."""
+        """A restyle: colours and the theme's handle style are redrawn in place (CSS and the
+        canvas repaint the rest); geometry changes rebuild the panel."""
         self._theme = theme
+        self._restyle_handle()
 
     # ---- state -----------------------------------------------------------------
     def _on_enter(self, *_) -> None:
@@ -229,6 +248,15 @@ class EdgePanel(WaylandWindow):
         name = ("Collapse " if self._extended else "Expand ") + self.spec.label
         self._handle.set_tooltip_text(name)
         self._handle.get_accessible().set_name(name)
+        self._handle_area.queue_draw()  # the peek highlight may have changed
+
+    def _restyle_handle(self) -> None:
+        self._look = hd.resolve_handle(self._handle_spec, self._interaction, self._theme)
+        self._size_handle()
+        self._sync_handle()
+        self._place_handle(self._d)
+        self._last_rect = None
+        self._update_input_region(self._d)
 
     def _on_clicked(self, *_) -> None:
         if self._suppress_click:  # the release that ended a drag
@@ -261,18 +289,14 @@ class EdgePanel(WaylandWindow):
         self._last_rect = rect
         self.input_shape_combine_region(cairo.Region(cairo.RectangleInt(*rect)))
 
-    # ---- layout ----------------------------------------------------------------
+    # ---- handle ----------------------------------------------------------------
     def _build_handle(self) -> Button:
-        vertical = self.spec.edge in ("left", "right")
-        dots = Box(
-            orientation="v" if vertical else "h",
-            spacing=3,
-            h_align="center",
-            v_align="center",
-            children=[Box(style_classes="handle-dot") for _ in range(3)],
-        )
-        size = (HANDLE_DEPTH, HANDLE_LENGTH) if vertical else (HANDLE_LENGTH, HANDLE_DEPTH)
-        handle = Button(name="handle", child=dots, size=size, on_clicked=self._on_clicked)
+        """The hit target: a Button (click, keyboard, accessible name) whose child draws the
+        shape with cairo. Sized by _size_handle."""
+        area = Gtk.DrawingArea()
+        area.connect("draw", self._on_handle_draw)
+        self._handle_area = area
+        handle = Button(name="handle", child=area, on_clicked=self._on_clicked)
         handle.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -281,7 +305,49 @@ class EdgePanel(WaylandWindow):
         handle.connect("button-press-event", self._on_press)
         handle.connect("motion-notify-event", self._on_motion)
         handle.connect("button-release-event", self._on_release)
+        handle.connect("state-flags-changed", lambda *_args: area.queue_draw())  # hover, focus
         return handle
+
+    def _hit(self) -> tuple[int, int]:
+        return hd.hit_size(self._theme.thickness, self._look.size, self.spec.length)
+
+    def _size_handle(self) -> None:
+        along, across = self._hit()
+        if geometry.is_horizontal(self.spec.edge):
+            self._handle.set_size_request(along, across)
+        else:
+            self._handle.set_size_request(across, along)
+
+    def _on_handle_draw(self, area, cr) -> bool:
+        try:
+            look, t = self._look, self._theme
+            alloc = area.get_allocation()
+            cx, cy = hd.shape_centre(
+                self.spec.edge, alloc.width, alloc.height, t.thickness, self._d
+            )
+            flags = self._handle.get_state_flags()
+            lit = hd.is_highlighted(
+                bool(flags & Gtk.StateFlags.PRELIGHT),
+                bool(flags & Gtk.StateFlags.FOCUSED),
+                self._hovered,
+                self._extended,
+                self._interaction,
+            )
+            draw_handle(
+                cr,
+                look.shape,
+                look.size,
+                look.weight,
+                look.hover_rgba if lit else look.rgba,
+                hd.morph(self._d, self.spec.depth),
+                self.spec.edge,
+                cx,
+                cy,
+                hd.band_room(t.thickness),  # 2 px of the band stay clear (decision 12)
+            )
+        except Exception:  # never let a draw error escape into GTK's main loop
+            log.exception("drawing the handle of %s failed", self.spec.label)
+        return False
 
     # ---- drag ------------------------------------------------------------------
     def _on_press(self, _widget, event) -> bool:
@@ -338,8 +404,18 @@ class EdgePanel(WaylandWindow):
         return GLib.SOURCE_REMOVE
 
     def _place_handle(self, d: float) -> None:
-        inset = max(0, int(self._theme.thickness + d - HANDLE_DEPTH))  # rides the inner edge
+        along, across = self._hit()
+        inset = hd.hit_inset(self._theme.thickness, d, across)  # rides the inner edge
+        offset = hd.clamp_offset(self._look.offset, self.spec.length, along)
+        before, after = hd.along_margins(offset)
         h, edge = self._handle, self.spec.edge
+        if geometry.is_horizontal(edge):
+            h.set_margin_start(before)
+            h.set_margin_end(after)
+        else:
+            h.set_margin_top(before)
+            h.set_margin_bottom(after)
+        self._handle_area.queue_draw()  # the shape moves inside the box while it is clamped
         if edge == "bottom":
             h.set_halign(Gtk.Align.CENTER)
             h.set_valign(Gtk.Align.END)

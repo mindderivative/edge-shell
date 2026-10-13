@@ -73,8 +73,8 @@ def test_every_css_colour_parses_in_gtk3(make_config):
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk
 
-    theme = make_config(theme={"accent": "#8fd3b680", "handle": "#7b7f84ff"}).theme
+    theme = make_config(theme={"accent": "#8fd3b680", "text": "#e6e8eaff"}).theme
     values = re.findall(r"(?:color|background-color): ([^;]+);", to_css(theme, "mon-x"))
-    assert len(values) >= 6
+    assert len(values) >= 5  # the handle colours are drawn with cairo, not CSS
     for value in (v for v in values if v != "transparent"):
         assert Gdk.RGBA().parse(value), value
