@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     ValidationError,
     create_model,
     field_validator,
@@ -85,6 +86,23 @@ class Shadow(_Strict):
         return check_hex(value)
 
 
+HandleShape = Literal["auto", "dots", "bar", "chevron", "none"]
+HANDLE_SHAPES: tuple[str, ...] = get_args(HandleShape)  # the settings window's choices
+HandleSize = Annotated[int, Field(ge=4, le=40)]  # px along the edge
+HandleWeight = Annotated[int, Field(ge=1, le=8)]  # px: dot diameter, bar and chevron stroke
+HandleOffset = Annotated[int, Field(ge=-2000, le=2000)]  # px from the body centre
+
+
+class HandleStyle(_Strict):
+    """The handle look of every panel whose entry (or widget) does not say otherwise (spec 15).
+    "auto" picks the shape from the panel's interactions (shell.handle.auto_shape). The colours
+    are the theme's `handle` and `handle_hover` tokens."""
+
+    shape: HandleShape = "auto"
+    size: HandleSize = 15
+    weight: HandleWeight = 3
+
+
 class Theme(_Strict):
     frame: str
     text: str
@@ -101,6 +119,7 @@ class Theme(_Strict):
     font: Annotated[list[str], Field(min_length=1)]
     border: Border = Field(default_factory=Border)
     shadow: Shadow = Field(default_factory=Shadow)
+    handle_style: HandleStyle = Field(default_factory=HandleStyle)
 
     @field_validator(*COLOR_FIELDS)
     @classmethod
@@ -131,9 +150,12 @@ def _override_of(name: str, model: type[BaseModel], nested: dict[str, type] | No
 
 BorderOverride = _override_of("BorderOverride", Border)
 ShadowOverride = _override_of("ShadowOverride", Shadow)
+HandleStyleOverride = _override_of("HandleStyleOverride", HandleStyle)
 # Merged over the base theme (deep_merge) and re-validated by Theme.
 ThemeOverride = _override_of(
-    "ThemeOverride", Theme, {"border": BorderOverride, "shadow": ShadowOverride}
+    "ThemeOverride",
+    Theme,
+    {"border": BorderOverride, "shadow": ShadowOverride, "handle_style": HandleStyleOverride},
 )
 
 Length = Annotated[int, Field(ge=60, le=4000)]
@@ -169,6 +191,34 @@ class LayoutSettings(_Strict):
 LayoutOverride = _override_of("LayoutOverride", LayoutSettings)
 
 
+class HandleConfig(_Strict):
+    """A panel's own handle (spec 15). Every key is optional: a missing one comes from the
+    widget's default, then the theme ([theme.handle_style]; colours: the theme's handle and
+    handle_hover). `offset` moves the handle along the edge from the body centre (negative:
+    towards the start of the edge, left or top); it is clamped to the body."""
+
+    shape: HandleShape | None = None
+    size: HandleSize | None = None
+    weight: HandleWeight | None = None
+    offset: HandleOffset | None = None
+    color: str | None = None
+    hover_color: str | None = None
+
+    @field_validator("color", "hover_color")
+    @classmethod
+    def _hex(cls, value: str | None) -> str | None:
+        return None if value is None else check_hex(value)
+
+
+class InteractionConfig(_Strict):
+    """Which interactions open and close a panel (spec 15). A missing key comes from the
+    widget's default, else true. Keyboard activation follows `click`."""
+
+    click: StrictBool | None = None
+    hover: StrictBool | None = None
+    drag: StrictBool | None = None
+
+
 class PanelConfig(_Strict):
     widget: str
     edge: Edge | None = None
@@ -181,6 +231,8 @@ class PanelConfig(_Strict):
     max_length: Length | None = None
     depth: Depth | None = None
     state: PanelState | None = None
+    handle: HandleConfig = Field(default_factory=HandleConfig)
+    interaction: InteractionConfig = Field(default_factory=InteractionConfig)
 
     @field_validator("length")
     @classmethod

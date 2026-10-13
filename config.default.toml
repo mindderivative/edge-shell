@@ -30,6 +30,13 @@ enabled = false
 elevation = 50          # 0-100 %; 100 % reaches 48 px
 color = "#00000080"     # #rrggbb or #rrggbbaa; the alpha is the shadow's strength
 
+# Handle look of every panel (spec 15); a panel entry's `handle` table overrides it, and the
+# colours are `handle` and `handle_hover` above. Per monitor: [monitors.NAME.theme.handle_style].
+[theme.handle_style]
+shape = "auto"          # auto | dots | bar | chevron | none; auto follows the interactions
+size = 15               # px along the edge, 4-40
+weight = 3              # px, 1-8: dot diameter, bar and chevron thickness
+
 # Panel layout (spec 16-17). `gap` is the straight piece of frame left between two neighbouring
 # panels on one edge, on top of their curved joins (so any value keeps the minimum the outline
 # needs). Per monitor: [monitors.NAME.layout].
