@@ -85,22 +85,26 @@ class EdgeShellApp:
             log.info("closing Edge Shell on %s", name)
             self.shells.pop(name).close()
         for name in open_:
-            log.info("opening Edge Shell on %s", name)
-            self.shells[name] = MonitorShell(
-                name,
-                desired[name],
-                self.config,
-                self.register_window,
-                self.unregister_window,
-                on_layout=lambda shell, n=name: self._report_layout(n, shell),
-                on_error=lambda shell, n=name: self._relayout_failed(n, shell),
-            )
-            self._report_layout(name, self.shells[name])
-            if self.recorder is not None:
-                self.shells[name].canvas.painter.recorder = self.recorder
+            self._open_shell(name, desired[name])
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
+
+    def _open_shell(self, name: str, monitor) -> None:
+        log.info("opening Edge Shell on %s", name)
+        shell = self.shells[name] = MonitorShell(
+            name,
+            monitor,
+            self.config,
+            self.register_window,
+            self.unregister_window,
+            on_layout=lambda shell, n=name: self._report_layout(n, shell),
+            on_error=lambda shell, n=name: self._relayout_failed(n, shell),
+        )
+        if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
+            self._report_layout(name, shell)
+        if self.recorder is not None:
+            shell.canvas.painter.recorder = self.recorder
 
     def watch_displays(self) -> None:
         display = Gdk.Display.get_default()
@@ -177,7 +181,8 @@ class EdgeShellApp:
                 continue
             try:
                 self.shells[name].apply(new, items)
-                self._report_layout(name, self.shells[name])
+                if not self.shells[name].measure_pending:
+                    self._report_layout(name, self.shells[name])
             except Exception:
                 log.exception("applying config to %s failed, rebuilding it", name)
                 self._report_error(f"{name}: could not apply the config in place; rebuilt it")
@@ -206,7 +211,10 @@ class EdgeShellApp:
         """A re-layout the shell started by itself raised (MonitorShell._measure / _relayout
         logged it): close that shell and rebuild it from the current config, as a failed
         reload does. Only once per monitor until the next reload, so a widget that always
-        fails cannot rebuild forever; a stale call from a closed shell is ignored."""
+        fails cannot rebuild forever; a stale call from a closed shell is ignored. The
+        rebuild reuses the shell's own monitor (no kscreen-doctor round trip) and never raises
+        into the main loop; if it fails, the monitor has no shell and the shell may be
+        half-synced until the next reload."""
         if self.shells.get(name) is not shell:
             return
         if name in self._relayout_rebuilt:
@@ -220,7 +228,12 @@ class EdgeShellApp:
             shell.close()
         except Exception:
             log.exception("closing the failed shell on %s failed", name)
-        self.sync_monitors()  # reopens it from self.config (and refreshes the CSS)
+        try:
+            self._open_shell(name, shell.monitor)
+            self.refresh_css()
+        except Exception:
+            log.exception("rebuilding the panels of %s failed", name)
+            self._report_error(f"{name}: rebuilding the panels failed")
 
     def _report_layout(self, name: str, shell) -> None:
         """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but

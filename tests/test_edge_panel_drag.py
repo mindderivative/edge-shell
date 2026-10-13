@@ -123,6 +123,10 @@ def test_clip_container_never_asks_for_the_content_size():
     assert h.get_value() == 250  # centred: 250 px cut off at each end
     h.set_page_size(500)  # the body got longer
     assert h.get_value() == 150
+    assert clip.get_can_focus() is False
+    assert clip.get_kinetic_scrolling() is False
+    h.set_value(0)  # any scroll source: snaps back to the centre
+    assert h.get_value() == 150
 
 
 def test_clipped_content_is_centred_in_the_body():

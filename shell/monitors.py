@@ -212,7 +212,8 @@ class MonitorShell:
     # ---- "content" lengths ----------------------------------------------------------------
     def _to_measure(self) -> list[int]:
         """Live "content" panels built since the last measurement (or restyled), or without a
-        measurement for the widget now at their index."""
+        measurement for the widget now at their index. A "content" panel hidden at its default
+        length is never built, so it is never measured and stays hidden."""
         known = self._measured()
         return [
             i
@@ -250,8 +251,17 @@ class MonitorShell:
                 self._on_layout(self)
         except Exception:  # a GLib callback: never raise into the main loop (decision 11)
             log.exception("measuring the content panels of %s failed", self.name)
-            self._on_error(self)
+            try:
+                self._on_error(self)
+            except Exception:
+                log.exception("handling the measurement failure of %s failed", self.name)
         return False
+
+    @property
+    def measure_pending(self) -> bool:
+        """True while a "content" measurement is queued: lengths are still provisional and
+        on_layout will fire after it."""
+        return bool(self._measure_id)
 
     def _new_panel(self, index: int, geo: PanelGeometry, theme, raise_later: bool) -> EdgePanel:
         self._remeasure.add(index)  # measured when idle if it is a "content" panel

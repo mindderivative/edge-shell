@@ -321,7 +321,9 @@ def test_failed_panel_construction_leaves_no_scene_shape(build, make_config, mon
     assert shell.canvas.shapes == {}
 
 
-def test_failed_construction_closes_everything_already_built(make_config, monkeypatch):
+def test_failed_construction_closes_everything_already_built(
+    make_config, monkeypatch, fake_registry
+):
     def explode(*a, **k):
         raise RuntimeError("panel broke")
 
@@ -484,3 +486,19 @@ def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog
     assert shell.test_idles[0]() is False  # never raises into the main loop
     assert errors == [shell] and reports == []
     assert "widget broke" in caplog.text
+
+
+def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypatch, caplog):
+    def bad_handler(_shell):
+        raise RuntimeError("handler broke")
+
+    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_error=bad_handler)
+    shell.panels[0].natural = 300
+
+    def explode(*a, **k):
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    assert shell.test_idles[0]() is False
+    assert "handler broke" in caplog.text
+    assert shell.measure_pending is False

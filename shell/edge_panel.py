@@ -41,7 +41,8 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
     surface cannot grow either way (Gtk.Overlay never measures its overlay children); without
     this, content longer than a shrunk body (spec 17: shrink to fit, max_length, a small
     percentage) would draw over the joins and the frame. No scrollbars, and wheel events never
-    scroll the clipped content."""
+    scroll the clipped content. The cross axis is clipped and centred too: content deeper than
+    the body depth is cut, not overflowing."""
     clip = Gtk.ScrolledWindow(
         name="panel-clip",
         hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
@@ -50,8 +51,13 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
     clip.set_hexpand(True)
     clip.set_vexpand(True)
     clip.add(child)
+    clip.set_can_focus(False)
+    clip.set_kinetic_scrolling(False)
     for adjustment in (clip.get_hadjustment(), clip.get_vadjustment()):
         adjustment.connect("changed", _centre_view)  # the viewport re-configures on allocate
+        # Any other scroll source snaps back too; set_value with an unchanged value emits
+        # nothing, so this cannot recurse.
+        adjustment.connect("value-changed", _centre_view)
     clip.connect("scroll-event", lambda *_args: True)  # stop before the class handler scrolls
     return clip
 

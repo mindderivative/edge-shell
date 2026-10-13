@@ -16,6 +16,8 @@ class FakeShell:
     applied: list = []
     fail_apply: set = set()
     layout_warnings: list = []
+    measure_pending = False
+    fail_open: set = set()
 
     def __init__(
         self, name, monitor, config, register, unregister=None, on_layout=None, on_error=None
@@ -24,6 +26,8 @@ class FakeShell:
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
+        if name in FakeShell.fail_open:
+            raise RuntimeError("cannot build")
         FakeShell.opened.append(name)
 
     def close(self):
@@ -41,6 +45,8 @@ def env(monkeypatch, make_config):
     FakeShell.closed = []
     FakeShell.applied = []
     FakeShell.fail_apply = set()
+    FakeShell.fail_open = set()
+    FakeShell.measure_pending = False
     mapping: dict = {}
     monkeypatch.setattr(app_mod, "monitors_by_name", lambda: mapping)
     monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
@@ -441,3 +447,47 @@ def test_a_failed_relayout_rebuilds_the_shell_once(env, monkeypatch):
     rebuilt.on_error(rebuilt)  # fails again before the next reload: logged, shell kept
     shell.on_error(shell)  # a late call from the closed shell: ignored
     assert app.shells["HDMI-A-1"] is rebuilt and FakeShell.closed == ["HDMI-A-1"]
+
+
+def test_a_failed_relayout_rebuilds_from_the_same_monitor_without_kscreen(env, monkeypatch):
+    app, mapping = env
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: None)
+    monitor = mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    calls = []
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: calls.append(1) or {})
+    shell.on_error(shell)
+    assert calls == []
+    assert app.shells["HDMI-A-1"] is not shell
+    assert app.shells["HDMI-A-1"].monitor is monitor
+
+
+def test_a_failed_rebuild_never_escapes_and_is_reported(env, monkeypatch):
+    app, mapping = env
+    notes, errors = [], []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(title)
+    )
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_report_error", lambda self, msg: errors.append(msg))
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    FakeShell.fail_open = {"HDMI-A-1"}  # the second construction raises
+    shell.on_error(shell)  # must not raise
+    assert len(errors) == 1 and "HDMI-A-1" in errors[0]
+    assert "HDMI-A-1" not in app.shells
+
+
+def test_layout_report_waits_for_a_pending_measurement(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    FakeShell.measure_pending = True
+    FakeShell.layout_warnings = ["transient: hidden at its default length"]
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes == []
+    shell = app.shells["HDMI-A-1"]
+    shell.on_layout(shell)  # the measurement finished
+    assert notes == ["transient: hidden at its default length"]
