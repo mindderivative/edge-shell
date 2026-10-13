@@ -4,9 +4,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shell.config.models import Align, Edge, PanelState
+from shell.config.models import Align, Edge, HandleShape, PanelState
 
 LengthSpec = int | str  # px, "fill", "content" or "NN%" (validated by shell.config.models)
+
+
+@dataclass(frozen=True)
+class HandleSpec:
+    """A panel's own handle choices (config entry over widget default). None = the theme's
+    value ([theme.handle_style], colours `handle` / `handle_hover`), resolved by
+    shell.handle.resolve_handle, so a theme change restyles without touching the request."""
+
+    shape: HandleShape | None = None
+    size: int | None = None
+    weight: int | None = None
+    offset: int = 0  # px along the edge from the body centre; clamped to the body
+    color: str | None = None
+    hover_color: str | None = None
+
+
+@dataclass(frozen=True)
+class Interaction:
+    """Which interactions a panel answers (spec 15). Keyboard activation follows `click`."""
+
+    click: bool = True
+    hover: bool = True
+    drag: bool = True
+
+
+THEME_HANDLE = HandleSpec()  # every handle key from the theme
+ALL_INTERACTIONS = Interaction()  # click, hover and drag on (spec 15 default)
 
 
 @dataclass(frozen=True)
@@ -22,6 +49,8 @@ class PanelDefaults:
     state: PanelState = "extended"
     align: Align = "center"
     offset: int = 0
+    handle: HandleSpec = HandleSpec()
+    interaction: Interaction = Interaction()
 
 
 @dataclass(frozen=True)
@@ -45,6 +74,9 @@ class PanelRequest:
     state: PanelState
     label: str
     fallback_length: int  # px for "content" until the widget has been measured
+    # Not part of the layout (PanelGeometry): a change is applied to the live panel in place.
+    handle: HandleSpec = HandleSpec()
+    interaction: Interaction = Interaction()
 
 
 @dataclass(frozen=True)

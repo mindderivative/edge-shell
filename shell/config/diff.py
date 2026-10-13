@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from shell.config.models import Config
+from shell.panel_spec import HandleSpec, Interaction, PanelRequest
 from shell.registry import requests_for
 
 Kind = Literal[
@@ -17,6 +18,7 @@ Kind = Literal[
     "panel-remove",
     "panel-rebuild",
     "panel-state",
+    "panel-handle",
 ]
 _STRUCTURAL = ("thickness", "radius", "peek", "hover_zone", "duration_ms")
 
@@ -65,6 +67,14 @@ def _diff_panels(name, old, new) -> list[Change]:
             continue
         elif replace(old[i], state=new[i].state) == new[i]:
             changes.append(Change("panel-state", name, i))
+        elif _in_place(old[i]) == _in_place(new[i]):
+            # handle / interaction (maybe with state): updated on the live panel, no rebuild
+            changes.append(Change("panel-handle", name, i))
         else:
             changes.append(Change("panel-rebuild", name, i))
     return changes + removed[::-1]
+
+
+def _in_place(req: PanelRequest) -> PanelRequest:
+    """The request without what a live panel changes in place (state, handle, interaction)."""
+    return replace(req, state="extended", handle=HandleSpec(), interaction=Interaction())
