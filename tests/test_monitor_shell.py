@@ -412,7 +412,8 @@ def test_content_panels_are_measured_when_idle_then_laid_out_again(build):
     rebuilt.natural = 300
     assert len(shell.test_idles) == 2  # the rebuilt panel is measured again
     assert shell.test_idles[1]() is False
-    assert shell.panels[0] is rebuilt and reports == [shell]  # same size: nothing changes
+    assert shell.panels[0] is rebuilt  # same size: nothing rebuilt
+    assert reports == [shell, shell]  # but every measurement reports the layout
 
 
 def test_no_measurement_without_content_panels(build):
@@ -468,6 +469,31 @@ def test_a_restyle_measures_every_content_panel_again(build, make_config):
     assert shell.panels[0] is kept and len(shell.test_idles) == 3
     shell.test_idles[2]()
     assert kept.destroyed and shell.panels[0].args[0].length == 260
+
+
+def test_a_measurement_that_changes_nothing_still_reports_the_layout(build, make_config):
+    panels = ({"widget": "dock", "length": "content"}, {"widget": "clock"})
+    reports = []
+    shell, _, _ = build(edge(*panels), on_layout=reports.append)
+    shell.test_idles[0]()  # measured: rebuilt
+    shell.test_idles[1]()  # settled
+    kept = shell.panels[0]
+    reports.clear()
+    shell.apply(
+        make_config(theme={"accent": "#112233"}, monitors=edge(*panels)),
+        [Change("restyle", "HDMI-A-1")],
+    )
+    assert len(shell.test_idles) == 3
+    shell.test_idles[2]()  # same natural size as before
+    assert shell.panels[0] is kept and reports == [shell]
+
+
+def test_a_measurement_with_nothing_to_measure_still_reports_the_layout(build):
+    reports = []
+    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_layout=reports.append)
+    shell._to_measure = lambda: []  # e.g. the panels were hidden in between
+    assert shell._measure() is False
+    assert reports == [shell]
 
 
 def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog):

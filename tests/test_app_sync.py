@@ -360,6 +360,22 @@ def test_unrelated_reload_does_not_repeat_the_layout_notification(renv, monkeypa
     assert len(notes) == 1
 
 
+def test_a_reload_with_a_pending_measurement_reports_its_warnings_afterwards(renv, monkeypatch):
+    app, store, _, _, make_config = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    shell = app.shells["HDMI-A-1"]
+    monkeypatch.setattr(FakeShell, "measure_pending", True)
+    monkeypatch.setattr(FakeShell, "layout_warnings", ["dock: shrunk"])
+    store.pending = make_config(
+        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+    )
+    app.reload()
+    assert notes == []  # provisional lengths: waits for the measurement
+    shell.on_layout(shell)  # the measurement changed nothing, but still reports
+    assert notes == ["dock: shrunk"]
+
+
 # ---- --stats ---------------------------------------------------------------------
 
 
@@ -461,6 +477,18 @@ def test_a_failed_relayout_rebuilds_from_the_same_monitor_without_kscreen(env, m
     assert calls == []
     assert app.shells["HDMI-A-1"] is not shell
     assert app.shells["HDMI-A-1"].monitor is monitor
+
+
+def test_a_failed_relayout_rebuild_refreshes_the_css(env, monkeypatch):
+    app, mapping = env
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: None)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    refreshed = []
+    monkeypatch.setattr(app, "refresh_css", lambda: refreshed.append(1))
+    shell = app.shells["HDMI-A-1"]
+    shell.on_error(shell)
+    assert refreshed == [1]
 
 
 def test_a_failed_rebuild_never_escapes_and_is_reported(env, monkeypatch):

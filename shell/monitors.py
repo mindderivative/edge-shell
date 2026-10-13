@@ -248,7 +248,8 @@ class MonitorShell:
                     changed = True
             if changed:
                 self._sync_panels(self._config, self._theme, startup=False)
-                self._on_layout(self)
+            # always: the app skips its own report while a measurement is pending
+            self._on_layout(self)
         except Exception:  # a GLib callback: never raise into the main loop (decision 11)
             log.exception("measuring the content panels of %s failed", self.name)
             try:
