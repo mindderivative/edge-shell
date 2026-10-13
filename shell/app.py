@@ -24,7 +24,7 @@ from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
 from shell.monitors import MonitorShell, monitors_by_name
-from shell.registry import deprecated_pos_paths, moved_default_paths
+from shell.registry import all_off_paths, deprecated_pos_paths, moved_default_paths
 from shell.theme import scope_class, to_css
 
 log = logging.getLogger(__name__)
@@ -165,7 +165,8 @@ class EdgeShellApp:
         self._log_deprecated(new)
         self._relayout_rebuilt.clear()  # a new config may fix the failing widget
         changes = diff_configs(old, new)
-        log.info("config reloaded: %d change(s)", len(changes))
+        kinds = ", ".join(c.kind for c in changes) or "none"
+        log.info("config reloaded: %d change(s): %s", len(changes), kinds)
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
         for name in rebuild & set(self.shells):
             self.shells.pop(name).close()
@@ -197,9 +198,10 @@ class EdgeShellApp:
         self.refresh_css()
 
     def _log_deprecated(self, config) -> None:
-        """One INFO line per config load listing the entries that still use `pos`, and one for
+        """One INFO line per config load listing the entries that still use `pos`, one for
         the system_bar entries whose default placement moved (decision 2: a notification would
-        repeat on every start)."""
+        repeat on every start) and one for the panels with every interaction off (handle plan,
+        decision 7)."""
         paths = deprecated_pos_paths(config)
         if paths:
             log.info(
@@ -215,6 +217,13 @@ class EdgeShellApp:
                 "same place only at 1080p with edge right, length 300, depth >= 28); add "
                 "pos = 600 to keep the old place at 1080p: %s",
                 ", ".join(moved),
+            )
+        off = all_off_paths(config)
+        if off:
+            log.info(
+                "panels with click, hover and drag all off (these panels open only through "
+                "state): %s",
+                ", ".join(off),
             )
 
     def _relayout_failed(self, name: str, shell) -> None:

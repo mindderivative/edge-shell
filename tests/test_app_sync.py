@@ -554,3 +554,35 @@ def test_layout_report_waits_for_a_pending_measurement(env, monkeypatch):
     shell = app.shells["HDMI-A-1"]
     shell.on_layout(shell)  # the measurement finished
     assert notes == ["transient: hidden at its default length"]
+
+
+# ---- handle plan: reload kinds and all-off panels ---------------------------------------
+
+
+def test_a_reload_logs_its_change_kinds(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "handle": {"shape": "bar"}}])}
+    )
+    app.reload()
+    assert "config reloaded: 1 change(s): panel-handle" in caplog.text
+
+
+def test_all_off_panels_are_logged_once_per_load(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    off = {"click": False, "hover": False, "drag": False}
+    store.pending = make_config(
+        monitors={
+            "HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "dock", "interaction": off}])
+        }
+    )
+    app.reload()
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    app.reload()  # none left: no line
+    lines = [r.getMessage() for r in caplog.records if "open only through state" in r.getMessage()]
+    assert lines == [
+        "panels with click, hover and drag all off (these panels open only through state): "
+        "monitors.HDMI-A-1.panels.1"
+    ]

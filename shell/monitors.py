@@ -23,7 +23,7 @@ from shell.edge_panel import EdgePanel
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.panel_layout import Layout, layout_monitor
-from shell.panel_spec import PanelGeometry, PanelRequest
+from shell.panel_spec import HandleSpec, Interaction, PanelGeometry, PanelRequest
 from shell.registry import requests_for, widget_class
 from shell.theme import scope_class
 
@@ -124,6 +124,8 @@ class MonitorShell:
         # Config order; None = not shown (rejected by shell.panel_layout, see layout_warnings).
         self.panels: list[EdgePanel | None] = []
         self._resolved: list[PanelGeometry | None] = []
+        # Each index's (handle, interaction) as last given to its panel (changed in place).
+        self._handles: list[tuple[HandleSpec, Interaction] | None] = []
         self.layout_warnings: list[str] = []
         self._keys = itertools.count()  # scene keys for the canvas
         self._config = config
@@ -203,11 +205,15 @@ class MonitorShell:
                 self._destroy_panel(len(self.panels) - 1)
             self.panels.pop()
             self._resolved.pop()
+            self._handles.pop()
         for i, geo in enumerate(wanted):
             if i == len(self.panels):
                 self.panels.append(None)
                 self._resolved.append(None)
+                self._handles.append(None)
             old, panel = self._resolved[i], self.panels[i]
+            req = self._requests[i]
+            handles = (req.handle, req.interaction)
             if geo is None:
                 if panel is not None:
                     self._destroy_panel(i)
@@ -215,9 +221,13 @@ class MonitorShell:
                 if panel is not None:
                     self._destroy_panel(i)
                 self.panels[i] = self._new_panel(i, geo, theme, raise_later=not startup)
-            elif old.state != geo.state:
-                panel.set_state(geo.state)
+            else:  # same geometry: the live panel changes in place (spec 15: never a rebuild)
+                if self._handles[i] != handles:
+                    panel.set_handle(*handles)
+                if old.state != geo.state:
+                    panel.set_state(geo.state)
             self._resolved[i] = geo
+            self._handles[i] = handles
         self._schedule_measure()
 
     # ---- "content" lengths ----------------------------------------------------------------
@@ -316,6 +326,8 @@ class MonitorShell:
         self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
         self.canvas.add_panel(key, PanelShape(geo.edge, geo.pos, geo.length, geo.depth))
+        req = self._requests[index]
+        log.debug("building panel %d (%s) on %s", index, geo.widget, self.name)
         try:
             panel = widget_class(geo.widget)(
                 geo,
@@ -324,6 +336,8 @@ class MonitorShell:
                 index,
                 self._scope,
                 on_depth=lambda d, k=key: self.canvas.set_depth(k, d),
+                handle=req.handle,
+                interaction=req.interaction,
             )
         except Exception:
             self.canvas.remove_panel(key)
@@ -418,6 +432,7 @@ class MonitorShell:
         self.windows.clear()
         self.panels.clear()
         self._resolved.clear()
+        self._handles.clear()
 
 
 def _measure_key(req: PanelRequest) -> tuple[str, bool]:
