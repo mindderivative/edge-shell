@@ -12,26 +12,26 @@
 
 **Phil's wishes (Gate D, quoted in spec 15):** "make sure we are planning for the ability to customize the 3 dots (color, size, location, shape) ... click to open, hover to peek, drag to open ... individually opt-in/opt-out ... thin bar ... arrow ... morphing".
 
-**Scope (Plan 3).** In: config keys (`[theme.handle_style]`, per panel `handle` and `interaction` tables), widget defaults through the registry, the pure handle rules and drawing, the drawn handle in `EdgePanel`, the interaction flags, in-place reload, a headless review sheet, two gates, examples, README and spec. Out: the settings window (its models are made ready, decision 10), drawing the handle on the shape canvas (decision 1, the cost if wrong), removing the `raise_to_top` workaround (decision 1), a warning for panels with every interaction off (decision 7), per-panel border/shadow, HiDPI.
+**Scope (Plan 3).** In: config keys (`[theme.handle_style]`, per panel `handle` and `interaction` tables), widget defaults through the registry (validated at registration), the pure handle rules and drawing, the drawn handle in `EdgePanel`, the interaction flags, in-place reload, one INFO line per config load for panels with every interaction off (decision 7), debug lines that make a rebuild visible in the log (decision 8), a headless review sheet, two gates, examples, README and spec. Out: the settings window (its models are made ready, decision 10), drawing the handle on the shape canvas (decision 1, the cost if wrong), removing the `raise_to_top` workaround (decision 1), per-panel border/shadow, HiDPI.
 
 **Date:** 2026-10-13 (the plan's execution date, as in the file name).
 
-**Size:** 10 tasks. 6 carry code and tests (1-4, 6-8), 2 human gates (Gate A = Task 5, a PNG review that needs no running shell; Gate B = Task 9, live on HDMI-A-1), Task 10 is docs. Riskiest: Task 6 (the drawn handle replaces the CSS dots: GTK allocation of the Button and its DrawingArea is only simulated by the tests; Gate B items 1-4 check it live), Task 7 (the input region without hover is new behaviour on the compositor: Gate B items 3 and 5 check that clicks reach the desktop and the hit target still answers), Task 8 (in-place updates must never rebuild: Gate B item 6 checks the log and the absence of flicker).
+**Size:** 10 tasks. 6 carry code and tests (1-4, 6-8), 2 human gates (Gate A = Task 5, a PNG review that needs no running shell; Gate B = Task 9, live on HDMI-A-1), Task 10 is docs. Riskiest: Task 6 (the drawn handle replaces the CSS dots: GTK allocation of the Button and its DrawingArea is only simulated by the tests; Gate B items 1-4 check it live), Task 7 (the input region without hover is new behaviour on the compositor: Gate B items 3 and 5 check that clicks reach the desktop and the hit target still answers), Task 8 (in-place updates must never rebuild: Gate B item 6 checks that no `building panel` debug line follows the save, and the absence of flicker).
 
 ## Decisions (for Phil's review; each with the cost if Phil disagrees)
 
-The spec leaves these open. They are the planner's choices; nothing below is implemented yet.
+The spec leaves these open. They are the planner's choices; nothing below is implemented yet. Phil has not answered the open questions yet: choices marked *Default pending Phil* are the planned defaults until he does (see Open questions at the end).
 
-1. **The handle stays in the panel's own window, drawn with cairo (option a), not on the shape canvas (option b). The delayed `raise_to_top` workaround stays, unchanged.** `EdgePanel`'s handle remains a `Gtk.Button` (the hit target: click, keyboard activation, accessible name, `:hover`/focus state), and its child becomes a `Gtk.DrawingArea` whose draw handler calls the pure `draw_handle` (Task 6). Why not (b), drawing the shape on the canvas with an invisible hit target in the content window: Plan 1 Gate 1 (Run B, raise off) showed that without the re-raise the canvas lands ABOVE the panel windows, and the collapsed dots were hidden because they sit inside the frame band the canvas paints. Moving the handle to the canvas would make the collapsed handle visible without the raise, but every extended panel's content (clock text, dock icons, system bar labels) also lives in the panel windows above the canvas, so the raise would still be needed for the content: option (b) cannot retire the workaround, it only moves the one symptom that revealed it. Against (b) as well: the hover/focus highlight would have to be pushed from the panel window to the canvas (cross-window state), every hover change would damage the canvas (a full redraw path for a 3 px dot), keyboard focus and the accessible name would live in a different window from the drawing, and the canvas scene would gain per-panel handle state; Gate 2 of Plan 1 already showed the handle staying in step with the body without a shared frame clock. For (a): the change is local to `EdgePanel`, the canvas, scene and painter are untouched, the DrawingArea is about 44 x 14 px so a redraw per animation frame is negligible, the shape lives inside the 10 px band in the same window that takes the input, and the border (drawn outside the mass, on the canvas below) can never cover it. Gate B item 10 re-checks the collapsed handles after 10 s and records (information only) what `EDGE_SHELL_RAISE_MS=0` does now. *Cost if Phil prefers (b):* about 1.5 tasks: `PanelShape` gains a `HandleLook` and the panel's lit state, `draw_scene` draws the handle after `fill_mass` inside the panel's damage box (`panel_box` already covers the band and body), `ShapeCanvas.set_handle_lit(key, bool)` is called from the Button's `state-flags-changed`, and the Button's child becomes an empty box; the models, `shell/handle.py` and `draw_handle` are reused unchanged. It would still not remove the raise.
-2. **Config surface: per panel `handle` and `interaction` tables, a theme-wide `[theme.handle_style]`, colours from the existing `handle` / `handle_hover` tokens.** Per panel entry: `handle.shape` (`auto | dots | bar | chevron | none`), `handle.size` (px along the edge, 4-40), `handle.weight` (px, 1-8: dot diameter, bar and chevron thickness; a key the spec did not list, needed for "thin bar"), `handle.offset` (px along the edge from the body centre, -2000..2000, negative towards the start of the edge; clamped to the body at run time without a warning, because the body length is only known after layout), `handle.color`, `handle.hover_color` (`#rrggbb` or `#rrggbbaa`); `interaction.click`, `interaction.hover`, `interaction.drag` (strict booleans, so `click = 1` or `"yes"` is rejected). Every key is optional; a missing key comes from the widget's registered default (`PanelDefaults.handle` / `.interaction`; no built-in widget sets any), then the monitor's theme (`[monitors.NAME.theme.handle_style]`), then `[theme.handle_style]` (`shape = "auto"`, `size = 15`, `weight = 3` in `config.default.toml`) and the colours `theme.handle` / `theme.handle_hover`. The name `handle_style` avoids a TOML clash: `[theme.handle]` cannot coexist with the existing `handle = "#7b7f84"` colour key. Unknown shapes and keys fail validation with the key path, as everywhere else. TOML may use dotted keys (`handle.shape = "bar"`) or an inline table. *Cost:* renaming keys before anyone depends on them is trivial; moving the colours into a `[theme.handle]` table would break every config that sets `handle = "..."` (needs a migration note); a widget default ranking below the theme instead of above it = swap two lookups in `shell/handle.py` (trivial).
-3. **Shape `auto` (the default) follows the interactions; an explicit shape always wins.** `auto` = dots while click and drag are both on (today's look, so existing configs are unchanged), a bar for drag only, a chevron for click only, dots for hover only, nothing when all three are off (a handle would promise an interaction the panel does not answer). This is Phil's "thin bar when only drag, arrow when only click" as a default rather than a rule. *Cost:* explicit-only shapes (default `dots`, no `auto`) = drop `auto_shape` and one literal (small).
-4. **Chevron morph: it folds through a flat bar, it does not rotate.** With `morph = d / depth`, the tip sits at `h/2 * (1 - 2 * morph)` across the edge: collapsed it points where the panel opens (into the screen), half-way it is a flat bar, extended it points back to the screen edge. A 180° rotation would point along the edge half-way, which reads as "slide sideways". `h = min(size / 2, (T - 2) - weight)`. *Cost:* a rotation instead is about 5 lines in `draw_handle` plus its test expectations.
-5. **Across the edge the shape is centred in the last `T` px of the mass**: in the middle of the frame band while collapsed, `T / 2` px inside the body's inner edge while extended, never wider than `T - 2` px (1 px clear of the band's edges), with odd-width shapes snapped to pixel centres so dots stay crisp. Today's dots sit 7 px from the screen edge (an artefact of the 14 px button), so the collapsed dots move 2 px towards the screen edge, into the true middle of the 10 px band. *Cost:* keeping 7 px is one formula in `shape_centre` (trivial).
-6. **Hit target separate from the shape and at least today's size.** The Button is `max(44, size + 16)` px along the edge (never longer than the body) by `max(14, T + 4)` px across, and rides the body's inner edge exactly as today (`inset = max(0, T + d - across)`). `offset` moves it and the shape together. Input region: with hover on it is unchanged (body plus the 16 px hover zone, which always contains the hit target); with hover off it is the body while it is out plus the hit target when click or drag is on; with all three off a collapsed panel takes no input at all (the frame band stays click-through there). *Cost:* other minimums are two constants.
-7. **Interaction semantics.** Hover off: entering the strip never peeks and the handle does not light up for a peek. Drag off: a press never starts a drag (a press and release is still a click when click is on). Click off: `clicked` is ignored and the Button cannot take keyboard focus (keyboard activation follows click); the tooltip and accessible name become "Drag to expand clock" (drag on) or no tooltip and "clock handle" (drag off). The handle lights up (hover colour) while the pointer is on it or it has focus and click or drag is on, and while the panel peeks (spec 4: "Peek: handle dots brighten"; today the dots only brightened with the pointer on the handle itself). All three off is allowed: the panel then opens and closes only through `state` in the config (and later the settings window); no warning is logged. `state` keeps its meaning (the configured state, retargeted on reload) whatever the flags. Turning hover off by reload while the panel peeks drops the peek; turning drag off mid-drag lets that drag finish. *Cost:* a warning for all-off panels = one INFO line per config load (trivial); the old highlight rule = drop the peek clause of `is_highlighted` (trivial).
-8. **Reload: handle and interaction changes are in-place updates.** `PanelRequest` gains `handle: HandleSpec` and `interaction: Interaction` (defaults, appended after `fallback_length`), but `PanelGeometry` and the layout never see them, so they can never cause a rebuild. The diff gains one kind, `panel-handle` (the entry changed only in `handle`, `interaction` and maybe `state`); `MonitorShell._sync_panels` keeps the last `(handle, interaction)` per index and calls the live panel's `set_handle(handle, interaction)` when it changed. Theme-level changes (`[theme.handle_style]`, `handle`, `handle_hover`) are an ordinary `restyle`: `apply_theme` re-resolves and redraws the handle (the canvas does its usual full redraw on a restyle). *Cost:* none structural.
+1. **The handle stays in the panel's own window, drawn with cairo (option a), not on the shape canvas (option b). The delayed `raise_to_top` workaround stays, unchanged.** *Default pending Phil.* `EdgePanel`'s handle remains a `Gtk.Button` (the hit target: click, keyboard activation, accessible name, `:hover`/focus state), and its child becomes a `Gtk.DrawingArea` whose draw handler calls the pure `draw_handle` (Task 6). Why not (b), drawing the shape on the canvas with an invisible hit target in the content window: Plan 1 Gate 1 (Run B, raise off) recorded that without the re-raise the collapsed dots were hidden, because the canvas lands above the panel windows and the dots sit inside the frame band the canvas paints. Moving the handle to the canvas would make the collapsed handle visible without the raise. Whether the extended panels' content (clock text, dock icons, system bar labels), which lives in the same panel windows, is hidden too without the raise was NOT recorded at Gate 1: that is an inference from the stacking, not a result. If it holds, option (b) cannot retire the workaround, it only moves the one symptom that revealed it. Gate B item 11 records it (the record-only run with `EDGE_SHELL_RAISE_MS=0` also notes whether the extended content is visible after 10 s) and Task 10 writes the outcome into the spec; if the content stays visible without the raise, (b) plus removing the raise becomes worth a follow-up plan. Against (b) as well, whatever item 11 shows: the hover/focus highlight would have to be pushed from the panel window to the canvas (cross-window state), every hover change would damage the canvas (a full redraw path for a 3 px dot), keyboard focus and the accessible name would live in a different window from the drawing, and the canvas scene would gain per-panel handle state; Gate 2 of Plan 1 already showed the handle staying in step with the body without a shared frame clock. For (a): the change is local to `EdgePanel`, the canvas, scene and painter are untouched, the DrawingArea is about 44 x 14 px so a redraw per animation frame is negligible, the shape lives inside the 10 px band in the same window that takes the input, and the border (drawn outside the mass, on the canvas below) can never cover it. Gate B item 11 re-checks the collapsed handles after 10 s and records (information only) what `EDGE_SHELL_RAISE_MS=0` does now to the collapsed handles and to the extended content. *Cost if Phil prefers (b):* about 1.5 tasks: `PanelShape` gains a `HandleLook` and the panel's lit state, `draw_scene` draws the handle after `fill_mass` inside the panel's damage box (`panel_box` already covers the band and body), `ShapeCanvas.set_handle_lit(key, bool)` is called from the Button's `state-flags-changed`, and the Button's child becomes an empty box; the models, `shell/handle.py` and `draw_handle` are reused unchanged. Whether it could also remove the raise depends on item 11's content record.
+2. **Config surface: per panel `handle` and `interaction` tables, a theme-wide `[theme.handle_style]`, colours from the existing `handle` / `handle_hover` tokens.** Per panel entry: `handle.shape` (`auto | dots | bar | chevron | none`), `handle.size` (px along the edge, 4-40), `handle.weight` (px, 1-8: dot diameter, bar and chevron thickness; a key the spec did not list, needed for "thin bar"), `handle.offset` (px along the edge from the body centre, -2000..2000, negative towards the start of the edge; clamped to the body at run time without a warning, because the body length is only known after layout), `handle.color`, `handle.hover_color` (`#rrggbb` or `#rrggbbaa`); `interaction.click`, `interaction.hover`, `interaction.drag` (strict booleans, so `click = 1` or `"yes"` is rejected). Every key is optional; a missing key comes from the widget's registered default (`PanelDefaults.handle` / `.interaction`; no built-in widget sets any; `register()` checks them with the same rules as a config entry, so a bad widget default fails at import, before any window exists), then the monitor's theme (`[monitors.NAME.theme.handle_style]`), then `[theme.handle_style]` (`shape = "auto"`, `size = 15`, `weight = 3` in `config.default.toml`) and the colours `theme.handle` / `theme.handle_hover`. The name `handle_style` avoids a TOML clash: `[theme.handle]` cannot coexist with the existing `handle = "#7b7f84"` colour key. Unknown shapes and keys fail validation with the key path, as everywhere else. TOML may use dotted keys (`handle.shape = "bar"`) or an inline table. *Cost:* renaming keys before anyone depends on them is trivial; moving the colours into a `[theme.handle]` table would break every config that sets `handle = "..."` (needs a migration note); a widget default ranking below the theme instead of above it = swap two lookups in `shell/handle.py` (trivial).
+3. **Shape `auto` (the default) follows the interactions; an explicit shape always wins.** *Default pending Phil.* `auto` = dots while click and drag are both on (today's look, so existing configs are unchanged), a bar for drag only, a chevron for click only, dots for hover only, nothing when all three are off (a handle would promise an interaction the panel does not answer). On a panel with all three off a theme-level shape is never drawn either (`[theme.handle_style] shape = "bar"` gives that panel `none`); only a shape set on the panel entry or by the widget is drawn there, as decoration (decision 7, open question 6). This is Phil's "thin bar when only drag, arrow when only click" as a default rather than a rule. *Cost:* explicit-only shapes (default `dots`, no `auto`) = drop `auto_shape` and one literal (small).
+4. **Chevron morph: it folds through a flat bar, it does not rotate.** *Default pending Phil (judged at Gate A item 3).* With `morph = d / depth`, the tip sits at `h/2 * (1 - 2 * morph)` across the edge: collapsed it points where the panel opens (into the screen), half-way it is a flat bar, extended it points back to the screen edge. A 180° rotation would point along the edge half-way, which reads as "slide sideways". `h = min(size / 2, (T - 2) - weight)`, so the chevron is at most `T - 2` px across, stroke included. Spec 15 says the chevron "rotates"; Task 10 records the fold as a deviation and updates the wording. *Cost:* a rotation instead is about 5 lines in `draw_handle` plus its test expectations.
+5. **Across the edge the shape is centred in the last `T` px of the mass, snapped in the canonical frame.** *Default pending Phil.* In the middle of the frame band while collapsed, `T / 2` px inside the body's inner edge while extended, never wider than `T - 2` px across (stroke included). The centre is snapped to the pixel grid as a distance from the screen edge (the canonical frame, +v towards the desktop), with the same rounding on every edge: a pixel centre when the shape's whole across extent is odd, a pixel boundary when it is even (`math.floor(v + 0.5)`, not Python's half-to-even `round`). The extent is the full one: `w` for dots and bar, `ceil(|2 * tip| + w)` for the chevron (rounded up, so a 7.4 px chevron snaps like an 8 px one and stays clear). So no shape ever covers band pixel 0 or `T - 1` (1 px clear on both sides) and the four edges mirror each other pixel for pixel; pinned by `test_the_shape_never_touches_the_band_edges` and `test_the_four_edges_mirror_each_other` (Task 4). The defaults (size 15, weight 3) fit as they are: at `T = 10` the dots and the bar cover band pixels 4-6 and the chevron at morph 0 and 1 is exactly `T - 2 = 8` px across, pixels 1-8; nothing in the defaults changes. Compared with today: today's collapsed dot centres are 7 px (bottom) and 6 px (top) from the screen edge (an artefact of the 14 px button and device-space rounding); they move to 5.5 px on every edge (pixels 4-6), 1.5 px (bottom, right) and 0.5 px (top, left) towards the screen edge. Extended, today's dots sit about 7 px inside the body's inner edge; they move to 4.5 px (pixels 3-5 counted from the inner edge). Both positions keep the same half-pixel lean towards the desktop. *Cost:* keeping today's 7 px is one formula in `shape_centre` (trivial), but it would put the chevron over a band edge.
+6. **Hit target separate from the shape and at least today's size.** The Button is `max(44, size + 16)` px along the edge (never longer than the body) by `max(14, T)` px across, and rides the body's inner edge exactly as today (`inset = max(0, T + d - across)`). Across it must hold the band, because the shape is drawn inside it; it never grows past that, so an extended panel's Button covers the inner `max(14, T)` px of the body (14 px at the default `T = 10`, as today; at `T = 20` the 20 px the shape is drawn in, not more) and cannot take clicks from content further in. A hard cap at 14 px would clip the shape for `T > 14`. `offset` moves the Button and the shape together. Input region: with hover on it is unchanged (body plus the hover zone, as today); that region contains the whole Button only while `hover_zone >= max(14, T) - T` (4 px at the default `T = 10`; the default `hover_zone` is 16), and with a smaller hover zone the Button's inner part takes no input while collapsed, exactly as today's 14 px button (pre-existing behaviour, not changed here). With hover off it is the body while it is out plus the Button when click or drag is on; with all three off a collapsed panel takes no input at all (the frame band stays click-through there). *Cost:* other minimums are two constants.
+7. **Interaction semantics.** Hover off: entering the strip never peeks and the handle does not light up for a peek. Drag off: a press never starts a drag (a press and release is still a click when click is on). Click off: `clicked` is ignored and the Button cannot take keyboard focus (keyboard activation follows click); the tooltip and accessible name become "Drag to expand clock" (drag on) or no tooltip and "clock handle" (drag off). The Button stays a `Gtk.Button` that cannot take focus (spec 15 says "the handle is not a button when click is off"; Task 10 records the deviation): it is still the drag and hover target and carries the accessible name. Keyboard focus in practice: built-in panels set no `wants_keyboard`, so their windows use `keyboard_mode="none"` and the handle never gets keyboard focus at all; `set_can_focus(click)` only matters for a widget that asks for the keyboard. Gate B does not cover the keyboard. *Default pending Phil:* the handle lights up (hover colour) while the pointer is on it or it has focus and click or drag is on, and while the panel peeks (spec 4: "Peek: handle dots brighten"; today the dots only brightened with the pointer on the handle itself). *Default pending Phil:* all three off is allowed: the panel then opens and closes only through `state` in the config (and later the settings window); each config load or reload logs one INFO line listing such panels ("these panels open only through state"), like the `pos` deprecation line, never a notification. *Default pending Phil:* such a panel never draws the theme's shape (decision 3). `state` keeps its meaning (the configured state, retargeted on reload) whatever the flags. Turning hover off by reload while the panel peeks drops the peek; turning drag off mid-drag lets that drag finish (no retarget until the release; pinned by `test_turning_drag_off_mid_drag_lets_that_drag_finish`, Task 7). *Cost:* dropping the INFO line = remove one call (trivial); the old highlight rule = drop the peek clause of `is_highlighted` (trivial).
+8. **Reload: handle and interaction changes are in-place updates.** `PanelRequest` gains `handle: HandleSpec` and `interaction: Interaction` (defaults, appended after `fallback_length`), but `PanelGeometry` and the layout never see them, so they can never cause a rebuild. The diff gains one kind, `panel-handle` (the entry changed only in `handle`, `interaction` and maybe `state`); `MonitorShell._sync_panels` keeps the last `(handle, interaction)` per index and calls the live panel's `set_handle(handle, interaction)` when it changed. Theme-level changes (`[theme.handle_style]`, `handle`, `handle_hover`) are an ordinary `restyle`: `apply_theme` re-resolves and redraws the handle (the canvas does its usual full redraw on a restyle). To make a rebuild visible live, `MonitorShell._new_panel` logs `building panel N (widget) on MONITOR` at DEBUG (shown with `-v`) and `EdgeShellApp._reload` logs the change kinds (`config reloaded: 1 change(s): panel-handle`). *Cost:* none structural.
 9. **Draw errors never reach the main loop**: the handle's draw handler catches, logs with the traceback and draws nothing, like the canvas's. *Cost:* none.
-10. **Settings-window readiness.** The Pydantic models stay the single source: `HandleConfig`, `InteractionConfig`, `HandleStyle` (+ per-monitor override) appear in `Config.model_json_schema()`, `HANDLE_SHAPES` lists the shape choices, and widget defaults come from the registry (`PanelDefaults.handle` / `.interaction`). A test pins the schema (Task 1). *Cost:* none.
+10. **Settings-window readiness.** The Pydantic models stay the single source: `HandleConfig`, `InteractionConfig`, `HandleStyle` (+ per-monitor override) appear in `Config.model_json_schema()`, `HANDLE_SHAPES` lists the shape choices, and widget defaults come from the registry (`PanelDefaults.handle` / `.interaction`), which validates them against `HandleConfig` / `InteractionConfig` in `register()` (Task 2), so the settings window can trust every default it shows. A test pins the schema (Task 1). *Cost:* none.
 11. **The `.handle-dot` CSS rules go** (the dots are no longer widgets); `#handle` keeps its reset rule. The `handle` / `handle_hover` theme tokens now feed cairo. *Cost:* none.
 
 ## Prerequisites
@@ -59,12 +59,12 @@ The spec leaves these open. They are the planner's choices; nothing below is imp
 
 The six input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
 
-1. **Existing configs must look and behave exactly as before** (no `handle` / `interaction` keys: dots, all three interactions, the same input region). Pinned by `test_defaults_change_nothing` (Task 1), `test_requests_default_to_the_theme_and_every_interaction` (Task 2), `test_the_theme_supplies_every_default` and `test_input_region_with_hover_is_unchanged` (Task 3), `test_dots_are_three_crisp_dots_along_the_edge` (Task 4), `test_the_handle_draws_the_rest_colour` (Task 6), `test_with_hover_the_input_region_is_unchanged` (Task 7); live by Gate B item 1.
-2. **A handle that would leave the frame band or sit under the border** (big size, heavy weight, a deep chevron, a thin frame `thickness = 2`, the border on). Expect the shape clamped inside the band, 1 px clear, and nothing drawn when the band has no room. Pinned by `test_the_shape_never_leaves_its_band` and `test_nothing_is_drawn` (Task 4), `test_shape_centre` (Task 3); live by Gate A item 4 and Gate B item 9.
+1. **Existing configs must look and behave exactly as before** (no `handle` / `interaction` keys: dots, all three interactions, the same input region; the only visible change is the dots' position, decision 5). Pinned by `test_defaults_change_nothing` (Task 1), `test_requests_default_to_the_theme_and_every_interaction` (Task 2), `test_the_theme_supplies_every_default` and `test_input_region_with_hover_is_unchanged` (Task 3), `test_dots_are_three_crisp_dots_along_the_edge` (Task 4), `test_the_handle_draws_the_rest_colour` (Task 6), `test_with_hover_the_input_region_is_unchanged` (Task 7); live by Gate B item 1.
+2. **A handle that would leave the frame band or sit under the border** (big size, heavy weight, a deep chevron, a thin frame `thickness = 6` or `2`, the border on). Expect the shape inside the band with band pixels 0 and `T - 1` empty on every edge, collapsed and extended, the four edges mirroring each other, and nothing drawn when the band has no room. Pinned by `test_the_shape_never_touches_the_band_edges` (thickness 10 and 6), `test_the_four_edges_mirror_each_other`, `test_snap_centre_rounds_across_from_the_screen_edge` and `test_nothing_is_drawn` (Task 4), `test_shape_centre` and `test_hit_size_has_a_minimum_and_grows_with_the_shape` (Task 3); live by Gate A item 4 and Gate B items 9 (border) and 10 (`thickness = 6`).
 3. **An offset or a shape larger than the body** (offset 9999, a body shrunk to 60 px by the layout, `size = 40`). Expect the hit target and shape clamped inside the body, never off its end. Pinned by `test_offset_is_clamped_to_the_body` and `test_hit_size_has_a_minimum_and_grows_with_the_shape` (Task 3), `test_place_handle_offsets_along_and_rides_across` (the 9999 case, Task 6); live by Gate B item 4.
-4. **A reload that changes only the handle or interactions, also while the panel peeks** must update in place: no rebuild, no re-raise, no stuck peek. Pinned by `test_handle_and_interaction_changes_update_in_place` (Task 2), `test_set_handle_updates_in_place_and_drops_a_peek` (Task 7), `test_a_handle_change_updates_the_live_panel` (Task 8); live by Gate B item 6.
-5. **A panel with every interaction off** must draw no handle, take no input while collapsed (click-through) and still open from `state` in the config. Pinned by `test_auto_shape_follows_the_interactions` (Task 3), `test_with_every_interaction_off_a_collapsed_panel_is_click_through` and `test_labels_and_keyboard_follow_click` (Task 7); live by Gate B item 5.
-6. **Bad values** (`shape = "star"`, `size = 3`, `color = "red"`, `click = "yes"`, a misspelt key) must be rejected with the key path, keeping the last good config. Pinned by `test_bad_values_name_the_key_path` and `test_an_unknown_shape_lists_the_known_ones` (Task 1); live by Gate B item 8.
+4. **A reload that changes only the handle or interactions, also while the panel peeks or is being dragged** must update in place: no rebuild, no re-raise, no stuck peek, a running drag finishes. Pinned by `test_handle_and_interaction_changes_update_in_place` (Task 2), `test_set_handle_updates_in_place_and_drops_a_peek` and `test_turning_drag_off_mid_drag_lets_that_drag_finish` (Task 7), `test_a_handle_change_updates_the_live_panel`, `test_only_building_a_panel_logs_building_panel` and `test_a_reload_logs_its_change_kinds` (Task 8); live by Gate B item 6 (no `building panel` line after the save).
+5. **A panel with every interaction off** must draw no handle (also when the theme sets a shape), take no input while collapsed (click-through), still open from `state` in the config, and be named once per config load in the log. Pinned by `test_auto_shape_follows_the_interactions` and `test_a_theme_shape_never_draws_on_an_all_off_panel` (Task 3), `test_all_off_paths_list_the_panels_only_state_opens` (Task 2), `test_with_every_interaction_off_a_collapsed_panel_is_click_through` and `test_labels_and_keyboard_follow_click` (Task 7), `test_all_off_panels_are_logged_once_per_load` (Task 8); live by Gate B items 5 and 7.
+6. **Bad values** (`shape = "star"`, `size = 3`, `color = "red"`, `click = "yes"`, a misspelt key) must be rejected with the key path, keeping the last good config; a bad widget default must fail at import, before any window exists. Pinned by `test_bad_values_name_the_key_path` and `test_an_unknown_shape_lists_the_known_ones` (Task 1), `test_bad_widget_defaults_fail_at_registration` (Task 2), `test_a_bad_look_fails_before_the_window_exists` (Task 6); live by Gate B item 8.
 
 ## File Structure
 
@@ -74,16 +74,20 @@ shell/config/models.py        # + HandleShape, HANDLE_SHAPES, HandleStyle (+Over
 config.default.toml           # + [theme.handle_style]
 shell/panel_spec.py           # + HandleSpec, Interaction, THEME_HANDLE, ALL_INTERACTIONS;
                               #   PanelDefaults / PanelRequest gain handle + interaction
-shell/registry.py             # request_for merges handle / interaction key by key (entry over widget)
+shell/registry.py             # request_for merges handle / interaction key by key (entry over widget);
+                              #   register() validates widget defaults; + all_off_paths
 shell/config/diff.py          # + "panel-handle" change kind
 shell/handle.py               # NEW, PURE: HandleLook, resolve_handle, auto_shape, is_highlighted,
                               #   handle_label, morph, hit_size, clamp_offset, along_margins, hit_inset,
                               #   shape_centre, hit_rect, input_rects
-shell/handle_draw.py          # NEW, PURE cairo: handle_matrix, snap, draw_handle, render_sheet, main
+shell/handle_draw.py          # NEW, PURE cairo: handle_matrix, snap, snap_centre, draw_handle,
+                              #   render_sheet, main
 shell/edge_panel.py           # handle Button + DrawingArea, _size_handle, _on_handle_draw, offset placement,
                               #   apply_theme / set_handle in place, interaction flags, input region
 shell/theme.py                # .handle-dot CSS rules removed
-shell/monitors.py             # passes handle / interaction to panels; in-place set_handle on reload
+shell/monitors.py             # passes handle / interaction to panels; in-place set_handle on reload;
+                              #   "building panel" debug line
+shell/app.py                  # reload logs the change kinds; INFO line for all-off panels
 examples/handles-test.toml    # Gate B
 tests/test_config_handle.py   # NEW (Task 1)
 tests/test_handle_requests.py # NEW (Task 2)
@@ -91,22 +95,23 @@ tests/test_handle.py          # NEW (Task 3)
 tests/test_handle_draw.py     # NEW (Task 4)
 tests/test_edge_panel_handle.py  # NEW (Tasks 6-7)
 tests/test_theme.py           # one expectation adjusted (Task 6)
-tests/test_monitor_shell.py   # FakeWindow.set_handle, bare_shell._handles, 5 new tests (Task 8)
+tests/test_monitor_shell.py   # FakeWindow.set_handle, bare_shell._handles, 6 new tests (Task 8)
+tests/test_app_sync.py        # 2 new tests (Task 8)
 README.md, docs/superpowers/specs/2026-10-11-edge-shell-design.md   # Task 10
 ```
 
 | Task | Deliverable | Expected `pytest -q` | Keeps the suite green because |
 | --- | --- | --- | --- |
 | 1 | config models and defaults | 664 (+19) | new keys optional, defaults reproduce today |
-| 2 | requests, registry merge, `panel-handle` diff | 678 (+14) | new fields have defaults; positional constructions unchanged |
-| 3 | pure handle rules | 742 (+64) | new module |
-| 4 | `draw_handle` + review sheet | 869 (+127) | new module |
-| 5 | Gate A (PNG sheet, Phil) | 869 | no code |
-| 6 | drawn handle in `EdgePanel`, CSS dots removed | 884 (+15) | `EdgePanel`'s new kwargs have defaults |
-| 7 | interaction flags, `set_handle`, input region | 895 (+11) | stand-in tests |
-| 8 | `MonitorShell` in-place updates | 900 (+5) | fakes gain `set_handle` |
-| 9 | Gate B (live, Phil) + example | 900 | example only |
-| 10 | README, spec | 900 | docs only |
+| 2 | requests, registry merge and checks, `panel-handle` diff, `all_off_paths` | 683 (+19) | new fields have defaults; positional constructions unchanged; no built-in widget sets a handle default |
+| 3 | pure handle rules | 748 (+65) | new module |
+| 4 | `draw_handle` + review sheet | 843 (+95) | new module |
+| 5 | Gate A (PNG sheet, Phil) | 843 | no code |
+| 6 | drawn handle in `EdgePanel`, CSS dots removed | 859 (+16) | `EdgePanel`'s new kwargs have defaults |
+| 7 | interaction flags, `set_handle`, input region | 871 (+12) | stand-in tests |
+| 8 | `MonitorShell` in-place updates, rebuild and reload log lines, all-off INFO line | 879 (+8) | fakes gain `set_handle`; the log lines are new |
+| 9 | Gate B (live, Phil) + example | 879 | example only |
+| 10 | README, spec | 879 | docs only |
 
 Without a display, `test_the_handle_is_a_button_drawing_with_cairo` (Task 6) is skipped (one fewer passed, one skipped).
 
@@ -411,12 +416,12 @@ git commit -m "feat(config): handle style, per-panel handle and interaction tabl
 
 **Files:**
 - Modify: `shell/panel_spec.py` (import; new dataclasses and constants before `PanelDefaults`; two fields on `PanelDefaults` and `PanelRequest`)
-- Modify: `shell/registry.py` (import; `request_for`; two helpers)
+- Modify: `shell/registry.py` (imports; `register` checks the defaults; `request_for`; two merge helpers; `_check_defaults`; `all_off_paths`)
 - Modify: `shell/config/diff.py` (import; `Kind`; `_diff_panels`; `_in_place`)
 - Test: `tests/test_handle_requests.py` (new)
 
 **Interfaces:**
-- Consumes: `HandleShape`, `PanelConfig.handle` / `.interaction` (Task 1).
+- Consumes: `HandleShape`, `HandleConfig`, `InteractionConfig`, `PanelConfig.handle` / `.interaction` (Task 1).
 - Produces:
   - `shell.panel_spec.HandleSpec(shape: HandleShape | None = None, size: int | None = None, weight: int | None = None, offset: int = 0, color: str | None = None, hover_color: str | None = None)` (frozen; None = the theme's value)
   - `shell.panel_spec.Interaction(click: bool = True, hover: bool = True, drag: bool = True)` (frozen)
@@ -424,6 +429,8 @@ git commit -m "feat(config): handle style, per-panel handle and interaction tabl
   - `PanelDefaults.handle: HandleSpec = HandleSpec()`, `PanelDefaults.interaction: Interaction = Interaction()` (last fields)
   - `PanelRequest.handle: HandleSpec = HandleSpec()`, `PanelRequest.interaction: Interaction = Interaction()` (after `fallback_length`)
   - `shell.registry.request_for(cfg)` fills both, key by key: the entry's value, else the widget default
+  - `shell.registry.register(name, defaults)` raises `ValueError("widget 'NAME': invalid handle or interaction default: …")` before registering when `defaults.handle` / `.interaction` break the `HandleConfig` / `InteractionConfig` rules
+  - `shell.registry.all_off_paths(config: Config) -> list[str]`: `monitors.NAME.panels.I` of every entry whose click, hover and drag are all off (entry over widget default); unknown widgets are skipped (left to `validate_widgets`)
   - `shell.config.diff.Kind` gains `"panel-handle"`: emitted when two requests differ only in `handle`, `interaction` and maybe `state` (and not only in `state`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -536,6 +543,36 @@ def test_theme_handle_changes_are_a_restyle(fake_registry, make_config, theme):
     old = make_config(monitors=mon({"widget": "dock"}))
     new = make_config(monitors=mon({"widget": "dock"}), theme=theme)
     assert diff_configs(old, new) == [Change("restyle", "HDMI-A-1")]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"handle": HandleSpec(shape="star")},
+        {"handle": HandleSpec(size=99)},
+        {"handle": HandleSpec(color="red")},
+        {"interaction": Interaction(click="yes")},
+    ],
+)
+def test_bad_widget_defaults_fail_at_registration(fake_registry, bad):
+    defaults = PanelDefaults(edge="left", length=200, depth=40, label="bad", **bad)
+    with pytest.raises(ValueError, match="widget 'bad': invalid handle or interaction default"):
+        fake_registry.register("bad", defaults)
+    assert "bad" not in fake_registry.widget_names()
+
+
+def test_all_off_paths_list_the_panels_only_state_opens(grip, make_config):
+    off = {"click": False, "hover": False, "drag": False}
+    cfg = make_config(
+        monitors=mon(
+            {"widget": "dock"},
+            {"widget": "clock", "interaction": off},
+            {"widget": "grip", "interaction": {"click": False, "drag": False}},  # hover: widget
+            {"widget": "grip", "interaction": {"click": False}},  # drag still on
+        )
+    )
+    assert grip.all_off_paths(cfg) == ["monitors.HDMI-A-1.panels.1", "monitors.HDMI-A-1.panels.2"]
+    assert grip.all_off_paths(make_config(monitors=mon({"widget": "dock"}))) == []
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -594,7 +631,56 @@ At the end of `PanelRequest` (after `fallback_length: int  # px for "content" un
 
 - [ ] **Step 4: Implement `shell/registry.py`**
 
-Change the import to `from shell.panel_spec import HandleSpec, Interaction, PanelDefaults, PanelRequest`. In `request_for`, replace the tail of the `PanelRequest(...)` call
+Replace the imports
+
+```python
+from collections.abc import Callable
+
+from shell.config.models import Config, ConfigError, PanelConfig
+from shell.panel_spec import PanelDefaults, PanelRequest
+```
+
+by
+
+```python
+from collections.abc import Callable
+from dataclasses import asdict
+
+from pydantic import ValidationError
+
+from shell.config.models import (
+    Config,
+    ConfigError,
+    HandleConfig,
+    InteractionConfig,
+    PanelConfig,
+)
+from shell.panel_spec import HandleSpec, Interaction, PanelDefaults, PanelRequest
+```
+
+In `register`, insert as its first line (above `def decorate(cls: type) -> type:`, followed by a blank line)
+
+```python
+    _check_defaults(name, defaults)  # a bad widget default fails at import, before any window
+```
+
+and insert directly above `def widget_names() -> list[str]:`
+
+```python
+def _check_defaults(name: str, defaults: PanelDefaults) -> None:
+    """Widget defaults do not pass through the config models: check the handle and interaction
+    ones with the same rules as a config entry (spec 15: shape, size 4-40, weight 1-8, offset,
+    #rrggbb[aa] colours, strict booleans)."""
+    try:
+        HandleConfig.model_validate(asdict(defaults.handle))
+        InteractionConfig.model_validate(asdict(defaults.interaction))
+    except ValidationError as exc:
+        raise ValueError(f"widget {name!r}: invalid handle or interaction default: {exc}") from exc
+
+
+```
+
+In `request_for`, replace the tail of the `PanelRequest(...)` call
 
 ```python
         label=d.label,
@@ -633,6 +719,27 @@ def _interaction(cfg: PanelConfig, default: Interaction) -> Interaction:
     )
 ```
 
+Insert directly above `def validate_widgets(config: Config) -> None:`
+
+```python
+_ALL_OFF = Interaction(click=False, hover=False, drag=False)
+
+
+def all_off_paths(config: Config) -> list[str]:
+    """Key paths of the panel entries whose click, hover and drag are all off (entry over the
+    widget's default): they open and close only through `state` (decision 7). EdgeShellApp
+    logs them once per config load; unknown widgets are left to validate_widgets."""
+    return [
+        f"monitors.{name}.panels.{i}"
+        for name, mon in config.monitors.items()
+        for i, panel in enumerate(mon.panels)
+        if panel.widget in _DEFAULTS
+        and _interaction(panel, _DEFAULTS[panel.widget].interaction) == _ALL_OFF
+    ]
+
+
+```
+
 - [ ] **Step 5: Implement `shell/config/diff.py`**
 
 Add the import `from shell.panel_spec import HandleSpec, Interaction, PanelRequest` after `from shell.config.models import Config`. Add `"panel-handle",` as the last entry of `Kind` (after `"panel-state",`). In `_diff_panels` replace
@@ -666,12 +773,12 @@ def _in_place(req: PanelRequest) -> PanelRequest:
 - [ ] **Step 6: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_handle_requests.py tests/test_registry.py tests/test_config_diff.py`
-Expected: all pass (`tests/test_handle_requests.py` has 14; `test_request_uses_widget_defaults` still passes because the new fields default to `HandleSpec()` / `Interaction()`).
+Expected: all pass (`tests/test_handle_requests.py` has 19; `test_request_uses_widget_defaults` still passes because the new fields default to `HandleSpec()` / `Interaction()`, and every registration in `tests/conftest.py` passes the new check).
 
 - [ ] **Step 7: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `678 passed`.
+Expected: `683 passed`. Also `scripts/py -c "import widgets"` prints nothing (every built-in widget's defaults pass `register()`'s check; imports GTK, creates no window).
 
 ```bash
 git add shell/panel_spec.py shell/registry.py shell/config/diff.py tests/test_handle_requests.py
@@ -692,11 +799,11 @@ git commit -m "feat(registry): handle and interaction in panel requests; in-plac
   - `HIT_ALONG = 44`, `HIT_ACROSS = 14`, `HIT_PAD = 8`
   - `HandleLook(shape: str, size: int, weight: int, offset: int, rgba: RGBA, hover_rgba: RGBA)` (frozen; `shape` never `"auto"`)
   - `auto_shape(interaction: Interaction) -> str`
-  - `resolve_handle(spec: HandleSpec, interaction: Interaction, theme: Theme) -> HandleLook`
+  - `resolve_handle(spec: HandleSpec, interaction: Interaction, theme: Theme) -> HandleLook` (all three interactions off and no shape on the spec: `"none"`, whatever the theme's shape)
   - `is_highlighted(prelight: bool, focused: bool, hovered: bool, extended: bool, interaction: Interaction) -> bool`
   - `handle_label(label: str, extended: bool, interaction: Interaction) -> str | None`
   - `morph(d: float, depth: int) -> float` (0..1)
-  - `hit_size(thickness: int, size: int, length: int) -> tuple[int, int]` (along, across)
+  - `hit_size(thickness: int, size: int, length: int) -> tuple[int, int]` (along `min(length, max(44, size + 16))`, across `max(14, thickness)`)
   - `clamp_offset(offset: int, length: int, hit_along: int) -> int`
   - `along_margins(offset: int) -> tuple[int, int]` (start, end)
   - `hit_inset(thickness: int, d: float, hit_across: int) -> int`
@@ -770,6 +877,16 @@ def test_auto_from_the_panel_or_the_theme_follows_the_interactions(make_config):
     assert hd.resolve_handle(HandleSpec(), click_only, bar_theme).shape == "bar"  # explicit
 
 
+def test_a_theme_shape_never_draws_on_an_all_off_panel(make_config):
+    off = Interaction(click=False, hover=False, drag=False)
+    bar_theme = make_config(theme={"handle_style": {"shape": "bar"}}).theme
+    assert hd.resolve_handle(HandleSpec(), off, bar_theme).shape == "none"
+    assert hd.resolve_handle(HandleSpec(shape="auto"), off, bar_theme).shape == "none"
+    # set on the entry (or by the widget): drawn as decoration
+    assert hd.resolve_handle(HandleSpec(shape="bar"), off, bar_theme).shape == "bar"
+    assert hd.resolve_handle(HandleSpec(shape="dots"), off, make_config().theme).shape == "dots"
+
+
 @pytest.mark.parametrize(
     ("prelight", "focused", "hovered", "extended", "interaction", "expected"),
     [
@@ -809,7 +926,8 @@ def test_morph_is_the_depth_fraction():
 def test_hit_size_has_a_minimum_and_grows_with_the_shape():
     assert hd.hit_size(10, 15, 560) == (44, 14)  # today's handle button
     assert hd.hit_size(10, 40, 560) == (56, 14)  # 8 px past the shape on each side
-    assert hd.hit_size(20, 15, 560) == (44, 24)  # thick frame: the band plus 4 px
+    assert hd.hit_size(20, 15, 560) == (44, 20)  # thick frame: the band, no more
+    assert hd.hit_size(6, 15, 560) == (44, 14)  # thin frame: never below today's 14
     assert hd.hit_size(10, 40, 50) == (50, 14)  # never longer than the body
 
 
@@ -949,8 +1067,12 @@ def auto_shape(interaction: Interaction) -> str:
 
 
 def resolve_handle(spec: HandleSpec, interaction: Interaction, theme: Theme) -> HandleLook:
+    """Every key from the panel's spec (entry over widget default), else the theme. A panel
+    with every interaction off never draws the theme's shape: only a shape set on the entry
+    or by the widget is drawn there (as decoration)."""
     style = theme.handle_style
-    shape = spec.shape or style.shape
+    all_off = not (interaction.click or interaction.hover or interaction.drag)
+    shape = spec.shape or ("none" if all_off else style.shape)
     return HandleLook(
         shape=auto_shape(interaction) if shape == "auto" else shape,
         size=spec.size or style.size,
@@ -989,9 +1111,11 @@ def morph(d: float, depth: int) -> float:
 
 
 def hit_size(thickness: int, size: int, length: int) -> tuple[int, int]:
-    """(along, across) px of the hit target; never longer than the body."""
+    """(along, across) px of the hit target; never longer than the body. Across it is today's
+    14 px, or the band when the frame is thicker (the shape is drawn inside the target, so it
+    must hold the band); extended it never reaches further into the content than that."""
     along = min(length, max(HIT_ALONG, size + 2 * HIT_PAD))
-    return along, max(HIT_ACROSS, thickness + 4)
+    return along, max(HIT_ACROSS, thickness)
 
 
 def clamp_offset(offset: int, length: int, hit_along: int) -> int:
@@ -1063,7 +1187,9 @@ def input_rects(
     offset: int,
 ) -> list[Rect]:
     """Where the panel takes input at depth `d`. With hover on: the body plus the invisible
-    hover zone (as before; it contains the hit target). With hover off: the body while it is
+    hover zone, as before (it holds the whole hit target while hover_zone >= hit across -
+    thickness, 4 px at the defaults; a smaller zone leaves the target's inner part without
+    input, as with today's 14 px button). With hover off: the body while it is
     out, plus the hit target when click or drag is on; nothing at all while collapsed with
     every interaction off (the strip is click-through)."""
     if interaction.hover:
@@ -1079,12 +1205,12 @@ def input_rects(
 - [ ] **Step 4: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_handle.py`
-Expected: `64 passed`.
+Expected: `65 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `742 passed`.
+Expected: `748 passed`.
 
 ```bash
 git add shell/handle.py tests/test_handle.py
@@ -1100,12 +1226,13 @@ git commit -m "feat(handle): pure handle rules: theme resolution, auto shape, hi
 - Test: `tests/test_handle_draw.py` (new)
 
 **Interfaces:**
-- Consumes: `shell.theme.hex_to_rgba` (existing, only inside `render_sheet`).
+- Consumes: `shell.theme.hex_to_rgba` (existing, only inside `render_sheet`); the tests also use `hd.shape_centre` (Task 3) to render exactly where `EdgePanel` will.
 - Produces (pure cairo):
   - `SHAPES = ("dots", "bar", "chevron", "none")`
   - `handle_matrix(edge, cx, cy) -> cairo.Matrix`: canonical (u along the edge, v towards where the panel opens) to device px around (cx, cy)
-  - `snap(value: float, weight: float) -> float`
-  - `draw_handle(cr, shape: str, size: int, weight: int, rgba: RGBA, morph: float, edge, cx: float, cy: float, max_across: float) -> None`
+  - `snap(value: float, extent: float) -> float`: a pixel centre for an odd whole extent, a pixel boundary (`math.floor(value + 0.5)`) for an even one
+  - `snap_centre(edge, cx, cy, along: float, across: float) -> tuple[float, float]`: `along` snapped in device px, `across` snapped in the canonical frame (as a distance from the screen edge), so every edge rounds the same way
+  - `draw_handle(cr, shape: str, size: int, weight: int, rgba: RGBA, morph: float, edge, cx: float, cy: float, max_across: float) -> None` (snaps with the shape's full across extent: `w` for dots and bar, `ceil(|2 * tip| + w)` for the chevron)
   - `render_sheet(path: str, thickness: int = 10, zoom: int = 6) -> tuple[int, int]`; `main(argv) -> int` (`python -m shell.handle_draw --sheet FILE.png`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -1120,11 +1247,11 @@ import math
 import cairo
 import pytest
 
+from shell import handle as hd
 from shell import handle_draw as hdraw
 from shell.theme import hex_to_rgba
 
 W = H = 80
-C = 40.5  # where an odd-weight shape centred near (40, 40) lands after snapping
 WHITE = (1.0, 1.0, 1.0, 1.0)
 EDGES = ["top", "bottom", "left", "right"]
 FILLED, EMPTY = 128, 20
@@ -1148,14 +1275,17 @@ def alpha(surface, x, y):
     return pixel(surface, x, y)[3]
 
 
-def at(edge, u, v):
-    """Device point of canonical (u along, v towards the desktop) around the snapped centre."""
-    return hdraw.handle_matrix(edge, C, C).transform_point(u, v)
+def at(edge, u, v, across=3):
+    """Device point of canonical (u along, v towards the desktop) around the centre (40, 40)
+    as draw_handle snaps it for a 3 px weight and a shape `across` px wide."""
+    cx, cy = hdraw.snap_centre(edge, 40, 40, 3, across)
+    return hdraw.handle_matrix(edge, cx, cy).transform_point(u, v)
 
 
 def lit(surface):
     data, stride = surface.get_data(), surface.get_stride()
-    return [(x, y) for y in range(H) for x in range(W) if data[y * stride + x * 4 + 3]]
+    w, h = surface.get_width(), surface.get_height()
+    return [(x, y) for y in range(h) for x in range(w) if data[y * stride + x * 4 + 3]]
 
 
 @pytest.mark.parametrize("edge", EDGES)
@@ -1180,48 +1310,80 @@ def test_bar_is_one_rounded_line(edge):
 @pytest.mark.parametrize("edge", EDGES)
 def test_chevron_points_where_the_panel_opens_then_morphs_back(edge):
     closed, flat, open_ = (render("chevron", edge, m) for m in (0.0, 0.5, 1.0))
-    # height = min(15 / 2, 8 - 3) = 5: the tip is 2.5 px from the centre, the arm ends -2.5
-    assert alpha(closed, *at(edge, 0, 2)) > FILLED  # tip towards the desktop
-    assert alpha(closed, *at(edge, 0, -2)) < EMPTY
-    assert alpha(closed, *at(edge, 6, -2.5)) > FILLED  # arm ends towards the screen edge
-    assert alpha(flat, *at(edge, 0, 0)) > FILLED  # half way: a flat bar
+    # height = min(15 / 2, 8 - 3) = 5: the tip is 2.5 px from the centre, the arm ends -2.5;
+    # 2 * 2.5 + 3 = 8 px across in all (an even extent: the centre snaps to a pixel edge)
+    assert alpha(closed, *at(edge, 0, 2, 8)) > FILLED  # tip towards the desktop
+    assert alpha(closed, *at(edge, 0, -2, 8)) < EMPTY
+    assert alpha(closed, *at(edge, 6, -2.5, 8)) > FILLED  # arm ends towards the screen edge
+    assert alpha(flat, *at(edge, 0, 0)) > FILLED  # half way: a flat bar, 3 px across
     assert alpha(flat, *at(edge, 0, 2)) < EMPTY and alpha(flat, *at(edge, 0, -2)) < EMPTY
-    assert alpha(open_, *at(edge, 0, -2)) > FILLED  # extended: points back to the edge
-    assert alpha(open_, *at(edge, 0, 2)) < EMPTY
+    assert alpha(open_, *at(edge, 0, -2, 8)) > FILLED  # extended: points back to the edge
+    assert alpha(open_, *at(edge, 0, 2, 8)) < EMPTY
 
 
 def test_the_tip_direction_matches_the_edge():
-    # bottom panel collapsed: the chevron points up, into the screen
+    # bottom panel collapsed: the chevron (8 px across) is centred on (40.5, 40) and points
+    # up, into the screen
     s = render("chevron", "bottom", 0.0)
-    assert alpha(s, C, C - 2) > FILLED and alpha(s, C, C + 2) < EMPTY
+    assert alpha(s, 40.5, 38) > FILLED and alpha(s, 40.5, 42) < EMPTY
     s = render("chevron", "right", 0.0)
-    assert alpha(s, C - 2, C) > FILLED and alpha(s, C + 2, C) < EMPTY
+    assert alpha(s, 38, 40.5) > FILLED and alpha(s, 42, 40.5) < EMPTY
 
 
 def test_colours_rest_hover_and_alpha():
     s = render("dots", "bottom", rgba=hex_to_rgba("#e6e8ea"))
-    assert pixel(s, C, C) == (0xEA, 0xE8, 0xE6, 255)  # ARGB32 is BGRA in memory
+    assert pixel(s, *at("bottom", 0, 0)) == (0xEA, 0xE8, 0xE6, 255)  # ARGB32 is BGRA in memory
     s = render("dots", "bottom", rgba=hex_to_rgba("#ffffff80"))
-    assert pixel(s, C, C) == (128, 128, 128, 128)  # premultiplied
+    assert pixel(s, *at("bottom", 0, 0)) == (128, 128, 128, 128)  # premultiplied
+
+
+def band_profile(shape, edge, morph, size, weight, thickness, d):
+    """Render like EdgePanel does: in a 44 x 14 hit target at hd.shape_centre. Returns
+    {(along px, px from the box's screen-side edge): alpha} of every lit pixel."""
+    w, h = (44, 14) if edge in ("top", "bottom") else (14, 44)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+    cx, cy = hd.shape_centre(edge, w, h, thickness, d)
+    hdraw.draw_handle(
+        cairo.Context(surface), shape, size, weight, WHITE, morph, edge, cx, cy, thickness - 2
+    )
+    surface.flush()
+    data, stride = surface.get_data(), surface.get_stride()
+    out = {}
+    for x, y in lit(surface):
+        key = {"top": (x, y), "bottom": (x, h - 1 - y), "left": (y, x), "right": (y, w - 1 - x)}
+        out[key[edge]] = data[y * stride + x * 4 + 3]
+    return out
+
+
+MORPHS = (0.0, 0.25, 0.5, 0.75, 1.0)
 
 
 @pytest.mark.parametrize("shape", ["dots", "bar", "chevron"])
 @pytest.mark.parametrize("edge", EDGES)
-@pytest.mark.parametrize("morph", [0.0, 0.5, 1.0])
 @pytest.mark.parametrize(("size", "weight"), [(4, 1), (15, 3), (40, 8)])
-def test_the_shape_never_leaves_its_band(shape, edge, morph, size, weight):
-    max_across = 8  # thickness 10 - 2
-    s = render(shape, edge, morph, size, weight, max_across=max_across)
-    w = min(weight, max_across)
-    along_reach = max(size / 2, 1.5 * w if shape == "dots" else 0) + 1
-    across_reach = max_across / 2 + 1
-    pixels = lit(s)
-    assert pixels
-    for x, y in pixels:
-        du, dv = (x + 0.5 - C, y + 0.5 - C)
-        if edge in ("left", "right"):
-            du, dv = dv, du
-        assert abs(du) <= along_reach and abs(dv) <= across_reach, (x, y)
+@pytest.mark.parametrize("thickness", [10, 6])
+def test_the_shape_never_touches_the_band_edges(shape, edge, size, weight, thickness):
+    # collapsed the band is box px 0..T-1; extended (d = 64, the box rides the inner edge)
+    # it is the last T px of the 14 px box
+    for d, first in ((0, 0), (64, 14 - thickness)):
+        for m in MORPHS:
+            profile = band_profile(shape, edge, m, size, weight, thickness, d)
+            assert profile, (d, m)
+            across = {v for _, v in profile}
+            # band pixels `first` and `first + T - 1` stay empty: 1 px clear on both sides
+            assert min(across) > first and max(across) < first + thickness - 1, (d, m, across)
+
+
+@pytest.mark.parametrize("shape", ["dots", "bar", "chevron"])
+def test_the_four_edges_mirror_each_other(shape):
+    # the same pixels on every edge, measured from the screen edge (alpha may differ by a
+    # few levels: cairo's anti-aliasing is not exactly mirror-symmetric)
+    for d in (0, 64):
+        for m in MORPHS:
+            top, bottom, left, right = (band_profile(shape, e, m, 15, 3, 10, d) for e in EDGES)
+            for a, b in ((top, bottom), (left, right), (top, left)):
+                assert set(a) == set(b), (d, m)
+                assert all(abs(a[k] - b[k]) <= 16 for k in a), (d, m)
 
 
 @pytest.mark.parametrize(
@@ -1232,9 +1394,21 @@ def test_nothing_is_drawn(shape, rgba, max_across):
     assert lit(render(shape, "bottom", rgba=rgba, max_across=max_across)) == []
 
 
-def test_snap_keeps_odd_widths_on_pixel_centres():
+def test_snap_aligns_odd_extents_to_pixel_centres_and_even_ones_to_pixel_edges():
     assert hdraw.snap(40, 3) == 40.5 and hdraw.snap(40.9, 3) == 40.5
     assert hdraw.snap(40.4, 2) == 40.0 and hdraw.snap(40.6, 4) == 41.0
+    assert hdraw.snap(40.5, 2) == 41.0  # halves round up (round() would give 40)
+    assert hdraw.snap(-9, 3) == -8.5
+
+
+def test_snap_centre_rounds_across_from_the_screen_edge():
+    # the same 3 px shape, 5 px from the screen edge of a 14 px deep box, on every edge:
+    # always 5.5 px from that edge (pixels 4-6)
+    assert hdraw.snap_centre("top", 22, 5, 3, 3) == (22.5, 5.5)
+    assert hdraw.snap_centre("bottom", 22, 9, 3, 3) == (22.5, 8.5)  # 14 - 8.5 = 5.5
+    assert hdraw.snap_centre("left", 5, 22, 3, 3) == (5.5, 22.5)
+    assert hdraw.snap_centre("right", 9, 22, 3, 3) == (8.5, 22.5)
+    assert hdraw.snap_centre("bottom", 22, 9, 3, 8) == (22.5, 9.0)  # even: a pixel edge
 
 
 def test_the_review_sheet(tmp_path, capsys):
@@ -1286,11 +1460,25 @@ def handle_matrix(edge: Edge, cx: float, cy: float) -> cairo.Matrix:
     return cairo.Matrix(0, 1, -1, 0, cx, cy)  # right
 
 
-def snap(value: float, weight: float) -> float:
-    """Pixel-align a centre so an odd-width shape covers whole pixels (crisp edges)."""
-    if round(weight) % 2:
+def snap(value: float, extent: float) -> float:
+    """Pixel-align a centre so a shape `extent` px wide covers whole pixels (crisp edges): a
+    pixel centre for an odd extent, a pixel boundary for an even one. Halves round up
+    (math.floor(v + 0.5); Python's round() would round half to even)."""
+    if math.floor(extent + 0.5) % 2:
         return math.floor(value) + 0.5
-    return float(round(value))
+    return float(math.floor(value + 0.5))
+
+
+def snap_centre(
+    edge: Edge, cx: float, cy: float, along: float, across: float
+) -> tuple[float, float]:
+    """Snap the centre of a shape `along` x `across` px. The across coordinate is snapped in
+    the canonical frame (+v towards the desktop, so as a distance from the screen edge): every
+    edge rounds the same way and the four edges mirror each other pixel for pixel."""
+    sign = 1 if edge in ("top", "left") else -1  # device axis direction of +v
+    if edge in ("top", "bottom"):
+        return snap(cx, along), sign * snap(sign * cy, across)
+    return sign * snap(sign * cx, across), snap(cy, along)
 
 
 def draw_handle(
@@ -1311,8 +1499,16 @@ def draw_handle(
     if shape == "none" or rgba[3] <= 0 or max_across <= 0:
         return
     w = max(1.0, min(float(weight), float(max_across)))
+    tip = 0.0  # dots and bar: across the edge the shape is just `w` px
+    if shape == "chevron":
+        height = max(0.0, min(size / 2, max_across - w))  # arm ends to tip, across
+        tip = height / 2 * (1 - 2 * min(1.0, max(0.0, morph)))
+    # Whole px the shape spans across the edge, stroke included (never more than max_across).
+    # Its parity decides the snap, rounded up so a 7.4 px chevron snaps like an 8 px one and
+    # stays 1 px clear of both band edges.
+    across = math.ceil(round(abs(2 * tip) + w, 6))
     cr.save()
-    cr.transform(handle_matrix(edge, snap(cx, w), snap(cy, w)))
+    cr.transform(handle_matrix(edge, *snap_centre(edge, cx, cy, w, across)))
     cr.set_source_rgba(*rgba)
     if shape == "dots":
         r = w / 2
@@ -1323,11 +1519,6 @@ def draw_handle(
         cr.fill()
     else:
         half = max(0.0, (size - w) / 2)  # round caps add w / 2 at each end
-        if shape == "bar":
-            tip = 0.0
-        else:  # chevron
-            height = max(0.0, min(size / 2, max_across - w))  # arm ends to tip, across
-            tip = height / 2 * (1 - 2 * min(1.0, max(0.0, morph)))
         cr.move_to(-half, -tip)
         cr.line_to(0, tip)
         cr.line_to(half, -tip)
@@ -1409,12 +1600,12 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_handle_draw.py`
-Expected: `127 passed` (108 of them are the band check: 3 shapes x 4 edges x 3 morphs x 3 sizes).
+Expected: `95 passed` (72 of them are the band check: 3 shapes x 4 edges x 3 sizes x 2 thicknesses, each looping over collapsed and extended and 5 morph values). The band check is strict: band pixels 0 and `T - 1` must stay fully empty (alpha 0). It fails on a device-space snap (`math.floor(v) + 0.5` on the device y of a bottom handle puts the 8 px chevron over band pixel 0 or 9, and the dots on pixels 3-5 instead of 4-6), which is why the snap is done in the canonical frame. The mirror check compares the lit pixels exactly and the alpha with a tolerance of 16 levels: cairo's anti-aliasing is not exactly mirror-symmetric (up to 12 levels measured while planning).
 
 - [ ] **Step 5: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `869 passed`.
+Expected: `843 passed`.
 
 ```bash
 git add shell/handle_draw.py tests/test_handle_draw.py
@@ -1443,14 +1634,14 @@ Expected: `wrote /tmp/edge-handles.png (3360x4032)`. Also render a thin frame: `
 
 Open `/tmp/edge-handles.png` in any image viewer (for example `gwenview /tmp/edge-handles.png`). It is 6x enlarged without smoothing, so each visible square is one screen pixel. Rows, top to bottom: dots, bar, chevron, each on the top, bottom, left and right edge (the dark strip is a 10 px frame band, the grey is the desktop). Columns: morph 0, 0.25, 0.5, 0.75, 1 in the rest colour `#7b7f84`, then the same five in the hover colour `#e6e8ea`.
 
-1. **Dots** look like today's three dots (3 px, 3 px gaps), crisp (whole pixels, no blurred half pixels), centred in the band, identical in every column (dots do not morph).
+1. **Dots** look like today's three dots (3 px, 3 px gaps), crisp (whole pixels, no blurred half pixels), in the middle of the band (band pixels 4-6 counted from the screen edge, on every edge; decision 5), identical in every column (dots do not morph).
 2. **Bar:** one rounded 15 px line, 3 px thick, crisp, centred in the band.
-3. **Chevron morph:** column 1 (collapsed) points away from the screen edge into the desktop (top edge: down; bottom: up; left: right; right: left); column 3 is a flat bar; column 5 (extended) points back towards the screen edge; columns 2 and 4 are in between. Judge whether the fold reads as "open" / "close" (decision 4; the alternative is a rotation).
-4. **Inside the band:** no shape touches the band's edges (1 px clear on both sides), also in `/tmp/edge-handles-t6.png` (6 px band: the shapes shrink across to fit, the dots get thinner).
+3. **Chevron morph:** column 1 (collapsed) points away from the screen edge into the desktop (top edge: down; bottom: up; left: right; right: left); column 3 is a flat bar; column 5 (extended) points back towards the screen edge; columns 2 and 4 are in between. Judge whether the fold reads as "open" / "close" (decision 4, default pending Phil; the alternative is a rotation).
+4. **Inside the band:** no shape touches the band's edges: the first and last pixel row of the dark band are dark in every cell (1 px clear on both sides), also in `/tmp/edge-handles-t6.png` (6 px band: the chevron gets flatter to fit; the dots and the bar keep 3 px). The top and bottom rows of a shape mirror each other (same distance from their screen edge), as do left and right.
 5. **Defaults** (decision 2): size 15, weight 3 and the chevron's height look right at 1:1 (view the sheet at 1/6 zoom to see screen size). Say which numbers to change if not.
 6. **Colours:** rest and hover are clearly different; the hover colour is the one the peeking and hovered handle will use.
 
-**On failure:** a wrong direction or a fold that reads badly -> change `draw_handle`'s chevron branch (decision 4's rotation alternative) and the matching expectations in `test_chevron_points_where_the_panel_opens_then_morphs_back` / `test_the_tip_direction_matches_the_edge`, re-run Task 4's VERIFY, re-render. Blurry dots -> check `snap` with the failing weight and add a pixel test for it first. Other default numbers -> change them in `HandleStyle` and `config.default.toml` (Task 1) and in the tests that pin 15 / 3 (`tests/test_config_handle.py`, `tests/test_handle.py`). Record Phil's answers for Task 10.
+**On failure:** a wrong direction or a fold that reads badly -> change `draw_handle`'s chevron branch (decision 4's rotation alternative) and the matching expectations in `test_chevron_points_where_the_panel_opens_then_morphs_back` / `test_the_tip_direction_matches_the_edge`, re-run Task 4's VERIFY, re-render. A shape touches the band edge (item 4) or two mirrored edges differ -> note the shape, edge, morph column and thickness, add that case to `test_the_shape_never_touches_the_band_edges` / `test_the_four_edges_mirror_each_other` first (it must fail), then fix the extent or the snap in `draw_handle` / `snap_centre` (never widen `max_across`); if the defaults themselves touch, lower the chevron's height (`max_across - w - 1`) rather than the default size, and re-pin the chevron expectations. Blurry dots -> check `snap` with the failing weight and add a pixel test for it first. Other default numbers -> change them in `HandleStyle` and `config.default.toml` (Task 1) and in the tests that pin 15 / 3 (`tests/test_config_handle.py`, `tests/test_handle.py`). Record Phil's answers for Task 10.
 
 ---
 
@@ -1468,7 +1659,7 @@ Open `/tmp/edge-handles.png` in any image viewer (for example `gwenview /tmp/edg
 - Consumes: `HandleSpec`, `Interaction`, `THEME_HANDLE`, `ALL_INTERACTIONS` (Task 2); `shell.handle` as `hd`: `resolve_handle`, `hit_size`, `hit_inset`, `clamp_offset`, `along_margins`, `shape_centre`, `is_highlighted`, `morph` (Task 3); `draw_handle` (Task 4).
 - Produces:
   - `EdgePanel(spec, theme, monitor, index, scope, on_depth=None, handle: HandleSpec = THEME_HANDLE, interaction: Interaction = ALL_INTERACTIONS)`
-  - attributes `_handle_spec`, `_interaction`, `_look: HandleLook` (set before `_d`), `_handle` (Button), `_handle_area` (DrawingArea)
+  - attributes `_handle_spec`, `_interaction`, `_look: HandleLook` (resolved before `super().__init__`, so a bad look raises before a window object exists; all three set before `_d`), `_handle` (Button), `_handle_area` (DrawingArea)
   - `EdgePanel.apply_theme(theme)` re-resolves and redraws the handle (`_restyle_handle`)
   - `EdgePanel._restyle_handle()`: resolve -> `_size_handle()` -> `_sync_handle()` -> `_place_handle(_d)` -> `_last_rect = None` -> `_update_input_region(_d)`
   - `EdgePanel._hit() -> (along, across)`; `_size_handle()`; `_on_handle_draw(area, cr) -> False`
@@ -1614,8 +1805,9 @@ def draw(s, w=44, h=14):
 
 
 def centre_pixel(surface):
-    # bottom edge, collapsed, T = 10: the middle dot covers pixel (22, 9) (snapped to 22.5, 9.5)
-    off = 9 * surface.get_stride() + 22 * 4
+    # bottom edge, collapsed, T = 10: the middle dot is centred on (22.5, 8.5), 5.5 px from the
+    # screen edge, and covers pixel (22, 8) fully
+    off = 8 * surface.get_stride() + 22 * 4
     return tuple(surface.get_data()[off : off + 4])
 
 
@@ -1657,6 +1849,22 @@ def test_css_no_longer_styles_handle_dots(make_config):
     css = to_css(make_config().theme, "mon-x")
     assert "handle-dot" not in css
     assert ".mon-x #handle { min-width: 0; min-height: 0; padding: 0; }" in css
+
+
+def test_a_bad_look_fails_before_the_window_exists(make_config):
+    # monitor=None: had __init__ reached the window code first, this would be an
+    # AttributeError; the look is resolved before it, so the bad colour fails first
+    spec = SimpleNamespace(edge="bottom", pos=680, length=560, depth=64, label="dock")
+    with pytest.raises(ValueError, match="invalid colour 'red'"):
+        ep.EdgePanel.__init__(
+            SimpleNamespace(),
+            spec,
+            make_config().theme,
+            None,
+            0,
+            "mon-x",
+            handle=HandleSpec(color="red"),
+        )
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1726,12 +1934,19 @@ by
         change later in place (set_handle)."""
 ```
 
+Insert as the first lines of the body, directly above `t, r = theme.thickness, theme.radius`
+
+```python
+        # resolved before the window exists: a bad look fails without leaving a half-built window
+        look = hd.resolve_handle(handle, interaction, theme)
+```
+
 After `self._on_depth = on_depth` insert (these must come before `self._d = 0.0`: `do_size_allocate` reads them once `_d` exists)
 
 ```python
         self._handle_spec = handle
         self._interaction = interaction
-        self._look = hd.resolve_handle(handle, interaction, theme)
+        self._look = look
 ```
 
 After `self._handle = self._build_handle()` insert `self._size_handle()`.
@@ -1899,12 +2114,12 @@ by
 - [ ] **Step 9: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_edge_panel_handle.py tests/test_edge_panel_drag.py tests/test_monitor_shell.py tests/test_theme.py`
-Expected: all pass (`tests/test_edge_panel_handle.py` has 15).
+Expected: all pass (`tests/test_edge_panel_handle.py` has 16).
 
 - [ ] **Step 10: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `884 passed`.
+Expected: `859 passed`.
 
 ```bash
 git add shell/edge_panel.py shell/theme.py tests/test_theme.py tests/test_edge_panel_handle.py
@@ -1923,7 +2138,7 @@ git commit -m "feat(panel): draw the handle with cairo in the panel window; rest
 - Consumes: `hd.handle_label`, `hd.input_rects` (Task 3); Task 6's `_restyle_handle`, `_hit`, `_handle_area`.
 - Produces:
   - `EdgePanel.set_handle(handle: HandleSpec, interaction: Interaction) -> None` (in place: restyle, then drop a peek that hover no longer allows)
-  - hover off: `_on_enter` never peeks; drag off: `_on_press` never records a press; click off: `_on_clicked` never toggles, the Button is not focusable, the tooltip/accessible name follow `handle_label`
+  - hover off: `_on_enter` never peeks; drag off: `_on_press` never records a press (a drag already running when drag is turned off finishes normally); click off: `_on_clicked` never toggles, the Button is not focusable (moot for built-in panels: their windows use `keyboard_mode="none"`), the tooltip/accessible name follow `handle_label`
   - `_update_input_region(d)` applies `hd.input_rects(...)` as one `cairo.Region`; `_last_rect` is the tuple of rects
 
 - [ ] **Step 1: Write the failing tests**
@@ -2014,6 +2229,28 @@ def test_set_handle_keeps_a_peek_that_hover_still_allows(make_config):
     assert s.calls == ["restyle"] and s._hovered is True
 
 
+def test_turning_drag_off_mid_drag_lets_that_drag_finish(make_config, monkeypatch):
+    monkeypatch.setattr(ep.GLib, "idle_add", lambda fn: None)
+    depths = []
+    s = stub(make_config, _dragging=True, _press=(100.0, 500.0), _press_depth=0.0)
+    s._suppress_click = True
+    s._tween = SimpleNamespace(jump_to=depths.append)
+    s._fade = SimpleNamespace(jump_to=lambda value: None)
+    s._clear_suppress = lambda: None
+    s._finish_drag = lambda: ep.EdgePanel._finish_drag(s)
+    s._restyle_handle = lambda: s.calls.append("restyle")
+    s._retarget = lambda: s.calls.append(("retarget", s._dragging))
+    ep.EdgePanel.set_handle(s, HandleSpec(), Interaction(drag=False))
+    assert s.calls == ["restyle"]  # no retarget: the drag owns the depth until release
+    event = SimpleNamespace(state=ep.Gdk.ModifierType.BUTTON1_MASK, x_root=100.0, y_root=450.0)
+    assert ep.EdgePanel._on_motion(s, None, event) is True  # the drag goes on
+    assert depths == [50.0]
+    s._d = depths[-1]
+    ep.EdgePanel._finish_drag(s)  # the release: 50 of 64 px snaps open
+    assert (s._extended, s._dragging, s._press) == (True, False, None)
+    assert s.calls == ["restyle", ("retarget", False)]
+
+
 @pytest.mark.parametrize(
     ("interaction", "tooltip", "name", "focus"),
     [
@@ -2034,7 +2271,7 @@ def test_labels_and_keyboard_follow_click(make_config, interaction, tooltip, nam
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `scripts/py -m pytest -q tests/test_edge_panel_handle.py`
-Expected: 10 of the 11 new tests FAIL (for example `AttributeError: type object 'EdgePanel' has no attribute 'set_handle'`; the hover-off region tests get the old single hover rect; the label tests find no `can_focus`). `test_with_hover_the_input_region_is_unchanged` already passes: it pins the behaviour that must not change.
+Expected: 11 of the 12 new tests FAIL (for example `AttributeError: type object 'EdgePanel' has no attribute 'set_handle'`; the hover-off region tests get the old single hover rect; the label tests find no `can_focus`). `test_with_hover_the_input_region_is_unchanged` already passes: it pins the behaviour that must not change.
 
 - [ ] **Step 3: Implement in `shell/edge_panel.py`**
 
@@ -2118,17 +2355,17 @@ by
             return False  # without drag a press is only ever a click
 ```
 
-(`_on_release` and `_on_motion` need no change: without a recorded press `_on_motion` returns at once and `_finish_drag` only clears.)
+(`_on_release` and `_on_motion` need no change: without a recorded press `_on_motion` returns at once and `_finish_drag` only clears. A press recorded before a reload turned drag off keeps going: `_on_motion` and `_finish_drag` do not read the flag, and `set_handle` does not retarget while `_dragging`, because a drag clears `_hovered` and the real `_retarget` returns early while dragging; `test_turning_drag_off_mid_drag_lets_that_drag_finish` pins it.)
 
 - [ ] **Step 4: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_edge_panel_handle.py tests/test_edge_panel_drag.py tests/test_monitor_shell.py`
-Expected: all pass (`tests/test_edge_panel_handle.py` has 26).
+Expected: all pass (`tests/test_edge_panel_handle.py` has 28).
 
 - [ ] **Step 5: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `895 passed`.
+Expected: `871 passed`.
 
 ```bash
 git add shell/edge_panel.py tests/test_edge_panel_handle.py
@@ -2141,11 +2378,14 @@ git commit -m "feat(panel): per-panel click, hover and drag toggles; input regio
 
 **Files:**
 - Modify: `shell/monitors.py` (import; `__init__` list `_handles`; `_sync_panels`; `_new_panel`; `close`)
-- Modify: `tests/test_monitor_shell.py` (`FakeWindow.handles` + `set_handle`; `bare_shell._handles`; 5 tests appended)
+- Modify: `shell/app.py` (registry import; `_reload`'s log line; `_log_deprecated`)
+- Modify: `tests/test_monitor_shell.py` (`FakeWindow.handles` + `set_handle`; `bare_shell._handles`; 6 tests appended)
+- Modify: `tests/test_app_sync.py` (2 tests appended)
 
 **Interfaces:**
-- Consumes: `PanelRequest.handle` / `.interaction` (Task 2), `EdgePanel(..., handle=, interaction=)` and `EdgePanel.set_handle` (Tasks 6-7), `Change("panel-handle", …)` (Task 2).
+- Consumes: `PanelRequest.handle` / `.interaction` (Task 2), `EdgePanel(..., handle=, interaction=)` and `EdgePanel.set_handle` (Tasks 6-7), `Change("panel-handle", …)` and `registry.all_off_paths` (Task 2).
 - Produces: `MonitorShell._handles: list[tuple[HandleSpec, Interaction] | None]` parallel to `panels` / `_resolved`. A panel is built with `handle=req.handle, interaction=req.interaction`; a live panel whose geometry did not change gets `set_handle(handle, interaction)` only when that pair changed, before `set_state`; never a rebuild or a re-raise.
+- Log lines (Gate B reads them with `-v`): `MonitorShell._new_panel` logs DEBUG `building panel %d (%s) on %s` (index, widget, monitor name) for every panel it builds; `EdgeShellApp._reload` logs INFO `config reloaded: N change(s): KIND, KIND` (`none` when empty); `EdgeShellApp._log_deprecated` (at start and on every reload) logs INFO `panels with click, hover and drag all off (these panels open only through state): PATHS` when `all_off_paths` is not empty.
 
 - [ ] **Step 1: Update the fakes and write the failing tests**
 
@@ -2234,12 +2474,67 @@ def test_a_theme_handle_style_change_restyles_in_place(build, make_config):
     shell.apply(new, [Change("restyle", "HDMI-A-1")])
     assert shell.panels[0] is dock and not dock.destroyed
     assert dock.themes[0].handle_style.shape == "bar" and dock.handles == []
+
+
+def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
+    caplog.set_level("DEBUG", logger="shell.monitors")
+    shell, _, _ = build(edge({"widget": "dock"}))
+    built = [r.getMessage() for r in caplog.records if "building panel" in r.getMessage()]
+    assert built == ["building panel 0 (dock) on HDMI-A-1"]
+    caplog.clear()
+    shell.apply(
+        make_config(monitors=edge({"widget": "dock", "handle": {"shape": "bar"}})),
+        [Change("panel-handle", "HDMI-A-1", 0)],
+    )
+    assert "building panel" not in caplog.text  # in place (Gate B item 6 reads this line)
+    shell.apply(
+        make_config(monitors=edge({"widget": "dock", "depth": 80})),
+        [Change("panel-rebuild", "HDMI-A-1", 0)],
+    )
+    assert "building panel 0 (dock) on HDMI-A-1" in caplog.text
+```
+
+In `tests/test_app_sync.py`, append at the end of the file:
+
+```python
+
+
+# ---- handle plan: reload kinds and all-off panels ---------------------------------------
+
+
+def test_a_reload_logs_its_change_kinds(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "handle": {"shape": "bar"}}])}
+    )
+    app.reload()
+    assert "config reloaded: 1 change(s): panel-handle" in caplog.text
+
+
+def test_all_off_panels_are_logged_once_per_load(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    off = {"click": False, "hover": False, "drag": False}
+    store.pending = make_config(
+        monitors={
+            "HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "dock", "interaction": off}])
+        }
+    )
+    app.reload()
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    app.reload()  # none left: no line
+    lines = [r.getMessage() for r in caplog.records if "open only through state" in r.getMessage()]
+    assert lines == [
+        "panels with click, hover and drag all off (these panels open only through state): "
+        "monitors.HDMI-A-1.panels.1"
+    ]
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `scripts/py -m pytest -q tests/test_monitor_shell.py`
-Expected: the new tests FAIL (`KeyError: 'handle'` in `dock.kwargs`; `dock.handles == []` after the handle change); the existing ones pass.
+Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_app_sync.py`
+Expected: 7 of the 8 new tests FAIL (`KeyError: 'handle'` in `dock.kwargs`; `dock.handles == []` after the handle change; no `building panel` line; the reload line has no kinds; no all-off line); `test_a_theme_handle_style_change_restyles_in_place` already passes (the restyle path is Task 6's; it pins that the theme change stays a restyle). The existing tests pass.
 
 - [ ] **Step 3: Implement in `shell/monitors.py`**
 
@@ -2303,7 +2598,14 @@ by
             self._handles[i] = handles
 ```
 
-4. In `_new_panel`, after `self.canvas.add_panel(key, PanelShape(geo.edge, geo.pos, geo.length, geo.depth))` add `req = self._requests[index]`, and pass two more keyword arguments after `on_depth=lambda d, k=key: self.canvas.set_depth(k, d),`:
+4. In `_new_panel`, after `self.canvas.add_panel(key, PanelShape(geo.edge, geo.pos, geo.length, geo.depth))` add
+
+```python
+        req = self._requests[index]
+        log.debug("building panel %d (%s) on %s", index, geo.widget, self.name)
+```
+
+and pass two more keyword arguments after `on_depth=lambda d, k=key: self.canvas.set_depth(k, d),`:
 
 ```python
                 handle=req.handle,
@@ -2312,18 +2614,49 @@ by
 
 5. In `close`, after `self._resolved.clear()` add `self._handles.clear()`.
 
-- [ ] **Step 4: Run the tests**
+- [ ] **Step 4: Implement in `shell/app.py`**
+
+1. Change `from shell.registry import deprecated_pos_paths, moved_default_paths` to `from shell.registry import all_off_paths, deprecated_pos_paths, moved_default_paths`.
+2. In `_reload`, replace `        log.info("config reloaded: %d change(s)", len(changes))` by
+
+```python
+        kinds = ", ".join(c.kind for c in changes) or "none"
+        log.info("config reloaded: %d change(s): %s", len(changes), kinds)
+```
+
+3. In `_log_deprecated`, replace the docstring by
+
+```python
+        """One INFO line per config load listing the entries that still use `pos`, one for
+        the system_bar entries whose default placement moved (decision 2: a notification would
+        repeat on every start) and one for the panels with every interaction off (handle plan,
+        decision 7)."""
+```
+
+and append at the end of the method (after the `moved` block's closing `)`):
+
+```python
+        off = all_off_paths(config)
+        if off:
+            log.info(
+                "panels with click, hover and drag all off (these panels open only through "
+                "state): %s",
+                ", ".join(off),
+            )
+```
+
+- [ ] **Step 5: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_app_sync.py`
 Expected: all pass.
 
-- [ ] **Step 5: VERIFY and commit**
+- [ ] **Step 6: VERIFY and commit**
 
 Run: `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`
-Expected: `900 passed`.
+Expected: `879 passed`.
 
 ```bash
-git add shell/monitors.py tests/test_monitor_shell.py
+git add shell/monitors.py shell/app.py tests/test_monitor_shell.py tests/test_app_sync.py
 git commit -m "feat(monitors): pass handle and interaction to panels; update them in place on reload" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
@@ -2384,12 +2717,13 @@ interaction.drag = false
 
 Check it loads, lays out without warnings and resolves the expected handles (headless; imports the widgets, creates no window):
 
-`scripts/py -c "import widgets; from pathlib import Path; from shell.config.loader import load_config; from shell.registry import requests_for; from shell.panel_layout import layout_monitor; from shell.handle import resolve_handle; c = load_config(Path('examples/handles-test.toml'), required=True); t = c.theme_for('HDMI-A-1'); R = requests_for(c, 'HDMI-A-1'); L = layout_monitor(R, 1920, 1080, 10, 14, c.layout_for('HDMI-A-1').gap); print([(p.edge, p.pos, p.length) for p in L.panels], L.warnings); print([(lk.shape, lk.size, lk.weight, lk.offset) for lk in (resolve_handle(r.handle, r.interaction, t) for r in R)])"`
+`scripts/py -c "import widgets; from pathlib import Path; from shell.config.loader import load_config; from shell.registry import requests_for, all_off_paths; from shell.panel_layout import layout_monitor; from shell.handle import resolve_handle; c = load_config(Path('examples/handles-test.toml'), required=True); t = c.theme_for('HDMI-A-1'); R = requests_for(c, 'HDMI-A-1'); L = layout_monitor(R, 1920, 1080, 10, 14, c.layout_for('HDMI-A-1').gap); print([(p.edge, p.pos, p.length) for p in L.panels], L.warnings); print([(lk.shape, lk.size, lk.weight, lk.offset) for lk in (resolve_handle(r.handle, r.interaction, t) for r in R)]); print(all_off_paths(c))"`
 
 Expected:
 ```
 [('bottom', 680, 560), ('top', 38, 168), ('top', 1714, 168), ('right', 600, 300), ('bottom', 38, 168)] []
 [('dots', 15, 3, 0), ('chevron', 15, 3, 0), ('bar', 28, 3, 0), ('chevron', 24, 2, -100), ('none', 15, 3, 0)]
+['monitors.HDMI-A-1.panels.4']
 ```
 
 - [ ] **Step 2: Commit**
@@ -2407,26 +2741,33 @@ scripts/py main.py --config /tmp/edge-handles.toml -v
 ```
 Edit `/tmp/edge-handles.toml` while it runs; each save applies within about a second. Ctrl+C quits.
 
-1. **Dock (defaults, regression):** three dots at the dock's inner (top) edge while extended, in the middle of the frame band once collapsed (2 px nearer the screen edge than before, decision 5), crisp. Pointer on the handle: the dots turn light; hover peek, click toggle and drag (50 % snap) work exactly as before; the tooltip says "Collapse dock" / "Expand dock".
+1. **Dock (defaults, regression):** three crisp dots. Extended: centred 4.5 px inside the dock's inner (top) edge (pixels 3-5 counted from it; today about 7 px). Collapsed: in the middle of the frame band, centred 5.5 px from the screen edge (pixels 4-6 of the 10 px band; today about 7 px at the bottom, so 1.5 px nearer the screen edge; decision 5). The same distances hold on the top and right edges (items 2 and 4). Pointer on the handle: the dots turn light; hover peek, click toggle and drag (50 % snap) work exactly as before; the tooltip says "Collapse dock" / "Expand dock".
 2. **Top-left clock (click only, chevron):** extended, the chevron near the clock's lower edge points up (back to the screen edge). Click it: the clock collapses and the chevron folds smoothly through a flat bar to point down while it rides into the band. Hover the strip below the collapsed clock: no peek. Press on the handle, move 30 px down, release: no drag (the clock only toggles if the release lands on the handle).
 3. **Top-right clock (hover + drag, mint bar):** collapsed: a 28 px mint bar in the band. Hover the strip: it peeks and the bar turns white. Click the bar: nothing happens. Drag down from the bar: the clock follows and snaps open past half depth. Tooltip "Drag to expand clock" (after it opened: "Drag to collapse clock").
 4. **System bar (explicit chevron, offset -100):** a thinner 24 px chevron, 100 px above the bar's middle (about y = 650 instead of 750), pointing right (to the screen edge) while extended and left once collapsed. The clickable area reaches about 10 px past each end of the chevron (hit target 44 px). Set `handle.offset = 9999` and save: the chevron moves to the bottom end of the bar's body and stops there (clamped), never past the join. Undo.
-5. **Bottom-left clock (all off):** nothing is drawn in the band at x 38..206; hovering there does nothing and a click on the frame band there reaches the desktop (click-through). Set its `state = "extended"` and save: the clock opens (config is the only way). Set `"collapsed"` again.
-6. **In place, no rebuild:** change panel 3's `handle.shape` to `"dots"` and save: only the handle changes; the system bar's labels do not blink and the log shows `config reloaded: 1 change(s)` without the panel being rebuilt (no new window title in the log, no delayed re-raise). Set panel 0's `interaction.hover = false` and save while the dock is collapsed and peeking: the peek drops at once and hovering no longer peeks. Undo both.
-7. **Theme level:** add `[theme.handle_style]` with `shape = "bar"` and `handle = "#ff8800"` under `[theme]` (both new tables at the top of the file: `[theme]` / `handle = "#ff8800"` then `[theme.handle_style]` / `shape = "bar"`) and save: every handle without its own shape becomes a bar (panel 4 stays invisible: its own interactions are all off but its shape is now the theme's explicit bar, so a bar appears there - note whether that is what you expect, decision 3), panel 3 keeps its chevron, panel 2 keeps its mint colour, the others turn orange. No panel rebuilds. Remove both again and save.
+5. **Bottom-left clock (all off):** at start the `-v` log has one INFO line `panels with click, hover and drag all off (these panels open only through state): monitors.HDMI-A-1.panels.4`. Nothing is drawn in the band at x 38..206; hovering there does nothing and a click on the frame band there reaches the desktop (click-through). Set its `state = "extended"` and save: the clock opens (config is the only way); the INFO line is logged once more for that reload (once per config load, as long as panel 4 stays all off). Set `"collapsed"` again.
+6. **In place, no rebuild:** change panel 3's `handle.shape` to `"dots"` and save: only the handle changes; the system bar's labels do not blink; the `-v` log shows `config reloaded: 1 change(s): panel-handle` and NO `building panel` line after it (a rebuild would log `building panel 3 (system_bar) on HDMI-A-1`), and no delayed re-raise. Set panel 0's `interaction.hover = false` and save while the dock is collapsed and peeking: the peek drops at once, hovering no longer peeks, again no `building panel` line. Undo both.
+7. **Theme level:** add at the top of the file `[theme]` / `handle = "#ff8800"` and then `[theme.handle_style]` / `shape = "bar"`, and save. Expected, exactly: panel 0 (dock) shows an orange bar; panel 1 (top-left clock, click only, no shape of its own) shows an orange bar instead of its chevron (the theme's explicit shape beats `auto`); panel 2 keeps its mint bar (its own colour); panel 3 keeps its own chevron, now orange; panel 4 (all off) stays invisible (a theme shape never draws on an all-off panel, decision 3). The log shows `restyle` and no `building panel` line. Remove both again and save.
 8. **Invalid value:** set panel 3's `handle.shape = "star"` and save: a "Config not applied" notification names `monitors.HDMI-A-1.panels.3.handle.shape` and lists the valid shapes; the previous look stays. Undo.
 9. **Border:** add `[theme.border]` with `enabled = true` and `width = 4` and save: every handle stays inside the dark band, fully visible; the border runs outside it and never covers a handle. Remove and save.
-10. **Stacking (decision 1):** quit, start again, wait 10 s: every collapsed handle is visible (the delayed re-raise still does its job). For the record only: quit and start once with `env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config /tmp/edge-handles.toml -v`, wait 10 s and note whether the collapsed handles are hidden (expected: hidden, as at Plan 1 Gate 1); this does not change the plan.
-11. **Measurement:** `scripts/py main.py --config /tmp/edge-handles.toml --stats 10` (10 s, every panel toggling): fps while animating >= 55 and canvas damaged-draw p95 <= 8 ms (Plan 1/2 targets). Copy the printed report.
-12. The `-v` logs have no errors (the warning of item 8 is expected).
+10. **Thin frame:** add `[theme]` / `thickness = 6` at the top and save: the monitor is rebuilt (`config reloaded: 1 change(s): rebuild-monitor`, then a `building panel` line per panel: expected here). Every handle lies inside the 6 px band, clear of both band edges (the first and last pixel row of the band stay dark), collapsed and extended: the dots and bars keep 3 px, the chevrons are flatter. Remove the setting and save (rebuilt again).
+11. **Stacking (decision 1):** quit, start again, wait 10 s: every collapsed handle is visible (the delayed re-raise still does its job). For the record only (it never fails the gate): quit and start once with `env EDGE_SHELL_RAISE_MS=0 scripts/py main.py --config /tmp/edge-handles.toml -v`, wait 10 s and note (a) whether the collapsed handles are hidden (expected: hidden, as at Plan 1 Gate 1) and (b) whether the EXTENDED content is visible: the dock icons, the top-left clock's text and the system bar's labels (all three are extended at start). (b) is the evidence decision 1 lacks; Task 10 records both.
+12. **Measurement:** `scripts/py main.py --config /tmp/edge-handles.toml --stats 10` (10 s, every panel toggling): fps while animating >= 55 and canvas damaged-draw p95 <= 8 ms (Plan 1/2 targets). Copy the printed report.
+13. The `-v` logs have no errors (the warning of item 8 is expected).
 
 **On failure:**
 - Items 1-4 wrong position or size of the handle: compare `hd.shape_centre` / `hd.hit_size` / `_place_handle` with `test_shape_centre` and `test_place_handle_offsets_along_and_rides_across`; reproduce the failing edge/depth in a new test first. A handle that does not repaint while the panel animates: check that `_place_handle` and `_sync_handle` queue a draw (`_handle_area.draws` tests).
+- Items 1-4 the handle draws but takes no click, hover highlight or drag while the same panel's body works (the `Gtk.DrawingArea` child swallows the events): first check that nothing adds an event mask to the DrawingArea (it must have none of its own). If it still swallows them, fall back to no child: `Button(name="handle", on_clicked=self._on_clicked)` without `child`, `handle.connect_after("draw", self._on_handle_draw)` (the Button's own draw, after its CSS background; same `(widget, cr)` signature, and `_on_handle_draw` already reads the allocation of the widget it gets), `self._handle_area = handle`, the `state-flags-changed` lambda calls `handle.queue_draw()`; adjust `test_the_handle_is_a_button_drawing_with_cairo` to assert `button.get_child() is None` first.
 - Item 2/3 interaction wrong: the matching Task 7 test (`test_a_press_starts_no_drag_without_drag`, `test_a_click_toggles_only_with_click`, `test_entering_does_not_peek_without_hover`); add a failing case before fixing.
-- Item 5 not click-through: print the region (`-v` plus a temporary `log.debug` of `rects` in `_update_input_region`) and compare with `test_with_every_interaction_off_a_collapsed_panel_is_click_through`.
-- Item 6 shows a rebuild: check `diff_configs` (`test_handle_and_interaction_changes_update_in_place`) and `_sync_panels` (`test_a_handle_change_updates_the_live_panel`).
-- Item 10 collapsed handles hidden even WITH the raise: stop and report (this would be a regression in stacking, not a handle bug); option (b) of decision 1 does not fix content stacking.
-- Item 11 below target: run `--stats 10` on `examples/panels-test.toml` for comparison; if only the handle example is slower, profile `_on_handle_draw` (it should be well under 0.1 ms).
+- Item 5 not click-through: print the region (`-v` plus a temporary `log.debug` of `rects` in `_update_input_region`) and compare with `test_with_every_interaction_off_a_collapsed_panel_is_click_through`. No INFO line: `test_all_off_panels_are_logged_once_per_load` and `all_off_paths` on the copy (the Step 1 check prints it).
+- Item 6 shows a `building panel` line or a blink: check `diff_configs` (`test_handle_and_interaction_changes_update_in_place`) and `_sync_panels` (`test_a_handle_change_updates_the_live_panel`, `test_only_building_a_panel_logs_building_panel`); the reload line's kinds say which change kind was computed.
+- Item 7 panel 4 shows a bar, or panel 1 keeps its chevron: `resolve_handle` against `test_a_theme_shape_never_draws_on_an_all_off_panel` and `test_auto_from_the_panel_or_the_theme_follows_the_interactions`, with the panel's resolved `HandleSpec` / `Interaction` (Step 1 check with the theme lines added). A panel that does not change at all: `apply_theme` -> `_restyle_handle` (`test_apply_theme_restyles_the_handle`, `test_a_theme_handle_style_change_restyles_in_place`). A `building panel` line: `test_theme_handle_changes_are_a_restyle`.
+- Item 8 no notification, a wrong key path, or the bad shape applied anyway: load the same file headless (`load_config(Path('/tmp/edge-handles.toml'), required=True)` must raise `ConfigError` with that path, as `test_an_unknown_shape_lists_the_known_ones` pins); if it raises headless but the live shell changed its look, stop and report (the reload error path, not handle code).
+- Item 9 a handle hidden or cut by the border: the border is drawn outside the mass on the canvas (Plan 1), so first confirm the handle itself stays inside the band (`test_the_shape_never_touches_the_band_edges`); if it does and the border still covers it, stop and report (canvas painter, not handle code).
+- Item 10 a handle touching a band edge or clipped at `thickness = 6`: add the failing shape/edge/morph to `test_the_shape_never_touches_the_band_edges` (it already runs thickness 6) and compare `hd.shape_centre(edge, w, h, 6, d)`; clipped: check `hit_size` (`max(14, T)` across) and the DrawingArea's allocation.
+- Item 11 collapsed handles hidden even WITH the raise: stop and report (this would be a regression in stacking, not a handle bug). The record-only run's two observations go to Task 10 whatever they are.
+- Item 12 below target: run `--stats 10` on `examples/panels-test.toml` for comparison; if only the handle example is slower, profile `_on_handle_draw` (it should be well under 0.1 ms).
+- Item 13 a traceback: note the item that caused it; `drawing the handle of … failed` -> reproduce by calling `_on_handle_draw` on a stub with the logged values (as `test_a_draw_error_is_logged_not_raised` does) and add that case as a failing test before fixing.
 
 Write down each item's result; Task 10 records them.
 
@@ -2436,10 +2777,10 @@ Write down each item's result; Task 10 records them.
 
 **Files:**
 - Modify: `README.md` (configuration section; Known limitations)
-- Modify: `docs/superpowers/specs/2026-10-11-edge-shell-design.md` (sections 4, 6, 15)
+- Modify: `docs/superpowers/specs/2026-10-11-edge-shell-design.md` (sections 3, 4, 5.1, 6, 15)
 
 **Interfaces:**
-- Consumes: Gate A and Gate B results. No code.
+- Consumes: Gate A and Gate B results, and Phil's answers to the open questions (decisions marked *Default pending Phil*). No code.
 
 - [ ] **Step 1: README**
 
@@ -2473,9 +2814,11 @@ weight = 3
 `auto` picks the shape from the interactions: dots (click and drag), a bar (drag only), a
 chevron (click only), dots (hover only), nothing (all off). The chevron points where the
 panel opens while it is collapsed and folds through a flat bar to point back as it extends.
-A panel with all three interactions off opens and closes only through `state`. Handle and
-interaction changes apply in place on reload. `scripts/py -m shell.handle_draw --sheet
-/tmp/handles.png` renders every shape for a look without starting the shell.
+A panel with all three interactions off opens and closes only through `state`; it draws no
+handle unless its own entry (or its widget) sets a shape, and each config load logs one INFO
+line naming such panels. Handle and interaction changes apply in place on reload.
+`scripts/py -m shell.handle_draw --sheet /tmp/handles.png` renders every shape for a look
+without starting the shell.
 ````
 
 2. In `## Develop`, after the `scripts/py -m shell.canvas.simulate --config …` line inside the code block, add the line `scripts/py -m shell.handle_draw --sheet /tmp/handles.png        # every handle shape, enlarged`.
@@ -2486,19 +2829,24 @@ interaction changes apply in place on reload. `scripts/py -m shell.handle_draw -
   (click, hover, drag) are planned, see spec section 15.
 ```
 
-and change the re-raise item's second sentence to `Live testing showed it is still needed: without it the collapsed handles are hidden behind the canvas (the handle is drawn in the panel's own window, like the content).`
+and change the re-raise item's second sentence to `Live testing showed it is still needed: without it the collapsed handles are hidden behind the canvas (the handle is drawn in the panel's own window).` followed by the one sentence that matches Gate B item 11 (b): `The extended content is hidden too, so drawing the handles on the canvas would not retire it.` if the content was hidden, or `The extended content stayed visible: only the handles need it, so drawing them on the canvas could retire it (not planned yet).` if it was visible.
 
 - [ ] **Step 2: Spec**
 
-1. Section 4, after the **Hover target.** paragraph, add: `**Per-panel toggles (section 15, implemented).** Each of click, hover and drag can be turned off per panel (`interaction` table). Hover off: no peek; drag off: a press never drags; click off: the handle ignores clicks and takes no keyboard focus. With hover off the collapsed input region is only the handle's hit target; with all three off a collapsed panel takes no input.`
-2. Section 6, in the example config, after `state = "extended"            # collapsed | extended` add the two lines `handle.shape = "auto"         # auto | dots | bar | chevron | none (section 15)` and `interaction.hover = true      # click / hover / drag, each optional`. In the reload table, change the first row's change cell to `Theme colour, border, shadow or handle style` and add the row `| Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |` after the `Panel `state`` row.
-3. Section 15, after the **Design implications** list, append:
+1. Section 3, replace the table row `| Handle dots | `#7b7f84`, hover `#e6e8ea` | Three 3 px dots, 3 px gaps |` by `| Handle | `#7b7f84`, hover `#e6e8ea` (theme `handle` / `handle_hover`) | Default: three 3 px dots, 3 px gaps; shape, size, weight, position and colours customizable per panel (section 15) |`. Section 5.1, at the end of the **Implemented (2026-10-13):** paragraph, add the sentence matching Gate B item 11 (b): `Re-checked by the handle plan's Gate B: without the raise the extended content (dock icons, clock text, system bar labels) is hidden as well.` or `Re-checked by the handle plan's Gate B: without the raise the extended content stayed visible; only the collapsed handles were hidden.`
+2. Section 4, after the **Hover target.** paragraph, add: `**Per-panel toggles (section 15, implemented).** Each of click, hover and drag can be turned off per panel (`interaction` table). Hover off: no peek; drag off: a press never drags; click off: the handle ignores clicks and takes no keyboard focus (built-in panels use `keyboard_mode="none"`, so their handles never take keyboard focus anyway). With hover off the collapsed input region is only the handle's hit target; with all three off a collapsed panel takes no input and each config load logs one INFO line naming it.`
+3. Section 6, in the example config, after `state = "extended"            # collapsed | extended` add the two lines `handle.shape = "auto"         # auto | dots | bar | chevron | none (section 15)` and `interaction.hover = true      # click / hover / drag, each optional`. In the reload table, change the first row's change cell to `Theme colour, border, shadow or handle style` and add the row `| Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |` after the `Panel `state`` row.
+4. Section 15, record the three deviations from its bullets in place (each sentence appended to the bullet it qualifies):
+   - after the chevron bullet (`... rotating to point the other way when expanded.`): `**Implemented as a fold, not a rotation:** the chevron folds through a flat bar (a rotation would point along the edge half-way, which reads as "slide sideways"); handle plan decision 4, judged at its Gate A.` (If Phil chose the rotation at Gate A, write instead: `Implemented as a rotation, as written; handle plan decision 4's fold was rejected at Gate A.`)
+   - after the behaviour bullet (`... the handle is not a button when click is off). Keyboard activation still follows the click flag.`): `**Deviation:** with click off the handle stays a Gtk.Button that ignores clicks and cannot take focus; it is still the drag and hover target and carries the accessible name ("Drag to expand clock", or "clock handle" with drag off too).`
+   - after the config bullet (`... Unknown shapes fail validation with the key path as elsewhere.`): `**Added:** a `weight` key (dot diameter, bar and chevron thickness, needed for "thin bar") and a theme-wide `[theme.handle_style]`; widget defaults are validated at registration.`
+5. Section 15, after the **Design implications** list, append:
 
 ```markdown
-**Implemented (2026-10-13, plan `docs/superpowers/plans/2026-10-13-handle-customization.md`):** the handle stays in the panel's own window: its Button is the hit target (click, keyboard, accessible name) and a `Gtk.DrawingArea` child draws it with the pure `draw_handle` (`shell/handle_draw.py`); the shape canvas is unchanged and the delayed re-raise stays (the content windows need it anyway, so drawing the handle on the canvas would not retire it). Config: per panel `handle` (`shape` auto/dots/bar/chevron/none, `size` 4-40, `weight` 1-8, `offset`, `color`, `hover_color`) and `interaction` (`click`, `hover`, `drag`); theme-wide `[theme.handle_style]` (`shape`, `size`, `weight`, per monitor through the theme override; colours from `handle` / `handle_hover`); widget defaults through `PanelDefaults.handle` / `.interaction`. `auto` follows the interactions (dots; bar for drag only; chevron for click only; none when all are off). The chevron folds through a flat bar as `d / depth` goes from 0 to 1. The shape is centred in the last `T` px of the mass, at most `T - 2` px across; the hit target is at least 44 x 14 px and rides the inner edge. Reload: a `panel-handle` change kind, applied in place (`EdgePanel.set_handle`); theme handle changes are a restyle. Gate A (sheet) and Gate B (live, HDMI-A-1): RESULTS.
+**Implemented (2026-10-13, plan `docs/superpowers/plans/2026-10-13-handle-customization.md`):** the handle stays in the panel's own window: its Button is the hit target (click, keyboard, accessible name) and a `Gtk.DrawingArea` child draws it with the pure `draw_handle` (`shell/handle_draw.py`); the shape canvas is unchanged and the delayed re-raise stays (RAISE_NOTE). Config: per panel `handle` (`shape` auto/dots/bar/chevron/none, `size` 4-40, `weight` 1-8, `offset`, `color`, `hover_color`) and `interaction` (`click`, `hover`, `drag`); theme-wide `[theme.handle_style]` (`shape`, `size`, `weight`, per monitor through the theme override; colours from `handle` / `handle_hover`); widget defaults through `PanelDefaults.handle` / `.interaction`, validated at registration. `auto` follows the interactions (dots; bar for drag only; chevron for click only; none when all are off); a panel with all three off never draws the theme's shape (only its own entry's or widget's) and each config load logs one INFO line naming it. The chevron folds through a flat bar as `d / depth` goes from 0 to 1. The shape is centred in the last `T` px of the mass, at most `T - 2` px across, snapped to the pixel grid as a distance from the screen edge (the same rounding on every edge, so band pixels 0 and `T - 1` always stay clear and the four edges mirror each other); the hit target is at least 44 x 14 px (`max(14, T)` across) and rides the inner edge. Reload: a `panel-handle` change kind, applied in place (`EdgePanel.set_handle`); theme handle changes are a restyle; `-v` shows `building panel ...` for every panel built and the change kinds of every reload. Gate A (sheet) and Gate B (live, HDMI-A-1): RESULTS.
 ```
 
-Replace `RESULTS` with Phil's Gate A answers (items 3 and 5) and the Gate B item results, including the `--stats 10` numbers (fps while animating, damaged-draw median / p95) and item 10's record.
+Replace `RAISE_NOTE` with the clause matching Gate B item 11 (b): `the extended content is hidden without it too, so drawing the handle on the canvas would not retire it` or `only the collapsed handles need it; the extended content stayed visible without it, so drawing the handle on the canvas could retire it in a later plan`. Replace `RESULTS` with Phil's Gate A answers (items 3, 4 and 5), his answers to the open questions (each decision marked *Default pending Phil*: kept or changed), and the Gate B item results, including item 10 (`thickness = 6`), the `--stats 10` numbers (fps while animating, damaged-draw median / p95) and item 11's two observations (collapsed handles and extended content with `EDGE_SHELL_RAISE_MS=0`).
 
 - [ ] **Step 3: Commit**
 
@@ -2520,14 +2868,15 @@ git commit -m "docs: handle customization and interaction toggles in README and 
 | Chevron morph with depth, pure `draw_handle(..., morph)` with `morph = d / depth` | 3 (`morph`), 4, 6 (decision 4) |
 | Click / hover / drag individually opt-in/out, defaults all on | 1, 2, 7 (decision 7) |
 | Style by interaction (thin bar for drag only, arrow for click only) | 3 (`auto_shape`, decision 3) |
-| Theme-level default with per-monitor override; widget defaults through the registry | 1, 2 (decision 2) |
-| Unknown shapes and bad values fail with the key path | 1 |
+| Theme-level default with per-monitor override; widget defaults through the registry | 1, 2 (decision 2; widget defaults validated in `register()`) |
+| Unknown shapes and bad values fail with the key path | 1, 2 (widget defaults), 6 (a bad look raises before the window exists) |
 | Hit area separate from and larger than the shape; minimum hit size | 3, 6, 7 (decision 6) |
-| Keyboard activation follows click; accessible names | 3 (`handle_label`), 7 |
-| All three off: behaviour and how the panel still opens | 3, 7, 9 item 5 (decision 7) |
-| Handle and interaction changes are in-place (no rebuild); diff kind; PanelRequest equality | 2, 8 (decision 8) |
-| Where the handle is drawn; the raise workaround | decision 1, Global Constraints, 9 item 10 |
-| Handle inside the band, never under the border | 3 (`shape_centre`), 4 (band test), 9 item 9 (decision 5) |
+| Keyboard activation follows click; accessible names | 3 (`handle_label`), 7 (decision 7: moot for built-in panels, `keyboard_mode="none"`) |
+| All three off: behaviour, how the panel still opens, no theme shape, one INFO line | 2 (`all_off_paths`), 3, 7, 8, 9 items 5 and 7 (decisions 3, 7) |
+| Handle and interaction changes are in-place (no rebuild); diff kind; PanelRequest equality; a rebuild is visible in the log | 2, 8, 9 item 6 (decision 8) |
+| Where the handle is drawn; the raise workaround; evidence for the content | decision 1, Global Constraints, 9 item 11, 10 |
+| Handle inside the band, never under the border, also on a thin frame; the edges mirror each other | 3 (`shape_centre`, `hit_size`), 4 (strict band and mirror tests), 9 items 9 and 10 (decision 5) |
+| Spec deviations recorded (chevron fold, a focusless Button with click off, `weight` and `[theme.handle_style]` added, spec 3's handle row) | 10 |
 | Clip container and content measurement unaffected | the handle is its own overlay child, not in the clip container; `natural_length` reads `_inner` only (unchanged code) |
 | Headless pixel tests: morph 0 / 0.5 / 1, four edges, hover colour | 4, 6 |
 | Settings-window readiness: models single source, JSON schema | 1 (`test_the_json_schema_describes_the_new_tables`, decision 10) |
@@ -2537,21 +2886,25 @@ git commit -m "docs: handle customization and interaction toggles in README and 
 
 Not covered by design: drawing on the canvas (decision 1, the cost if wrong), removing the raise, per-panel border/shadow, a settings window, HiDPI.
 
-**2. Placeholder scan:** every code step carries the code, every test step the tests, every gate exact values. The one fill-in is Task 10's `RESULTS`, which is the gate outcome by definition, with an exact instruction of what to write.
+**2. Placeholder scan:** every code step carries the code, every test step the tests, every gate exact values. The fill-ins are Task 10's `RESULTS` and `RAISE_NOTE` (and the matching README / section 5.1 sentence), which are gate outcomes by definition; each has an exact instruction of what to write, and the raise ones give both possible sentences verbatim.
 
-**3. Type consistency:** `HandleSpec(shape, size, weight, offset, color, hover_color)` and `Interaction(click, hover, drag)` (Task 2) are used with these names in Tasks 3, 6, 7, 8 and the tests. `resolve_handle(spec, interaction, theme) -> HandleLook(shape, size, weight, offset, rgba, hover_rgba)` (Task 3) is what `EdgePanel._look` holds (Task 6). `hit_size(thickness, size, length)`, `hit_inset(thickness, d, hit_across)`, `clamp_offset(offset, length, hit_along)`, `along_margins(offset)`, `shape_centre(edge, width, height, thickness, d)`, `input_rects(edge, length, depth, d, thickness, radius, hover_zone, interaction, hit, offset)` (Task 3) are called with that order in Tasks 6-7. `draw_handle(cr, shape, size, weight, rgba, morph, edge, cx, cy, max_across)` (Task 4) is called with that order in `_on_handle_draw` (Task 6) and `render_sheet`. `EdgePanel(..., on_depth=None, handle=THEME_HANDLE, interaction=ALL_INTERACTIONS)` (Task 6) matches `MonitorShell._new_panel`'s keywords (Task 8) and `FakeWindow`'s `kwargs`. `set_handle(handle, interaction)` (Task 7) matches `FakeWindow.set_handle` and `_sync_panels` (Task 8). `Change("panel-handle", monitor, index)` (Task 2) is the kind the Task 8 tests pass to `apply`.
+**3. Type consistency:** `HandleSpec(shape, size, weight, offset, color, hover_color)` and `Interaction(click, hover, drag)` (Task 2) are used with these names in Tasks 3, 6, 7, 8 and the tests; `HandleSpec`'s field names equal `HandleConfig`'s, which is what lets `register()` validate `asdict(defaults.handle)` with `HandleConfig` (Task 2). `all_off_paths(config) -> list[str]` (Task 2) is what `EdgeShellApp._log_deprecated` calls (Task 8) and the Task 9 check prints. `resolve_handle(spec, interaction, theme) -> HandleLook(shape, size, weight, offset, rgba, hover_rgba)` (Task 3) is what `EdgePanel._look` holds (Task 6). `snap(value, extent)` and `snap_centre(edge, cx, cy, along, across)` (Task 4) are only called inside `draw_handle` and by the Task 4 tests. `hit_size(thickness, size, length)`, `hit_inset(thickness, d, hit_across)`, `clamp_offset(offset, length, hit_along)`, `along_margins(offset)`, `shape_centre(edge, width, height, thickness, d)`, `input_rects(edge, length, depth, d, thickness, radius, hover_zone, interaction, hit, offset)` (Task 3) are called with that order in Tasks 6-7. `draw_handle(cr, shape, size, weight, rgba, morph, edge, cx, cy, max_across)` (Task 4) is called with that order in `_on_handle_draw` (Task 6) and `render_sheet`. `EdgePanel(..., on_depth=None, handle=THEME_HANDLE, interaction=ALL_INTERACTIONS)` (Task 6) matches `MonitorShell._new_panel`'s keywords (Task 8) and `FakeWindow`'s `kwargs`. `set_handle(handle, interaction)` (Task 7) matches `FakeWindow.set_handle` and `_sync_panels` (Task 8). `Change("panel-handle", monitor, index)` (Task 2) is the kind the Task 8 tests pass to `apply`.
 
-**4. Review Focus:** each of the six lines names its pinning tests in Tasks 1-8 and a gate item.
+**4. Review Focus:** each of the six lines names its pinning tests, each in the task that owns the code it pins (Tasks 1-8), and a gate item.
 
-**5. Test counts (expected):** baseline 645. Task 1: 664 (+19). Task 2: 678 (+14). Task 3: 742 (+64). Task 4: 869 (+127). Task 6: 884 (+15). Task 7: 895 (+11). Task 8: 900 (+5). Without a display one Task 6 test is skipped. A different total is not a failure by itself, but check which test it is.
+**5. Test counts (expected):** baseline 645. Task 1: 664 (+19). Task 2: 683 (+19). Task 3: 748 (+65). Task 4: 843 (+95). Task 6: 859 (+16). Task 7: 871 (+12). Task 8: 879 (+8: 6 in `tests/test_monitor_shell.py`, 2 in `tests/test_app_sync.py`). Without a display one Task 6 test is skipped. A different total is not a failure by itself, but check which test it is.
 
-**Verification while planning:** Tasks 1-4 and 6-8 were prototyped in a scratch copy of this worktree (not committed): the final state passed the full suite (900 passed) and ruff (`All checks passed!`); Task 1 alone gave 19, Tasks 1-2 gave 678, and `tests/test_handle.py` (64), `tests/test_handle_draw.py` (127) and `tests/test_edge_panel_handle.py` (26, including the GTK Button/DrawingArea check) passed as written here. The review sheet was rendered and looked at: the dots are crisp, the bar is centred, the chevron points into the screen at morph 0, is flat at 0.5 and points back at 1 on all four edges. The Task 9 example resolved to the expected lines above. Not run separately: the intermediate state between Tasks 6 and 7 (Task 6's `_sync_handle` and `_update_input_region` are the pre-plan versions plus one `queue_draw`, and Task 6's 15 tests do not touch the Task 7 behaviour), and anything on screen (Gates A-B are Phil's).
+**6. Review corrections applied (2026-10-13, independent review of this plan):** the band geometry (decision 5: canonical-frame snap, full-extent parity rounded up, `math.floor(v + 0.5)`; the tolerance band test replaced by the strict band test plus a mirror test; Gate A "on failure" for a touching shape), decision 1's evidence (now marked as inference; Gate B item 11 records the extended content, Task 10 writes it down), a visible rebuild (`building panel` DEBUG line and the reload's change kinds, Task 8; Gate B item 6), all-off panels (no theme shape, one INFO line per load; Task 3, Task 2 `all_off_paths`, Task 8; Gate B item 7 has one expected outcome), the thin-frame gate item (Gate B item 10), today's dot positions (decision 5, Gate B item 1), the extended hit target across capped at `max(14, T)` instead of `max(14, T + 4)` (decision 6), the hover-zone containment wording (decision 6), widget defaults validated in `register()` and the look resolved before `super().__init__` (Tasks 2 and 6), the drag-off-mid-drag test (Task 7), the keyboard note (decision 7), the three spec deviations (Task 10), a fallback if the DrawingArea swallows events and "on failure" lines for Gate B items 7-10 and 13. One deviation from the review's wording: the chevron's parity uses `ceil(|2 * tip| + w)`, not `round(...)`: with `round`, a chevron 7-7.5 px across mid-morph (weight 5 at `T = 10`) snapped odd and touched the inner band pixel in the strict test; rounding up keeps every extent up to `T - 2` inside.
+
+**Verification while planning:** Tasks 1-4 and 6-8 were first prototyped in a scratch copy of this worktree (not committed). After the review corrections, a fresh scratch copy of `HEAD` was rebuilt with Tasks 1-2's edits and Tasks 1-4's whole files re-extracted from this plan's text: `ruff format --check` (78 files already formatted), `ruff check` (`All checks passed!`) and the suite (843 passed; the four new test files 19 + 19 + 65 + 95 = 198) were green, and `scripts/py -c "import widgets"` printed nothing (every built-in widget passes the new registration check). Adding Tasks 6-7 gave 871 passed; adding only Task 8's tests made exactly the 7 tests named in Task 8 Step 2 fail; adding Task 8's code gave 879 passed, ruff clean. `tests/test_edge_panel_handle.py` (28, including the GTK Button/DrawingArea check) as extracted from this plan matched the verified file byte for byte. The strict band test fails on the old device-space snap (the 8 px chevron covered band pixel 0 at the bottom; the dots sat on pixels 3-5 at the bottom and 4-6 at the top) and passes on the new one; the measured mirror difference is the same pixels with alpha within 12 levels. The review sheet was re-rendered from the corrected code and looked at: crisp dots and bars inside the band on all four edges, and the chevron pointing into the screen at morph 0, flat at 0.5 and pointing back at 1, never touching a band edge. The Task 9 example resolved to the expected three lines above. Not run separately: the intermediate state between Tasks 6 and 7 (Task 6's `_sync_handle` and `_update_input_region` are the pre-plan versions plus one `queue_draw`, and Task 6's 16 tests do not touch the Task 7 behaviour), and anything on screen (Gates A-B are Phil's).
 
 ## Open questions for Phil
 
-1. **Decision 1:** handle in the panel window (planned) or on the shape canvas? The plan argues the canvas would not retire the raise because the content windows need it too.
-2. **Decision 3:** keep `auto` (shape follows the interactions) as the default, or always dots unless set?
-3. **Decision 4:** chevron folds through a flat bar (planned) or rotates 180°? Gate A item 3 is the place to judge.
-4. **Decision 5:** the collapsed dots move 2 px towards the screen edge (true centre of the band). Keep, or keep today's 7 px?
-5. **Decision 7:** should the handle also light up while the panel peeks (planned; spec 4 says the dots brighten on peek) - and is "all three off, no warning" right?
-6. **Gate B item 7:** a theme-wide explicit shape (`shape = "bar"`) also draws a bar on a panel whose interactions are all off (only `auto` turns into `none`). Should an all-off panel never draw a handle regardless of shape?
+Not answered yet. Each has a recorded default (marked *Default pending Phil* in the decisions) that the plan implements until Phil says otherwise; Task 10 records his answers.
+
+1. **Decision 1:** handle in the panel window (default: keep option a) or on the shape canvas? Whether the canvas could retire the raise depends on whether the extended content is hidden without it, which Gate B item 11 records for the first time (until then it is an inference).
+2. **Decision 3:** keep `auto` (shape follows the interactions) as the default (default: keep), or always dots unless set?
+3. **Decision 4:** chevron folds through a flat bar (default) or rotates 180°? Gate A item 3 is the place to judge; spec 15's "rotates" wording is updated in Task 10 either way.
+4. **Decision 5:** the shape is centred in the band with the canonical snap (default): collapsed dots 5.5 px from the screen edge on every edge (today about 7 at the bottom, 6 at the top), extended 4.5 px inside the inner edge (today about 7). Keep, or keep today's positions (which put the chevron over a band edge)?
+5. **Decision 7:** the handle lights up while the panel peeks (default: yes; spec 4 says the dots brighten on peek). All three off is allowed with one INFO line per config load (default), not a warning or a notification.
+6. **Decisions 3 and 7:** a theme-level shape never draws on an all-off panel (default); only a shape set on the panel entry or by the widget draws there, as decoration. Gate B item 7 checks exactly this.
