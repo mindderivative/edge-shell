@@ -24,7 +24,7 @@ from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
 from shell.monitors import MonitorShell, monitors_by_name
-from shell.registry import deprecated_pos_paths
+from shell.registry import deprecated_pos_paths, moved_default_paths
 from shell.theme import scope_class, to_css
 
 log = logging.getLogger(__name__)
@@ -197,14 +197,24 @@ class EdgeShellApp:
         self.refresh_css()
 
     def _log_deprecated(self, config) -> None:
-        """One INFO line per config load listing the entries that still use `pos` (decision 2:
-        a notification would repeat on every start)."""
+        """One INFO line per config load listing the entries that still use `pos`, and one for
+        the system_bar entries whose default placement moved (decision 2: a notification would
+        repeat on every start)."""
         paths = deprecated_pos_paths(config)
         if paths:
             log.info(
                 'deprecated key pos (use align = "start" and offset = pos - 38 at the default '
                 "theme): %s",
                 ", ".join(paths),
+            )
+        moved = moved_default_paths(config)
+        if moved:
+            log.info(
+                "system_bar entries that set edge, length or depth but no pos/align/offset: "
+                'the default placement is now align="end", offset=142 (it was pos = 600, the '
+                "same place only at 1080p with edge right, length 300, depth >= 28); add "
+                "pos = 600 to keep the old place at 1080p: %s",
+                ", ".join(moved),
             )
 
     def _relayout_failed(self, name: str, shell) -> None:

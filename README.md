@@ -76,7 +76,7 @@ Panels are placed per edge in three slots and sized in one of four ways:
 widget = "clock"
 edge = "bottom"
 align = "end"             # start | center (default) | end of the edge
-offset = 0                # px from that end; for a later panel in the slot: extra space before it
+offset = 0                # px from that end (centre: shifts the centre group); for a later panel in the slot: extra space before it
 order = 0                 # order within the slot; equal orders keep the config order
 length = "content"        # px, "fill", "content" or a percentage such as "50%"
 min_length = 100          # optional bounds, for every length mode
@@ -101,9 +101,15 @@ at least 28 px deep). "content" panels are measured after they are built.
 with `align` or `offset`, and every config load or reload logs one line listing the entries
 that use it. A lone `pos = N` equals `align = "start"`, `offset = N - 38` at the default theme
 (38 = `thickness + radius + join radius`; 32-38 px depending on the panel's depth). The system
-bar's own default moved from `pos = 600` to `align = "end"`, `offset = 142`: the same place on
-a 1080 px tall monitor (y = 600), but 142 px from the end of the free span elsewhere (y = 960
-at 1440 px, y = 240 at 720 px, where `pos = 600` gave 600 and, clamped, 382).
+bar's own default moved from `pos = 600` to `align = "end"`, `offset = 142`. That is the same
+place as `pos = 600` only on a 1080 px tall monitor with `edge` right (or left), `length` 300,
+`depth` of at least 28 and the default thickness and radius (y = 600). An entry that overrides
+`edge`, `length` or `depth` without `pos`/`align`/`offset` now moves (at 1080p: `edge = "top"`
+moves x from 600 to about 1440, `length = 524` moves y from 518 to 376, `depth = 20` gives 604,
+`thickness = 20` gives 590); add `pos = 600` to keep the old place at 1080p. Each config load
+logs one INFO line listing such entries. On other monitors the bar sits 142 px from the end of
+the free span (y = 960 at 1440 px, y = 240 at 720 px, where `pos = 600` gave 600 and, clamped,
+382).
 
 Colours are `#rrggbb` or `#rrggbbaa`. Border and shadow are off unless enabled:
 
@@ -150,16 +156,18 @@ that need `gi` or Fabric skip themselves there.
 - A settings window is not built yet.
 - Moving a panel (a layout change on reload or a resolution change) rebuilds its window; there
   is no in-place move yet. "content" panels are built twice at startup (default length, then
-  measured); an in-place resize is planned only if a flash is observed (none was reported at
-  Gate B). A "content" panel that is hidden at its default length is never measured and stays
+  measured); no startup flash was visible with content panels at Gate B, so an in-place resize stays
+  unplanned. A "content" panel that is hidden at its default length is never measured and stays
   hidden.
 - Handle customization (shape, color, size, position) and per-interaction opt-in/out
   (click, hover, drag) are planned, see spec section 15.
 - Panel startup includes a brief re-raise (`raise_to_top`) about half a second after launch.
   Live testing showed it is still needed: without it the collapsed handle dots are hidden
   behind the canvas. `EDGE_SHELL_RAISE_MS=0` turns it off for debugging.
-- One layout gap per monitor (no per-edge gap). Scale changes re-lay out panels, but HiDPI
-  drawing is not supported yet (see below).
+- One layout gap per monitor (no per-edge gap). Resolution changes re-lay out panels (verified live on
+  HDMI-A-1: 1920x1080 to 1280x720 and back, via `notify::geometry`, with no shell reopen and the
+  collapsed handle dots intact); a scale change is not verified, and HiDPI drawing is not
+  supported yet (see below).
 - The frame band is click-through: clicks on the frame reach the desktop.
 - HiDPI / fractional scaling: the canvas assumes scale 1 (it logs a warning otherwise).
 - `--stats` mixes scene keys across monitors when two or more monitors are configured.

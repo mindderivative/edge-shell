@@ -39,14 +39,23 @@ class FakeShell:
         FakeShell.applied.append((self.name, [c.kind for c in changes]))
 
 
+@pytest.fixture(autouse=True)
+def _reset_fake_shell(monkeypatch):
+    """FakeShell keeps its state on the class: give every test fresh values (restored after)."""
+    for attr, value in (
+        ("opened", []),
+        ("closed", []),
+        ("applied", []),
+        ("fail_apply", set()),
+        ("fail_open", set()),
+        ("layout_warnings", []),
+        ("measure_pending", False),
+    ):
+        monkeypatch.setattr(FakeShell, attr, value)
+
+
 @pytest.fixture
 def env(monkeypatch, make_config):
-    FakeShell.opened = []
-    FakeShell.closed = []
-    FakeShell.applied = []
-    FakeShell.fail_apply = set()
-    FakeShell.fail_open = set()
-    FakeShell.measure_pending = False
     mapping: dict = {}
     monkeypatch.setattr(app_mod, "monitors_by_name", lambda: mapping)
     monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
@@ -204,8 +213,6 @@ class ReloadStore:
 
 @pytest.fixture
 def renv(monkeypatch, make_config, fake_registry):
-    FakeShell.opened, FakeShell.closed, FakeShell.applied = [], [], []
-    FakeShell.fail_apply = set()
     mapping = {"HDMI-A-1": object()}
     monkeypatch.setattr(app_mod, "monitors_by_name", lambda: mapping)
     monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
@@ -435,6 +442,34 @@ def test_deprecated_pos_is_logged_once_per_reload(renv, caplog):
     assert len(lines) == 1 and lines[0].endswith("monitors.HDMI-A-1.panels.0.pos")
 
 
+def test_a_moved_system_bar_default_is_logged_once_at_start(make_config, caplog):
+    caplog.set_level("INFO", logger="shell.app")
+    cfg = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"widget": "system_bar"},
+                    {"widget": "system_bar", "edge": "top"},
+                    {"widget": "system_bar", "length": 524, "pos": 600},
+                ]
+            )
+        }
+    )
+    app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
+    lines = [r.getMessage() for r in caplog.records if "default placement" in r.getMessage()]
+    assert len(lines) == 1
+    assert 'align="end"' in lines[0] and "offset=142" in lines[0] and "pos = 600" in lines[0]
+    assert "monitors.HDMI-A-1.panels.1" in lines[0] and "panels.0" not in lines[0]
+    assert "panels.2" not in lines[0]
+
+
+def test_no_moved_default_line_without_a_candidate(make_config, caplog):
+    caplog.set_level("INFO", logger="shell.app")
+    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "system_bar"}])})
+    app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
+    assert not [r for r in caplog.records if "default placement" in r.getMessage()]
+
+
 def test_a_relayout_started_by_the_shell_reports_through_the_app(env, monkeypatch):
     app, mapping = env
     notes = []
@@ -501,7 +536,7 @@ def test_a_failed_rebuild_never_escapes_and_is_reported(env, monkeypatch):
     mapping["HDMI-A-1"] = object()
     app.sync_monitors()
     shell = app.shells["HDMI-A-1"]
-    FakeShell.fail_open = {"HDMI-A-1"}  # the second construction raises
+    monkeypatch.setattr(FakeShell, "fail_open", {"HDMI-A-1"})  # the second construction raises
     shell.on_error(shell)  # must not raise
     assert len(errors) == 1 and "HDMI-A-1" in errors[0]
     assert "HDMI-A-1" not in app.shells
@@ -511,8 +546,8 @@ def test_layout_report_waits_for_a_pending_measurement(env, monkeypatch):
     app, mapping = env
     notes = []
     monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
-    FakeShell.measure_pending = True
-    FakeShell.layout_warnings = ["transient: hidden at its default length"]
+    monkeypatch.setattr(FakeShell, "measure_pending", True)
+    monkeypatch.setattr(FakeShell, "layout_warnings", ["transient: hidden at its default length"])
     mapping["HDMI-A-1"] = object()
     app.sync_monitors()
     assert notes == []

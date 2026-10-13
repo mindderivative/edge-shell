@@ -15,7 +15,10 @@ from shell.registry import register
 
 @register(
     "system_bar",
-    # y = 600 on a 1080 px tall monitor (free span ends at 1042: 1042 - 142 - 300 = 600)
+    # y = 600 on a 1080 px tall monitor (free span ends at 1042: 1042 - 142 - 300 = 600).
+    # Same as the old pos = 600 only with edge right (or left), length 300, depth >= 28 and
+    # the default thickness/radius; an entry overriding edge, length or depth moves (the app
+    # logs those entries).
     PanelDefaults(edge="right", length=300, depth=56, label="system bar", align="end", offset=142),
 )
 class SystemBarPanel(EdgePanel):

@@ -641,6 +641,23 @@ def test_a_zero_geometry_is_ignored(build, caplog):
     assert "ignoring 0x0 geometry of HDMI-A-1" in caplog.text
 
 
+def test_a_zero_geometry_blocks_every_layout_path(build, make_config):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, _ = build(
+        edge({"widget": "dock", "length": "content"}, {"widget": "clock"}),
+        monitor=monitor,
+        on_layout=reports.append,
+    )
+    before = list(shell.panels)
+    monitor.width = monitor.height = 0  # unplugged, the hot-plug sync has not closed us yet
+    shell.panels[0].natural = 300
+    assert shell.test_idles[0]() is False  # a pending measurement
+    shell.apply(make_config(monitors=edge({"widget": "dock"}, {"widget": "clock"})), [])
+    assert shell.panels == before and not any(p.destroyed for p in before)
+    assert shell.layout_warnings == []
+
+
 def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
     errors, reports = [], []
     monitor = FakeMonitor()

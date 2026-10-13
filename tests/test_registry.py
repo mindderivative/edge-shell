@@ -117,3 +117,25 @@ def test_deprecated_pos_paths_lists_every_entry_using_pos(make_config):
     ]
     no_pos = make_config(monitors={"A": {"panels": [{"widget": "dock", "align": "end"}]}})
     assert registry.deprecated_pos_paths(no_pos) == []
+
+
+def test_moved_default_paths_lists_system_bars_that_override_without_a_placement(make_config):
+    cfg = make_config(
+        monitors={
+            "A": {
+                "panels": [
+                    {"widget": "system_bar"},  # untouched default: not listed
+                    {"widget": "system_bar", "edge": "top"},
+                    {"widget": "system_bar", "length": 524, "pos": 600},  # has pos
+                    {"widget": "system_bar", "depth": 20, "align": "end"},  # has align
+                    {"widget": "system_bar", "state": "collapsed"},  # no override
+                    {"widget": "dock", "edge": "top"},  # not the system bar
+                ]
+            },
+            "B": {"panels": [{"widget": "system_bar", "length": 524}]},
+        }
+    )
+    assert registry.moved_default_paths(cfg) == [
+        "monitors.A.panels.1",
+        "monitors.B.panels.0",
+    ]

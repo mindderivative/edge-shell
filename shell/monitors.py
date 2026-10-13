@@ -187,7 +187,12 @@ class MonitorShell:
 
     def _sync_panels(self, config: Config, theme, startup: bool) -> None:
         """Make the panels match the resolved layout: rebuild a panel whose resolved geometry
-        changed (also when a neighbour's change moved or hid it), retarget a state change."""
+        changed (also when a neighbour's change moved or hid it), retarget a state change.
+        Does nothing while the monitor reports no size (being unplugged: the hot-plug sync
+        closes this shell), so no 0 px layout hides every panel."""
+        g = self.monitor.get_geometry()
+        if g.width <= 0 or g.height <= 0:
+            return
         layout = self._layout(config, theme)
         self.layout_warnings = list(layout.warnings)
         for message in layout.warnings:

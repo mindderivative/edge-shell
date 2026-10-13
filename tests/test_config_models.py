@@ -171,7 +171,8 @@ def test_align_offset_order_and_bounds():
     ("panel", "message"),
     [
         ({"pos": 10, "align": "end"}, "pos cannot be combined with align or offset"),
-        ({"pos": "center", "offset": 3}, 'pos = N is align = "start", offset = N - 38'),
+        ({"pos": 5, "offset": 3}, 'pos = N is align = "start", offset = N - 38'),
+        ({"pos": "center", "offset": 3}, "drop pos; center is the default align"),
         ({"align": "end", "offset": -4}, 'a negative offset only works with align = "center"'),
         ({"min_length": 300, "max_length": 200}, "min_length must not be larger than max_length"),
     ],

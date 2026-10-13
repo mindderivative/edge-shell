@@ -77,6 +77,21 @@ def deprecated_pos_paths(config: Config) -> list[str]:
     ]
 
 
+def moved_default_paths(config: Config) -> list[str]:
+    """Key paths of the `system_bar` entries whose old default place changed: they set edge,
+    length or depth but none of pos / align / offset, so the built-in default placement
+    (align = "end", offset = 142; it was pos = 600) applies to a bar that is no longer the
+    default size or edge. Logged once per config load by EdgeShellApp."""
+    return [
+        f"monitors.{name}.panels.{i}"
+        for name, mon in config.monitors.items()
+        for i, panel in enumerate(mon.panels)
+        if panel.widget == "system_bar"
+        and any(v is not None for v in (panel.edge, panel.length, panel.depth))
+        and all(getattr(panel, k) is None for k in _PLACEMENT)
+    ]
+
+
 def validate_widgets(config: Config) -> None:
     problems = [
         f"monitors.{name}.panels[{i}].widget: unknown widget {panel.widget!r}"

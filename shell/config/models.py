@@ -190,10 +190,14 @@ class PanelConfig(_Strict):
     @model_validator(mode="after")
     def _placement(self) -> PanelConfig:
         if self.pos is not None and (self.align is not None or self.offset is not None):
-            raise ValueError(
-                "pos cannot be combined with align or offset (pos is deprecated): "
-                'pos = N is align = "start", offset = N - 38 at the default theme '
+            advice = (
+                "drop pos; center is the default align (use offset to shift it)"
+                if self.pos == "center"
+                else 'pos = N is align = "start", offset = N - 38 at the default theme '
                 "(38 = thickness + radius + join radius; 32-38 depending on depth)"
+            )
+            raise ValueError(
+                f"pos cannot be combined with align or offset (pos is deprecated): {advice}"
             )
         if self.offset is not None and self.offset < 0 and (self.align or "center") != "center":
             raise ValueError('a negative offset only works with align = "center"')
