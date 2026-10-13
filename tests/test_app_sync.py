@@ -17,9 +17,13 @@ class FakeShell:
     fail_apply: set = set()
     layout_warnings: list = []
 
-    def __init__(self, name, monitor, config, register, unregister=None):
+    def __init__(
+        self, name, monitor, config, register, unregister=None, on_layout=None, on_error=None
+    ):
         self.name = name
         self.monitor = monitor
+        self.on_layout = on_layout
+        self.on_error = on_error
         FakeShell.opened.append(name)
 
     def close(self):
@@ -160,7 +164,7 @@ def test_shell_receives_unregister_callback(env, monkeypatch):
     got = {}
 
     class Capturing(FakeShell):
-        def __init__(self, name, monitor, config, register, unregister=None):
+        def __init__(self, name, monitor, config, register, unregister=None, **callbacks):
             super().__init__(name, monitor, config, register)
             got["unregister"] = unregister
 
@@ -407,3 +411,33 @@ def test_deprecated_pos_is_logged_once_per_reload(renv, caplog):
     app.reload()  # no pos left: no line
     lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
     assert len(lines) == 1 and lines[0].endswith("monitors.HDMI-A-1.panels.0.pos")
+
+
+def test_a_relayout_started_by_the_shell_reports_through_the_app(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    shell.layout_warnings = ["monitors.HDMI-A-1.panels.0 (dock): shrunk"]
+    shell.on_layout(shell)  # what MonitorShell calls after measuring or a geometry change
+    assert notes == ["monitors.HDMI-A-1.panels.0 (dock): shrunk"]
+
+
+def test_a_failed_relayout_rebuilds_the_shell_once(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(title)
+    )
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    shell.on_error(shell)  # what MonitorShell calls when _measure or _relayout raised
+    rebuilt = app.shells["HDMI-A-1"]
+    assert rebuilt is not shell and notes == ["Panels rebuilt"]
+    assert FakeShell.closed == ["HDMI-A-1"] and FakeShell.opened == ["HDMI-A-1", "HDMI-A-1"]
+    rebuilt.on_error(rebuilt)  # fails again before the next reload: logged, shell kept
+    shell.on_error(shell)  # a late call from the closed shell: ignored
+    assert app.shells["HDMI-A-1"] is rebuilt and FakeShell.closed == ["HDMI-A-1"]

@@ -20,6 +20,8 @@ class FakeWindow:
         self.title = "w"
         self.themes = []
         self.states = []
+        self.natural = 200
+        self.measured = 0
 
     def destroy(self):
         self.destroyed = True
@@ -37,6 +39,10 @@ class FakeWindow:
 
     def get_title(self):
         return self.title
+
+    def natural_length(self):
+        self.measured += 1
+        return self.natural
 
 
 class FakeCanvas(FakeWindow):
@@ -71,6 +77,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.strips = []
     shell._closed = False
     shell._unregister = unregister or (lambda _w: None)
+    shell._measure_id = 0
     return shell
 
 
@@ -139,15 +146,20 @@ def build(monkeypatch, make_config, fake_registry):
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
     monkeypatch.setattr(mon_mod, "widget_class", lambda _w: FakeWindow)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
-    timers = []
+    timers, idles, removed = [], [], []
     monkeypatch.setattr(
         mon_mod.GLib, "timeout_add", lambda ms, fn, *a: timers.append((ms, fn, a)) or len(timers)
     )
+    monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda fn: idles.append(fn) or 100 + len(idles))
+    monkeypatch.setattr(mon_mod.GLib, "source_remove", removed.append)
 
-    def _build(monitors, theme=None):
+    def _build(monitors, theme=None, on_layout=None, on_error=None):
         tracked = []
         cfg = make_config(monitors=monitors, theme=theme)
-        shell = mon_mod.MonitorShell("HDMI-A-1", MONITOR, cfg, tracked.append)
+        shell = mon_mod.MonitorShell(
+            "HDMI-A-1", MONITOR, cfg, tracked.append, on_layout=on_layout, on_error=on_error
+        )
+        shell.test_idles, shell.test_removed = idles, removed
         return shell, tracked, timers
 
     return _build
@@ -318,6 +330,7 @@ def test_failed_construction_closes_everything_already_built(make_config, monkey
     monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
+    monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda *a: 1)
     registered, unregistered = [], []
     cfg = make_config(monitors=edge({"widget": "dock"}))
     with pytest.raises(RuntimeError, match="panel broke"):
@@ -378,3 +391,96 @@ def test_a_gap_change_moves_the_neighbours(build, make_config):
     shell.apply(make_config(monitors=wider), [Change("relayout", "HDMI-A-1")])
     assert shell.panels[0] is first and not first.destroyed  # did not move: kept
     assert second.destroyed and shell.panels[1].args[0].pos == second.args[0].pos + 32
+
+
+# ---- "content" measurement ----------------------------------------------------------
+
+
+def test_content_panels_are_measured_when_idle_then_laid_out_again(build):
+    reports = []
+    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_layout=reports.append)
+    first = shell.panels[0]
+    assert first.args[0].length == 560  # the widget's default until measured
+    assert len(shell.test_idles) == 1 and reports == []
+    first.natural = 300
+    assert shell.test_idles[0]() is False  # one-shot
+    rebuilt = shell.panels[0]
+    assert first.destroyed and rebuilt.args[0].length == 300
+    assert reports == [shell]
+    rebuilt.natural = 300
+    assert len(shell.test_idles) == 2  # the rebuilt panel is measured again
+    assert shell.test_idles[1]() is False
+    assert shell.panels[0] is rebuilt and reports == [shell]  # same size: nothing changes
+
+
+def test_no_measurement_without_content_panels(build):
+    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "clock", "length": "fill"}))
+    assert shell.test_idles == []
+
+
+def test_a_measurement_belongs_to_its_widget(build, make_config):
+    shell, _, _ = build(edge({"widget": "dock", "length": "content"}))
+    shell.panels[0].natural = 300
+    shell.test_idles[0]()
+    shell.apply(make_config(monitors=edge({"widget": "clock", "length": "content"})), [])
+    assert shell.panels[0].args[0].length == 168  # the clock's default, not the dock's 300
+
+
+def test_measuring_after_close_does_nothing(build):
+    shell, _, _ = build(edge({"widget": "dock", "length": "content"}))
+    pending = shell.test_idles[0]
+    shell.close()
+    assert 101 in shell.test_removed  # the pending idle was cancelled
+    assert pending() is False
+
+
+def test_only_panels_built_since_the_last_measurement_are_measured(build, make_config):
+    dock = {"widget": "dock", "length": "content"}
+    clock = {"widget": "clock", "length": "content"}
+    shell, _, _ = build(edge(dock, clock))
+    shell.test_idles[0]()  # both measured at 200 px: both rebuilt
+    shell.test_idles[1]()  # the rebuilt pair is measured once: nothing changes
+    kept = shell.panels[0]
+    seen = kept.measured
+    shell.apply(
+        make_config(monitors=edge(dock, {**clock, "min_length": 250})),
+        [Change("panel-rebuild", "HDMI-A-1", 1)],
+    )
+    assert shell.panels[0] is kept and len(shell.test_idles) == 3
+    assert shell.test_idles[2]() is False
+    assert kept.measured == seen  # not rebuilt: not measured again
+    assert shell.panels[1].measured == 1 and shell.panels[1].args[0].length == 250
+
+
+def test_a_restyle_measures_every_content_panel_again(build, make_config):
+    panels = ({"widget": "dock", "length": "content"}, {"widget": "clock"})
+    shell, _, _ = build(edge(*panels))
+    shell.test_idles[0]()  # measured: rebuilt at 200 px
+    shell.test_idles[1]()  # settled
+    kept = shell.panels[0]
+    kept.natural = 260  # the new theme's font is larger
+    shell.apply(
+        make_config(theme={"accent": "#112233"}, monitors=edge(*panels)),
+        [Change("restyle", "HDMI-A-1")],
+    )
+    assert shell.panels[0] is kept and len(shell.test_idles) == 3
+    shell.test_idles[2]()
+    assert kept.destroyed and shell.panels[0].args[0].length == 260
+
+
+def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog):
+    errors, reports = [], []
+    shell, _, _ = build(
+        edge({"widget": "dock", "length": "content"}),
+        on_layout=reports.append,
+        on_error=errors.append,
+    )
+    shell.panels[0].natural = 300
+
+    def explode(*a, **k):
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+    assert shell.test_idles[0]() is False  # never raises into the main loop
+    assert errors == [shell] and reports == []
+    assert "widget broke" in caplog.text

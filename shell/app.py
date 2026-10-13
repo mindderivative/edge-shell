@@ -50,6 +50,7 @@ class EdgeShellApp:
         self._early: list = []  # windows created before the Application exists
         self._sync_timers: list[int] = []  # pending hot-plug sync timer ids
         self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
+        self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
         self._log_deprecated(store.config)
 
     @property
@@ -86,7 +87,13 @@ class EdgeShellApp:
         for name in open_:
             log.info("opening Edge Shell on %s", name)
             self.shells[name] = MonitorShell(
-                name, desired[name], self.config, self.register_window, self.unregister_window
+                name,
+                desired[name],
+                self.config,
+                self.register_window,
+                self.unregister_window,
+                on_layout=lambda shell, n=name: self._report_layout(n, shell),
+                on_error=lambda shell, n=name: self._relayout_failed(n, shell),
             )
             self._report_layout(name, self.shells[name])
             if self.recorder is not None:
@@ -152,6 +159,7 @@ class EdgeShellApp:
             return
         old, new = result
         self._log_deprecated(new)
+        self._relayout_rebuilt.clear()  # a new config may fix the failing widget
         changes = diff_configs(old, new)
         log.info("config reloaded: %d change(s)", len(changes))
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
@@ -193,6 +201,26 @@ class EdgeShellApp:
                 "theme): %s",
                 ", ".join(paths),
             )
+
+    def _relayout_failed(self, name: str, shell) -> None:
+        """A re-layout the shell started by itself raised (MonitorShell._measure / _relayout
+        logged it): close that shell and rebuild it from the current config, as a failed
+        reload does. Only once per monitor until the next reload, so a widget that always
+        fails cannot rebuild forever; a stale call from a closed shell is ignored."""
+        if self.shells.get(name) is not shell:
+            return
+        if name in self._relayout_rebuilt:
+            log.error("re-layout of %s failed again; keeping its panels as they are", name)
+            return
+        self._relayout_rebuilt.add(name)
+        log.error("re-layout of %s failed; rebuilding its panels", name)
+        self._notify("Panels rebuilt", f"{name}: laying out the panels failed; rebuilt them")
+        self.shells.pop(name)
+        try:
+            shell.close()
+        except Exception:
+            log.exception("closing the failed shell on %s failed", name)
+        self.sync_monitors()  # reopens it from self.config (and refreshes the CSS)
 
     def _report_layout(self, name: str, shell) -> None:
         """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but
