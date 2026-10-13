@@ -2,7 +2,14 @@
 
 import pytest
 
-from shell.panel_layout import free_span, layout_edge, layout_monitor
+from shell.panel_layout import (
+    CONTENT_PAD,
+    MIN_LENGTH,
+    content_length,
+    free_span,
+    layout_edge,
+    layout_monitor,
+)
 from shell.panel_spec import PanelRequest
 
 W, H, T, R, GAP = 1920, 1080, 10, 14, 8
@@ -227,3 +234,161 @@ def test_corner_neighbours_on_adjacent_edges_collide():
 def test_warnings_come_in_config_order_whatever_the_edge():
     _, warnings = placed(req(pos=0), req("clock", "top", pos=0, length=168, depth=46))
     assert [w.split(" ")[0] for w in warnings] == ["monitors.X.panels.0", "monitors.X.panels.1"]
+
+
+# ---- length modes ---------------------------------------------------------------------
+
+
+def test_content_length_pads_the_natural_size_and_keeps_the_floor():
+    assert content_length(200) == 200 + 2 * CONTENT_PAD
+    assert content_length(5) == MIN_LENGTH
+
+
+def test_percent_is_of_the_free_span():
+    assert placed(req(length="50%"))[0] == [((W - 922) // 2, 922)]  # 50% of 1844
+
+
+def test_percent_below_the_floor_gets_the_floor():
+    assert placed(req(length="1%"))[0][0][1] == MIN_LENGTH
+
+
+def test_min_and_max_clamp_every_mode():
+    assert placed(req(length="50%", max_length=600))[0][0][1] == 600
+    assert placed(req(length=300, min_length=400))[0][0][1] == 400
+    assert placed(req(length="fill", max_length=500))[0] == [(710, 500)]
+
+
+def test_min_length_beyond_the_free_span_is_shrunk_with_a_warning():
+    got, warnings = placed(req("bar", "right", length=300, min_length=2000, depth=56))
+    assert got == [(38, 1004)] and "length 2000 px does not fit" in warnings[0]
+
+
+def test_content_uses_the_measured_length_or_the_fallback():
+    assert placed(req(length="content", fallback=300))[0][0][1] == 300
+    assert placed(req(length="content"), natural={0: 240})[0][0][1] == 240
+
+
+def test_fill_alone_spans_the_free_span():
+    assert placed(req(length="fill")) == ([(38, 1844)], [])
+
+
+def test_fill_takes_what_the_neighbours_leave():
+    a = req("a", "top", "start", length=168, depth=46)
+    f = req("f", "top", length="fill", depth=46)
+    c = req("c", "top", "end", length=168, depth=46)
+    got, warnings = placed(a, f, c)
+    assert got == [(38, 168), (242, 1436), (1714, 168)] and warnings == []
+    assert 242 - (38 + 168) == 36 and 1714 - (242 + 1436) == 36  # joins + gap either side
+
+
+def test_fills_share_equally_and_the_first_gets_the_odd_pixel():
+    a = req("a", "top", length="fill", depth=46)
+    b = req("b", "top", length="fill", depth=46)
+    assert placed(a, b, gap=9)[0] == [(38, 904), (38 + 904 + 37, 903)]
+
+
+def test_a_fill_without_room_gets_the_floor_and_the_later_neighbour_goes():
+    a = req("a", "top", "start", length=1100, depth=46)
+    fill = req("f", "top", length="fill", depth=46)
+    c = req("c", "top", "end", length=700, depth=46)
+    got, warnings = placed(a, fill, c)
+    assert got == [(38, 1100), (38 + 1100 + 36, MIN_LENGTH), None]
+    assert warnings == [
+        "monitors.X.panels.2 (c): overlaps monitors.X.panels.1 (f) or leaves less than the "
+        "minimum gap between their joins; not shown"
+    ]
+
+
+def test_fill_with_a_pos_runs_to_the_end_of_the_free_span():
+    assert placed(req("bar", "right", pos=600, length="fill", depth=56))[0] == [(600, 442)]
+
+
+@pytest.mark.parametrize(("offset", "expected"), [(100, (138, 1744)), (-100, (38, 1744))])
+def test_a_centred_fill_gives_up_its_offset_and_moves_that_way(offset, expected):
+    assert placed(req(length="fill", offset=offset)) == ([expected], [])
+
+
+def test_a_centred_fill_between_neighbours_leaves_its_offset_free_before_it():
+    a = req("a", "top", "start", length=168, depth=46)
+    f = req("f", "top", offset=40, length="fill", depth=46)
+    c = req("c", "top", "end", length=168, depth=46)
+    assert placed(a, f, c) == ([(38, 168), (282, 1396), (1714, 168)], [])
+
+
+def test_a_smaller_monitor_recentres_rescales_and_clamps():
+    got, warnings = placed(
+        req(),
+        req("p", "top", length="50%", depth=46),
+        req("bar", "right", pos=600, length=300, depth=56),
+        width=1280,
+        height=720,
+    )
+    assert got == [(360, 560), ((1280 - 602) // 2, 602), (382, 300)]
+    assert warnings == [
+        "monitors.X.panels.2 (bar): pos 600 would run into a screen corner; moved to 382"
+    ]
+
+
+# ---- review amendments to the slot logic --------------------------------------------------
+
+
+def test_an_end_panels_offset_is_extra_space_before_the_second_end_panel():
+    a = req("a", "top", "end", length=168, depth=46)
+    b = req("b", "top", "end", offset=10, length=168, depth=46)
+    assert placed(a, b) == ([(1714, 168), (1714 - 36 - 10 - 168, 168)], [])
+
+
+def test_a_centre_group_is_pushed_left_by_a_long_end_group():
+    long_end = req("e", "top", "end", length=1000, depth=46)
+    clock = req("c", "top", length=168, depth=46)
+    assert placed(long_end, clock) == ([(882, 1000), (882 - 36 - 168, 168)], [])
+
+
+def test_a_panel_hidden_by_overlap_keeps_its_slot_space():
+    a = req("a", "top", "start", length=168, depth=46)
+    b = req("b", "left", "start", length=168, depth=46)  # collides with a at the corner
+    c = req("c", "left", "start", length=168, depth=46)
+    got, _ = placed(a, b, c)
+    assert got == [(38, 168), None, (38 + 168 + 36, 168)]  # c does not close up on b's slot
+
+
+def test_a_start_panel_pushed_into_the_corner_clearance_is_reported():
+    a = req("a", "top", "start", length=1000, depth=46)
+    b = req("b", "top", "start", length=800, depth=46)
+    got, warnings = placed(a, b, gap=50)
+    assert got == [(38, 1000), (1082, 800)]  # 1882 - 800; not the 1116 the gap asks for
+    assert warnings == [
+        "monitors.X.panels.1 (b): no room after its neighbours in the start slot; moved to 1082"
+    ]
+
+
+def test_an_end_panel_pushed_into_the_corner_clearance_is_reported():
+    a = req("a", "top", "end", length=1000, depth=46)
+    b = req("b", "top", "end", length=800, depth=46)
+    got, warnings = placed(a, b, gap=50)
+    assert got == [(882, 1000), (38, 800)]
+    assert warnings == [
+        "monitors.X.panels.1 (b): no room after its neighbours in the end slot; moved to 38"
+    ]
+
+
+def test_a_later_start_panel_with_an_offset_pushed_by_its_neighbour_gets_the_neighbour_text():
+    a = req("a", "top", "start", offset=10, length=1000, depth=46)
+    b = req("b", "top", "start", offset=300, length=800, depth=46)
+    got, warnings = placed(a, b)
+    assert got[1] == (1082, 800)
+    assert warnings == [
+        "monitors.X.panels.1 (b): no room after its neighbours in the start slot; moved to 1082"
+    ]
+
+
+def test_the_centre_offset_warning_reports_the_position_the_panel_ends_up_at():
+    a = req("a", "top", "start", offset=427, length=580, depth=46)
+    b = req("b", "top", "center", offset=299, length=683, depth=46)
+    c = req("c", "top", "start", length=312, depth=46)
+    got, warnings = placed(a, b, c)
+    assert got[1] == (1199, 683)  # the offset alone asked for 1429; the warning used to say so
+    assert warnings[0] == (
+        "monitors.X.panels.1 (b): offset 299 would run into a screen corner or a neighbour; "
+        "moved to 1199"
+    )

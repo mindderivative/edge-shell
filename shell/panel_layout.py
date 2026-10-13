@@ -7,7 +7,10 @@ Per edge (`layout_edge`):
 1. Free span. A body must stay `T + R + r` from each end of the edge (`r` = its join radius
    at full depth), so its fillet never reaches into a screen-corner arc. A free span shorter
    than MIN_LENGTH hides the panel.
-2. Lengths. px as given (other length modes: the widget's default px for now). A length
+2. Lengths. px as given; "NN%" of the panel's own free span; "content" = the measured natural
+   length (`natural[index]`, the widget's default px until measured); then min_length /
+   max_length and the MIN_LENGTH floor. "fill" panels share what the slotted neighbours, the
+   offsets and the spacing leave, equally (the first fill gets the odd pixels). A length
    longer than the free span is shrunk to it (warning).
 3. Slots. start / center / end, each sorted by (order, config index). Neighbours in the
    sequence start -> center -> end are `r1 + r2 + gap` apart. The start slot packs from the
@@ -17,7 +20,8 @@ Per edge (`layout_edge`):
    start and end groups; its first panel's offset then shifts the group from there (a
    negative offset on a later center panel counts as 0).
 4. `pos` (deprecated alias): the panel is placed alone at `pos` px from the start of the
-   edge, clamped into its free span (warning); it takes no part in the slots.
+   edge, clamped into its free span (warning); it takes no part in the slots or the fill
+   (a `pos` panel with length "fill" runs to the end of its free span).
 
 Across the monitor (`layout_monitor`): panels are checked in config order; a panel whose body
 box (full depth, from the screen edge, grown by its `r`) overlaps an earlier panel's is not
@@ -45,6 +49,7 @@ from shell.config.models import Edge
 from shell.panel_spec import PanelGeometry, PanelRequest
 
 MIN_LENGTH = 60  # same floor as the config model's px lengths
+CONTENT_PAD = 12  # body px on each side of a "content" panel's natural size
 EDGES: tuple[Edge, ...] = ("top", "right", "bottom", "left")
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1
@@ -55,6 +60,11 @@ Note = tuple[int, str]  # (config index, warning)
 class Layout:
     panels: list[PanelGeometry | None]  # config order; None = not shown
     warnings: list[str]
+
+
+def content_length(natural: int) -> int:
+    """Body length for a widget whose content is `natural` px long along the edge."""
+    return max(MIN_LENGTH, natural + 2 * CONTENT_PAD)
 
 
 def free_span(extent: int, thickness: int, radius: int, depth: int) -> tuple[int, int]:
@@ -77,11 +87,17 @@ class _Item:
 
 def _wanted(it: _Item, natural: Mapping[int, int]) -> int:
     spec = it.req.length
-    return spec if isinstance(spec, int) else it.req.fallback_length
+    if spec == "content":
+        return natural.get(it.index, it.req.fallback_length)
+    if isinstance(spec, str):  # "NN%" (the model only lets through px, fill, content, NN%)
+        return round((it.hi - it.lo) * float(spec[:-1]) / 100)
+    return spec
 
 
 def _fit(it: _Item, length: int, notes: list[Note]) -> int:
-    length = max(length, MIN_LENGTH)
+    length = max(length, MIN_LENGTH, it.req.min_length or 0)
+    if it.req.max_length is not None:
+        length = max(MIN_LENGTH, min(length, it.req.max_length))
     span = it.hi - it.lo
     if length > span:
         notes.append(
@@ -139,20 +155,51 @@ def layout_edge(
         return sorted(chosen, key=lambda it: (it.req.order, it.index))
 
     start, center, end = slot("start"), slot("center"), slot("end")
+    seq = start + center + end[::-1]  # left to right (top to bottom)
     for it in items:
         if it.req.length != "fill":
             it.length = _fit(it, _wanted(it, natural), notes)
+    fills = [it for it in seq if it.req.length == "fill"]
+    if fills:
+        fixed = sum(it.length for it in seq if it.req.length != "fill")
+        gaps = sum(space(a, b) for a, b in pairwise(seq))
+        offsets = sum(it.req.offset for it in start + end) + sum(
+            max(0, it.req.offset) for it in center[1:]
+        )
+        if center and center[0].req.length == "fill":  # it gives up its offset (see below)
+            offsets += abs(center[0].req.offset)
+        room = math.floor(seq[-1].hi - seq[0].lo - fixed - gaps - offsets)
+        share, extra = divmod(max(0, room), len(fills))
+        for k, it in enumerate(fills):
+            it.length = _fit(it, share + (extra if k == 0 else 0), notes)
+
+    def place(it: _Item, wanted: int, alone: int, align: str) -> int:
+        """Clamp a slotted panel; a move is always reported, as the user's own offset running
+        into a corner when it would have done so alone, else as the neighbours' doing."""
+        pos = _clamp(it, wanted, None, notes)
+        if pos != wanted:
+            if it.req.offset and not it.lo <= alone <= it.hi - it.length:
+                text = f"offset {it.req.offset} would run into a screen corner; moved to {pos}"
+            else:
+                text = f"no room after its neighbours in the {align} slot; moved to {pos}"
+            notes.append((it.index, f"{it.name}: {text}"))
+        return pos
 
     cursor: float = start[0].lo if start else 0
     for k, it in enumerate(start):
-        wanted = math.ceil(cursor + it.req.offset)
-        it.pos = _clamp(it, wanted, f"offset {it.req.offset}" if it.req.offset else None, notes)
+        it.pos = place(
+            it, math.ceil(cursor + it.req.offset), math.ceil(it.lo + it.req.offset), "start"
+        )
         if k + 1 < len(start):
             cursor = it.pos + it.length + space(it, start[k + 1])
     cursor = end[0].hi if end else 0
     for k, it in enumerate(end):
-        wanted = math.floor(cursor - it.req.offset - it.length)
-        it.pos = _clamp(it, wanted, f"offset {it.req.offset}" if it.req.offset else None, notes)
+        it.pos = place(
+            it,
+            math.floor(cursor - it.req.offset - it.length),
+            math.floor(it.hi - it.req.offset - it.length),
+            "end",
+        )
         if k + 1 < len(end):
             cursor = it.pos - space(it, end[k + 1])
     if center:
@@ -171,22 +218,36 @@ def layout_edge(
         right = math.floor(end[-1].pos - space(center[-1], end[-1])) if end else center[-1].hi
         base = max(left, min((extent - total) // 2, right - total))  # without the offset
         first = max(left, min(base + shift, right - total))
-        if shift and first != base + shift:
-            notes.append(
-                (
-                    head.index,
-                    f"{head.name}: offset {shift} would run into a screen corner or a "
-                    f"neighbour; moved to {first}",
-                )
-            )
         cursor = first
         for k, it in enumerate(center):
             if k:
                 cursor = math.ceil(cursor + space(center[k - 1], it) + max(0, it.req.offset))
-            it.pos = min(max(int(cursor), it.lo), it.hi - it.length)
+            wanted = int(cursor)
+            it.pos = min(max(wanted, it.lo), it.hi - it.length)
             cursor = it.pos + it.length
+            if k == 0 and shift and head.req.length != "fill":
+                # reported last, with the final position (a fill took its offset as room: the
+                # clamp only decides which side the free space is on, so it is no warning)
+                if it.pos != base + shift:
+                    notes.append(
+                        (
+                            it.index,
+                            f"{it.name}: offset {shift} would run into a screen corner or a "
+                            f"neighbour; moved to {it.pos}",
+                        )
+                    )
+            elif it.pos != wanted:
+                notes.append(
+                    (
+                        it.index,
+                        f"{it.name}: no room after its neighbours in the center slot; "
+                        f"moved to {it.pos}",
+                    )
+                )
     for it in items:
         if it.req.pos is not None:
+            if it.req.length == "fill":
+                it.length = _fit(it, it.hi - max(it.req.pos, it.lo), notes)
             it.pos = _clamp(it, it.req.pos, f"pos {it.req.pos}", notes)
     for it in items:
         out[it.index] = (it.pos, it.length)
