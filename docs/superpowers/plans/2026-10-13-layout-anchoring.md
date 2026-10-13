@@ -14,22 +14,23 @@
 
 **Date:** 2026-10-13 (the plan's execution date, as in the file name).
 
-**Size:** 11 tasks. 8 carry code and tests (1-5, 7-9), 2 human gates (Gate A = Task 6, Gate B = Task 10), Task 11 is docs. Riskiest: Task 5 (switching `MonitorShell` to the new resolver changes where existing configs put panels if a rule is wrong; Gate A item 9 checks the old examples look identical), Task 7 (the idle measurement and the clip container are GTK behaviour the unit tests only simulate), Task 8 (whether KWin/GDK emit `notify::geometry` on a mode change is only provable live).
+**Size:** 11 tasks. 8 carry code and tests (1-5, 7-9), 2 human gates (Gate A = Task 6, Gate B = Task 10), Task 11 is docs. Riskiest: Task 5 (switching `MonitorShell` to the new resolver changes where existing configs put panels if a rule is wrong; Gate A item 9 checks the old examples look identical), Task 7 (the idle measurement and the clip container are GTK behaviour the unit tests only simulate; Gate B items 6-7 check clipping and that clicks, hover, drag and tooltips still reach the clipped content), Task 8 (whether KWin/GDK emit `notify::geometry` on a mode change is only provable live: Gate B item 10 is required, not optional).
 
 ## Decisions (for Phil's review; each marked with the cost if Phil disagrees)
 
-The spec leaves these open. They are the planner's choices; nothing below has been implemented yet.
+The spec leaves these open. They are the planner's choices; nothing below has been implemented yet. Three of them (1, 2's deprecation logging, 5) were put to Phil and are not answered yet: they are marked **default pending Phil** and the plan is written for the default.
 
-1. **Gap: one value per monitor, measured on top of the joins.** `[layout] gap = 8` (global default) with an optional `[monitors.NAME.layout] gap` override. Two neighbouring slotted panels on one edge are `r1 + r2 + gap` apart (body to body), so `gap` is the straight piece of frame between their curved joins and **any value >= 0 already satisfies the minimum gap `r1 + r2`**; no validation has to know the depths. Default 8 px. Per-edge gaps are not supported (one number covers the common case). *Cost if Phil disagrees:* per-edge gap = an `edges` table in `LayoutSettings` and one lookup in `layout_monitor` (half a task); "gap = body-to-body distance" instead = change `space()` in the resolver plus a validation that compares it with the joins (small).
-2. **`pos` vs `align` / `offset`: `pos` keeps its exact old meaning and wins, but cannot be mixed in one entry.** `pos` = the body starts `pos` px from the start of the screen edge, clamped to the corner clearance (so every existing config looks the same). A `pos` panel is placed on its own, outside the slots and outside the fill sharing. Setting `pos` together with `align` or `offset` in the same panel entry is a validation error naming the key path (ambiguous otherwise). Placement is taken as a whole: if an entry sets any of `pos` / `align` / `offset`, the widget's default placement is dropped and the missing keys are `align = "center"`, `offset = 0`. `pos = "center"` keeps working (= `align = "center"`). No deprecation notification (it would repeat on every start); the README and spec call `pos` deprecated. *Cost:* making `pos` an offset from the free-span start instead would shift every existing `pos` panel by `T + R + r` (38 px) and needs a migration note (small code change).
-3. **Order: per slot, default 0, ties keep config order.** A slot is (edge, align). The start slot packs from the start of the free span, the end slot from its end (order 0 nearest the end), the center slot is centred on the edge as one group. `offset` of the first panel in a slot counts from the slot's end (center: shifts the whole group, may be negative); `offset` of a later panel is extra space before it. Overlap handling is unchanged from the interim rule: panels are checked in **config order** and the later one is hidden with a notification. *Cost:* ordering across the whole edge instead of per slot would be a rewrite of the slot packing (one task).
-4. **Fill: equal shares of what is left.** All `"fill"` panels on one edge share the free span minus the fixed lengths, the spacing (`r1 + r2 + gap` between every pair of neighbours) and the offsets, equally (the first fill gets the odd pixels), then min/max and the 60 px floor apply. With a fill present the center group ends up against its neighbours. A fill that gets no room is floored at 60 px and the overlap rule hides the later colliding panel. *Cost:* weighted fills (`fill = 2`) later = a new key (small).
-5. **"content": measured when the main loop is idle after each build, then laid out again.** Until measured a "content" panel has its widget's default px length. After every `_sync_panels` that leaves a "content" panel live, `MonitorShell` schedules one idle callback (by then the app's stylesheet is applied, so fonts have their real size), reads `EdgePanel.natural_length()` (the content's natural size along the edge plus 12 px padding each side) and, if it changed, re-runs the layout (rebuilding that panel and any neighbour it moves) and reports warnings. So each "content" panel is built twice at startup. Measurements are kept per (index, widget, orientation). *Cost:* avoiding the startup rebuild needs an in-place resize of the layer surface (EdgePanel resizes its size request and margin) - about one task, which would also give decision 7's in-place move.
-6. **Monitor shrink / resolution change: re-layout, same rules.** `MonitorShell` listens to the monitor's `notify::geometry` (250 ms debounce) and re-runs the layout: percentages and fills rescale, centred groups re-centre, px panels that no longer fit shrink (warning), panels that collide are hidden (notification). When the monitor grows back they return; the notification fires only when the warnings change (existing `_report_layout`). This fixes the README limitation "centred panels do not re-centre on resolution change". *Cost:* none structural.
+1. **Gap: one value per monitor, measured on top of the joins (default pending Phil: 8 px).** `[layout] gap = 8` (global default) with an optional `[monitors.NAME.layout] gap` override. Two neighbouring slotted panels on one edge are `r1 + r2 + gap` apart (body to body), so `gap` is the straight piece of frame between their curved joins and **any value >= 0 already satisfies the minimum gap `r1 + r2`**; no validation has to know the depths. Default 8 px. Per-edge gaps are not supported (one number covers the common case). *Cost if Phil disagrees:* another default = one number in `LayoutSettings` and `config.default.toml` plus the expected positions in the tests and gates (small); per-edge gap = an `edges` table in `LayoutSettings` and one lookup in `layout_monitor` (half a task); "gap = body-to-body distance" instead = change `space()` in the resolver plus a validation that compares it with the joins (small).
+2. **`pos` vs `align` / `offset`: `pos` keeps its exact old meaning and wins, but cannot be mixed in one entry.** `pos` = the body starts `pos` px from the start of the screen edge, clamped to the corner clearance (so every existing config looks the same). A `pos` panel is placed on its own, outside the slots and outside the fill sharing. Setting `pos` together with `align` or `offset` in the same panel entry is a validation error naming the key path (ambiguous otherwise); the message gives the conversion: a lone `pos = N` equals `align = "start"`, `offset = N - (T + R + r)`, i.e. `N - 38` at the default theme for a panel at least 28 px deep (the clearance is 32-38 px depending on depth). Placement is taken as a whole: if an entry sets any of `pos` / `align` / `offset`, the widget's default placement is dropped and the missing keys are `align = "center"`, `offset = 0`. `pos = "center"` keeps working (= `align = "center"`). **Deprecation (default pending Phil): no notification** (it would repeat on every start); instead ONE INFO log line per config load and reload lists the key paths still using `pos` (pure helper `shell.registry.deprecated_pos_paths(config)`, called by `EdgeShellApp` at start and after each successful reload, never from `request_for`; Task 2). The README and spec call `pos` deprecated. *Cost:* making `pos` an offset from the free-span start instead would shift every existing `pos` panel by the clearance `T + R + r` (32-38 px depending on its depth, not a fixed 38 px) and needs a migration note (small code change); a notification instead of the log line = one `_notify` call (trivial).
+3. **Order: per slot, default 0, ties keep config order.** A slot is (edge, align). The start slot packs from the start of the free span, the end slot from its end (order 0 nearest the end), the center slot is centred on the edge as one group. `offset` of the first panel in a slot counts from the slot's end; for center it shifts the whole group (may be negative) from where it would sit without the offset (centred, or pushed clear of the start/end groups). `offset` of a later panel is extra space before it; a negative offset there counts as 0 (negative offsets only mean something on the first panel of the center slot). Overlap handling is unchanged from the interim rule: panels are checked in **config order** and the later one is hidden with a notification. A hidden panel keeps the slot space it was given (its neighbours do not close up: a hole in the packing). Two panels meeting at a shared screen corner (an end-aligned bottom panel and an end-aligned right panel, or a start-aligned top panel and a start-aligned left panel, both at offset 0) always collide and the later is hidden: one of them needs an offset of at least the other's depth + r - R (its depth for a panel at least 2R = 28 px deep). *Cost:* ordering across the whole edge instead of per slot would be a rewrite of the slot packing (one task); closing up the holes = a second packing pass after the overlap check (half a task).
+4. **Fill: equal shares of what is left.** All `"fill"` panels on one edge share the free span minus the fixed lengths, the spacing (`r1 + r2 + gap` between every pair of neighbours) and the offsets, equally (the first fill gets the odd pixels), then min/max and the 60 px floor apply. With a fill present the center group ends up against its neighbours. A fill that is the first center panel gives up `abs(offset)` px and moves that way (positive: the free space is before it), so its offset is never clamped away; an offset on a non-fill first center panel next to a fill has no room and is clamped with a warning. A fill that gets no room is floored at 60 px and the overlap rule hides the later colliding panel. *Cost:* weighted fills (`fill = 2`) later = a new key (small).
+5. **"content": measured when the main loop is idle after each build, then laid out again (default pending Phil: the one-off startup rebuild is accepted).** Until measured a "content" panel has its widget's default px length. Each `_new_panel` records its index; after a `_sync_panels`, `MonitorShell` schedules one idle callback (by then the app's stylesheet is applied, so fonts have their real size) that measures only the live "content" panels built since the last measurement, those without a measurement for the widget now at their index, and, after a restyle, every "content" panel (fonts may have changed). It reads `EdgePanel.natural_length()` (the content's natural size along the edge plus 12 px padding each side) and, if a value changed, re-runs the layout (rebuilding that panel and any neighbour it moves) and reports warnings. So each "content" panel is built twice at startup. Measurements are kept per (index, widget, orientation). *Cost:* avoiding the startup rebuild needs an in-place resize of the layer surface (EdgePanel resizes its size request, margin, content placement and input region) - 1-2 tasks, planned only if Gate B item 2 shows a visible flash; it would also give decision 7's in-place move.
+6. **Monitor shrink / resolution change: re-layout, same rules.** `MonitorShell` listens to the monitor's `notify::geometry` (250 ms debounce) and re-runs the layout: percentages and fills rescale, centred groups re-centre, px panels that no longer fit shrink (warning), panels that collide are hidden (notification). A zero or negative geometry (the monitor being unplugged) is ignored, so an unplug never produces a spurious "Panels adjusted"; the hot-plug sync closes the shell. When the monitor grows back they return; the notification fires only when the warnings change (existing `_report_layout`). This fixes the README limitation "centred panels do not re-centre on resolution change". *Cost:* none structural.
 7. **Reload: no `panel-move` change kind.** A moved panel is rebuilt, as today (`MonitorShell._sync_panels` rebuilds every panel whose resolved geometry changed, including neighbours). The diff gains a `relayout` kind for a `gap` change only. *Cost:* if rebuild flicker on a move is annoying (Gate A item 5), add an in-place move (`EdgePanel` updates its layer-shell margin) - about one task.
-8. **Content in a longer or shorter body: centred, never stretched, clipped when too long.** For `fill` / percent / long px the widget stays at its natural size, centred in the body (today's behaviour). When the body is shorter than the content (shrink to fit, a small percentage, `max_length`), the content is clipped by a scroll-less `Gtk.ScrolledWindow` so the layer surface never grows; wheel events do not scroll it. *Cost:* a per-widget "stretch" flag later (small).
-9. **Negative offsets only for `align = "center"`** (shift towards the start); for start/end they are a validation error. *Cost:* trivial.
-10. **The system bar's default moves from `pos = 600` to `align = "end"`, `offset = 142`** (still y = 600..900 on a 1080 px monitor with the default T/R), so a smaller monitor no longer triggers a clamp warning for an untouched default. *Cost:* trivial revert.
+8. **Content in a longer or shorter body: centred, never stretched, clipped when too long.** For `fill` / percent / long px the widget stays at its natural size, centred in the body (today's behaviour). The layer surface cannot grow either way (GTK3's `Gtk.Overlay` never measures its overlay children, and the content box is one); the real failure is content longer than the body drawing over the joins and the frame. So the content sits in a scroll-less `Gtk.ScrolledWindow` and is **clipped at the body edge instead of drawing over the joins and frame**, kept centred in the viewport (both adjustments re-centre on `changed`), so it is cut off equally at both ends; wheel events do not scroll it. *Cost:* a per-widget "stretch" flag later (small).
+9. **Negative offsets only for `align = "center"`** (shift towards the start); for start/end they are a validation error, and on a later center panel they count as 0 (decision 3). *Cost:* trivial.
+10. **The system bar's default moves from `pos = 600` to `align = "end"`, `offset = 142`**, so a smaller monitor no longer triggers a clamp warning for an untouched default. This is identical only on a 1080 px tall monitor (y = 600..900 with the default T/R). Elsewhere the bar keeps 142 px from the end of the free span: y = 960 at 1440 px (old: 600) and y = 240 at 720 px (old: 600 clamped to 382 with a warning). *Cost:* trivial revert.
+11. **Re-layouts the shell starts by itself never raise into the main loop.** `MonitorShell._measure` (Task 7) and `_relayout` (Task 8) catch any exception, log it with its traceback and call `on_error(shell)`; `EdgeShellApp` then closes that shell and rebuilds it from the current config, as a failed reload does, but only once per monitor until the next successful reload (a second failure is logged and the shell is kept, so a widget that always fails cannot loop). *Cost:* none structural.
 
 ## Prerequisites
 
@@ -55,13 +56,14 @@ The spec leaves these open. They are the planner's choices; nothing below has be
 
 ## Review Focus
 
-The five input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
+The six input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
 
-1. **A smaller (or hot-plugged smaller) monitor:** an untouched config must re-centre, rescale percentages and fills, shrink or clamp with a warning, and never crash or draw into a corner. Pinned by `test_a_smaller_monitor_recentres_rescales_and_clamps` (Task 4), `test_the_system_bar_default_keeps_its_place` (Task 3) and `test_a_resolution_change_relayouts_once_it_settles` (Task 8); live by Gate B item 9.
+1. **A smaller (or hot-plugged smaller, or unplugged) monitor:** an untouched config must re-centre, rescale percentages and fills, shrink or clamp with a warning, and never crash, draw into a corner or report a spurious "Panels adjusted" while the monitor goes away. Pinned by `test_a_smaller_monitor_recentres_rescales_and_clamps` (Task 4), `test_the_system_bar_default_keeps_its_place` (Task 3), `test_a_resolution_change_relayouts_once_it_settles` and `test_a_zero_geometry_is_ignored` (Task 8); live by Gate B items 9-10.
 2. **Existing configs (`pos`, centred defaults) must look exactly as before.** Pinned by `test_centred_panel_keeps_the_old_centring`, `test_pos_is_clamped_to_the_corner_clearance` (Task 3), `test_placement_is_taken_as_a_whole` (Task 2) and `test_pos_clamped_to_the_corner_renders_like_legacy` (Task 5); live by Gate A item 9.
-3. **Ambiguous or invalid panel entries** (`pos` with `align`, a negative `offset` at an end, `min_length > max_length`, `length = "half"`, `"0%"`, `"560"` as a string) must be rejected with the key path, keeping the last good config. Pinned by `test_bad_length_names_the_key_path`, `test_placement_conflicts_name_the_panel` and `test_new_panel_keys_report_key_path` (Task 1); live by Gate A item 7.
-4. **A measured "content" length that belongs to a different widget** after a reorder, or a measurement loop that never settles. Pinned by `test_a_measurement_belongs_to_its_widget` and `test_content_panels_are_measured_when_idle_then_laid_out_again` (the second measurement changes nothing) (Task 7).
-5. **Content longer than its body** (shrink to fit, `max_length`, a small percentage) must be clipped, not grow the layer surface off its anchor. Pinned by `test_clip_container_never_asks_for_the_content_size` (Task 7); live by Gate B item 6.
+3. **Ambiguous or invalid panel entries** (`pos` with `align`, a negative `offset` at an end, `min_length > max_length`, `length = "half"`, `"0%"`, `"560"` as a string, an unknown widget in the simulator) must be rejected with the key path, keeping the last good config. Pinned by `test_bad_length_names_the_key_path`, `test_placement_conflicts_name_the_panel` and `test_new_panel_keys_report_key_path` (Task 1) and `test_cli_reports_an_unknown_widget` (Task 9); live by Gate A item 7.
+4. **A measured "content" length that belongs to a different widget** after a reorder, a measurement loop that never settles, or a re-layout the shell starts itself that raises. Pinned by `test_a_measurement_belongs_to_its_widget`, `test_content_panels_are_measured_when_idle_then_laid_out_again` (the second measurement changes nothing), `test_only_panels_built_since_the_last_measurement_are_measured`, `test_a_failing_measurement_is_logged_and_reported` (Task 7), `test_a_failed_relayout_rebuilds_the_shell_once` (Task 7) and `test_a_failing_relayout_is_logged_and_reported` (Task 8).
+5. **Content longer than its body** (shrink to fit, `max_length`, a small percentage) must be clipped at the body edge, centred, never drawn over the joins and frame, and still take clicks, hover and drags. Pinned by `test_clip_container_never_asks_for_the_content_size` and `test_clipped_content_is_centred_in_the_body` (Task 7); live by Gate B items 6-7.
+6. **Two panels meeting at a shared screen corner** (bottom end + right end, or top start + left start, at offset 0) always collide; the later one must be hidden with a notification naming both, never drawn crossed. Pinned by `test_corner_neighbours_on_adjacent_edges_collide` (Task 3); live by Gate A item 3.
 
 ## File Structure
 
@@ -70,15 +72,17 @@ shell/config/models.py        # + Align, check_length, LayoutSettings/LayoutOver
                               #   Config.layout + layout_for, override check covers layout
 config.default.toml           # + [layout] gap = 8
 shell/panel_spec.py           # PanelDefaults (+ align, offset), PanelRequest (new), PanelGeometry (pos: int)
-shell/registry.py             # request_for / requests_for (replace resolve_panel / panels_for in Task 5)
+shell/registry.py             # request_for / requests_for (replace resolve_panel / panels_for in Task 5),
+                              #   deprecated_pos_paths
 shell/config/diff.py          # compares requests; + "relayout" kind for a gap change
 shell/panel_layout.py         # PURE resolver: free_span, layout_edge, layout_monitor, content_length
 shell/geometry.py             # anchor_and_margin takes a resolved pos (no None branch)
-shell/monitors.py             # MonitorShell: layout_monitor, gap, "content" measurement, geometry re-layout
-shell/edge_panel.py           # clip_container, natural_length
+shell/monitors.py             # MonitorShell: layout_monitor, gap, "content" measurement, geometry re-layout,
+                              #   on_layout / on_error callbacks
+shell/edge_panel.py           # clip_container (centred), natural_length
 shell/canvas/canvas.py        # ShapeCanvas.set_monitor_size
 shell/canvas/simulate.py      # config_shapes + --config/--monitor
-shell/app.py                  # on_layout callback -> _report_layout
+shell/app.py                  # pos deprecation log line; on_layout -> _report_layout; on_error -> _relayout_failed
 widgets/system_bar.py         # default placement align = "end", offset = 142
 examples/layout-test.toml     # Gate A
 examples/layout-sizes-test.toml  # Gate B
@@ -89,12 +93,12 @@ tests/test_panel_layout.py    # REWRITTEN: pixel tests of resolved panels vs leg
 | Task | Deliverable | Keeps the suite green because |
 | --- | --- | --- |
 | 1 | config keys, `[layout] gap`, validation | new keys optional with defaults; old keys unchanged |
-| 2 | `PanelRequest`, `request_for`, diff on requests + `relayout` | old `resolve_panel` / `panels_for` stay until Task 5 |
+| 2 | `PanelRequest`, `request_for`, diff on requests + `relayout`, `pos` deprecation log line | old `resolve_panel` / `panels_for` stay until Task 5 |
 | 3 | resolver core: slots, order, gap, offset, pos, overlap | new functions beside the interim `resolve_layout` |
 | 4 | length modes: percent, content, fill, min/max | additive edits; px behaviour unchanged |
 | 5 | MonitorShell on the new resolver; old resolver removed | tests ported with the code |
 | 6 | Gate A + `examples/layout-test.toml` | example only |
-| 7 | "content" measurement, clip container, `on_layout` | new code + fakes |
+| 7 | "content" measurement, clip container, `on_layout`, `on_error` | new code + fakes |
 | 8 | re-layout on monitor geometry change | new code + fakes |
 | 9 | simulate `--config`, effects test at the corners | new code + tests |
 | 10 | Gate B + `examples/layout-sizes-test.toml` | example only |
@@ -147,7 +151,7 @@ def test_align_offset_order_and_bounds():
     ("panel", "message"),
     [
         ({"pos": 10, "align": "end"}, "pos cannot be combined with align or offset"),
-        ({"pos": "center", "offset": 3}, "pos cannot be combined with align or offset"),
+        ({"pos": "center", "offset": 3}, 'pos = N is align = "start", offset = N - 38'),
         ({"align": "end", "offset": -4}, 'a negative offset only works with align = "center"'),
         ({"min_length": 300, "max_length": 200}, "min_length must not be larger than max_length"),
     ],
@@ -161,18 +165,21 @@ def test_placement_conflicts_name_the_panel(make_config, panel, message):
 
 
 @pytest.mark.parametrize(
-    ("panel", "field"),
+    ("panel", "field", "kind"),
     [
-        ({"widget": "dock", "align": "middle"}, "align"),
-        ({"widget": "dock", "order": -1}, "order"),
-        ({"widget": "dock", "offset": 20001}, "offset"),
-        ({"widget": "dock", "min_length": 10}, "min_length"),
+        ({"widget": "dock", "align": "middle"}, "align", "literal_error"),
+        ({"widget": "dock", "order": -1}, "order", "greater_than_equal"),
+        ({"widget": "dock", "offset": 20001}, "offset", "less_than_equal"),
+        ({"widget": "dock", "min_length": 10}, "min_length", "greater_than_equal"),
     ],
 )
-def test_new_panel_keys_report_key_path(make_config, panel, field):
+def test_new_panel_keys_report_key_path(make_config, panel, field, kind):
     with pytest.raises(ValidationError) as exc:
         make_config(monitors={"HDMI-A-1": {"shell": "edge", "panels": [panel]}})
-    assert exc.value.errors()[0]["loc"][:5] == ("monitors", "HDMI-A-1", "panels", 0, field)
+    (error,) = exc.value.errors()
+    assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0, field)
+    # the bound itself, not "extra_forbidden" (what every new key gives before this task)
+    assert error["type"] == kind
 
 
 def test_layout_gap_default_override_and_bounds(make_config):
@@ -187,7 +194,7 @@ def test_layout_gap_default_override_and_bounds(make_config):
 ```
 
 Run: `scripts/py -m pytest -q tests/test_config_models.py`
-Expected: FAIL (`"fill"` rejected by the int `Length`, `align` is an extra key, `Config` has no `layout`).
+Expected: FAIL (`"fill"` rejected by the int `Length`; `align`, `order`, `offset` and `min_length` are extra keys, so `test_new_panel_keys_report_key_path` sees `extra_forbidden` instead of the bound; `Config` has no `layout`).
 
 - [ ] **Step 2: Implement in `shell/config/models.py`**
 
@@ -250,8 +257,9 @@ class PanelConfig(_Strict):
     def _placement(self) -> PanelConfig:
         if self.pos is not None and (self.align is not None or self.offset is not None):
             raise ValueError(
-                "pos cannot be combined with align or offset; pos is the old form of "
-                'align = "start" (measured from the screen edge): use align and offset'
+                "pos cannot be combined with align or offset (pos is deprecated): "
+                'pos = N is align = "start", offset = N - 38 at the default theme '
+                "(38 = thickness + radius + join radius; 32-38 depending on depth)"
             )
         if self.offset is not None and self.offset < 0 and (self.align or "center") != "center":
             raise ValueError('a negative offset only works with align = "center"')
@@ -330,7 +338,8 @@ git commit -m "feat(config): align, offset, order, length modes and layout gap" 
 - Modify: `shell/panel_spec.py` (whole file)
 - Modify: `shell/registry.py:8` (import), add after `widget_class` (line 30) and before `validate_widgets`
 - Modify: `shell/config/diff.py:10-14`, `shell/config/diff.py:42-44`
-- Test: `tests/test_registry.py`, `tests/test_config_diff.py`
+- Modify: `shell/app.py` (import, `__init__`, `_reload`, new `_log_deprecated`)
+- Test: `tests/test_registry.py`, `tests/test_config_diff.py`, `tests/test_app_sync.py`
 
 **Interfaces:**
 - Consumes: Task 1 (`Align`, `PanelConfig` keys, `Config.layout_for`).
@@ -341,6 +350,8 @@ git commit -m "feat(config): align, offset, order, length modes and layout gap" 
   - `PanelGeometry` unchanged in this task (`pos: int | None`; Task 5 makes it `int`)
   - `shell.registry.request_for(cfg: PanelConfig) -> PanelRequest`, `shell.registry.requests_for(config: Config, monitor: str) -> list[PanelRequest]`; placement rule of decision 2; `order` None -> 0; `length` None -> the widget's default px; `fallback_length` = the widget's default px
   - `shell.config.diff.Kind` gains `"relayout"`; `diff_configs` emits `Change("relayout", name)` when `old.layout_for(name) != new.layout_for(name)` (after a `restyle`, before panel changes); panel changes compare `PanelRequest`s (state-only -> `panel-state`, anything else -> `panel-rebuild`)
+  - `shell.registry.deprecated_pos_paths(config: Config) -> list[str]` (pure; `"monitors.NAME.panels.N.pos"` for every entry that sets `pos`, `"center"` included, in config order)
+  - `EdgeShellApp._log_deprecated(config) -> None`: one INFO line on the `shell.app` logger starting `deprecated key pos` and listing the paths, nothing when there are none; called from `EdgeShellApp.__init__` (start) and from `_reload` after a successful load (decision 2)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -421,6 +432,48 @@ def test_requests_for_keeps_order_and_duplicates(fake_registry, make_config):
     )
     got = registry.requests_for(cfg, "HDMI-A-1")
     assert [(r.widget, r.order) for r in got] == [("dock", 0), ("clock", 0), ("dock", 1)]
+
+
+def test_deprecated_pos_paths_lists_every_entry_using_pos(make_config):
+    cfg = make_config(
+        monitors={
+            "A": {"panels": [{"widget": "dock"}, {"widget": "bar", "pos": 600}]},
+            "B": {"panels": [{"widget": "clock", "pos": "center"}]},
+        }
+    )
+    assert registry.deprecated_pos_paths(cfg) == [
+        "monitors.A.panels.1.pos",
+        "monitors.B.panels.0.pos",
+    ]
+    no_pos = make_config(monitors={"A": {"panels": [{"widget": "dock", "align": "end"}]}})
+    assert registry.deprecated_pos_paths(no_pos) == []
+```
+
+In `tests/test_app_sync.py` append (the `renv` fixture is defined above in that file):
+
+```python
+# ---- pos deprecation ------------------------------------------------------------------
+
+
+def test_deprecated_pos_is_logged_once_at_start(make_config, caplog):
+    caplog.set_level("INFO", logger="shell.app")
+    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}])})
+    app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
+    lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
+    assert len(lines) == 1 and "monitors.HDMI-A-1.panels.0.pos" in lines[0]
+
+
+def test_deprecated_pos_is_logged_once_per_reload(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}, {"widget": "dock"}])}
+    )
+    app.reload()
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    app.reload()  # no pos left: no line
+    lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
+    assert len(lines) == 1 and lines[0].endswith("monitors.HDMI-A-1.panels.0.pos")
 ```
 
 In `tests/test_config_diff.py` insert `import pytest` and a blank line after the first line (`# tests/test_config_diff.py`), and append:
@@ -460,8 +513,8 @@ def test_placement_and_length_changes_rebuild_that_panel(fake_registry, make_con
     assert diff_configs(old, new) == [Change("panel-rebuild", "HDMI-A-1", 0)]
 ```
 
-Run: `scripts/py -m pytest -q tests/test_registry.py tests/test_config_diff.py`
-Expected: FAIL (`ImportError: cannot import name 'PanelRequest'`).
+Run: `scripts/py -m pytest -q tests/test_registry.py tests/test_config_diff.py tests/test_app_sync.py`
+Expected: FAIL (`ImportError: cannot import name 'PanelRequest'`; the two deprecation tests in `tests/test_app_sync.py` find no `deprecated key pos` line).
 
 - [ ] **Step 2: Replace `shell/panel_spec.py`**
 
@@ -570,6 +623,17 @@ def requests_for(config: Config, monitor: str) -> list[PanelRequest]:
     return [request_for(p) for p in config.monitor(monitor).panels]
 
 
+def deprecated_pos_paths(config: Config) -> list[str]:
+    """Key paths of the panel entries that still use the deprecated `pos` (decision 2:
+    EdgeShellApp logs them once per config load; never notified)."""
+    return [
+        f"monitors.{name}.panels.{i}.pos"
+        for name, mon in config.monitors.items()
+        for i, panel in enumerate(mon.panels)
+        if panel.pos is not None
+    ]
+
+
 ```
 
 - [ ] **Step 4: Diff on requests in `shell/config/diff.py`**
@@ -599,16 +663,37 @@ Kind = Literal[
 
 (`_diff_panels` is unchanged: `replace(old[i], state=new[i].state) == new[i]` works on `PanelRequest` too. `EdgeShellApp._reload` already groups every change kind per monitor and calls `MonitorShell.apply`, which re-runs the layout; nothing else handles `relayout`.)
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 5: Log the `pos` deprecation in `shell/app.py`**
+
+1. After `from shell.monitors import MonitorShell, monitors_by_name` add `from shell.registry import deprecated_pos_paths`.
+2. At the end of `EdgeShellApp.__init__` (after `self._layout_reported = {}`) add `self._log_deprecated(store.config)`.
+3. In `_reload`, right after `old, new = result` add `self._log_deprecated(new)`.
+4. Before `def _report_layout` add:
+
+```python
+    def _log_deprecated(self, config) -> None:
+        """One INFO line per config load listing the entries that still use `pos` (decision 2:
+        a notification would repeat on every start)."""
+        paths = deprecated_pos_paths(config)
+        if paths:
+            log.info(
+                'deprecated key pos (use align = "start" and offset = pos - 38 at the default '
+                "theme): %s",
+                ", ".join(paths),
+            )
+
+```
+
+- [ ] **Step 6: Run the tests**
 
 Run: `scripts/py -m pytest -q tests/test_registry.py tests/test_config_diff.py tests/test_app_sync.py`
 Expected: all pass.
 
-- [ ] **Step 6: VERIFY and commit**
+- [ ] **Step 7: VERIFY and commit**
 
 ```bash
 scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q
-git add shell/panel_spec.py shell/registry.py shell/config/diff.py tests/test_registry.py tests/test_config_diff.py
+git add shell/panel_spec.py shell/registry.py shell/config/diff.py shell/app.py tests/test_registry.py tests/test_config_diff.py tests/test_app_sync.py
 git commit -m "feat(layout): panel requests from config; diff on requests with a relayout kind" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
@@ -768,6 +853,19 @@ def test_the_center_group_is_pushed_clear_of_the_start_group():
     assert got == [(38, 1000), (38 + 1000 + 36, 168)] and warnings == []
 
 
+def test_a_centre_offset_counts_from_where_the_neighbours_pushed_the_group():
+    got, warnings = placed(
+        req(align="start", length=1000), req("clock", offset=50, length=168, depth=46)
+    )
+    assert got == [(38, 1000), (38 + 1000 + 36 + 50, 168)] and warnings == []
+
+
+def test_a_negative_offset_on_a_later_centre_panel_counts_as_zero():
+    a = req("a", "top", length=168, depth=46)
+    b = req("b", "top", offset=-50, length=168, depth=46)
+    assert placed(a, b) == ([(774, 168), (978, 168)], [])  # as without the offset
+
+
 # ---- pos (deprecated alias) -------------------------------------------------------------
 
 
@@ -829,6 +927,25 @@ def test_deep_panels_on_neighbouring_edges_must_not_cross():
     assert placed(top, far)[1] == []
 
 
+def test_corner_neighbours_on_adjacent_edges_collide():
+    clock = req("clock", "bottom", "end", length=168, depth=46)
+
+    def bar(offset):
+        return req("bar", "right", "end", offset=offset, length=300, depth=56)
+
+    got, warnings = placed(clock, bar(0))
+    assert got[1] is None and warnings == [
+        "monitors.X.panels.1 (bar): overlaps monitors.X.panels.0 (clock) or leaves less than "
+        "the minimum gap between their joins; not shown"
+    ]
+    assert placed(clock, bar(45))[0][1] is None
+    assert placed(clock, bar(46))[1] == []  # offset >= the clock's depth + r - R (= 46)
+    top = req("a", "top", "start", length=168, depth=46)
+    left = req("b", "left", "start", length=168, depth=46)
+    assert placed(top, left)[0][1] is None
+    assert placed(top, req("b", "left", "start", offset=46, length=168, depth=46))[1] == []
+
+
 def test_warnings_come_in_config_order_whatever_the_edge():
     _, warnings = placed(req(pos=0), req("clock", "top", pos=0, length=168, depth=46))
     assert [w.split(" ")[0] for w in warnings] == ["monitors.X.panels.0", "monitors.X.panels.1"]
@@ -855,15 +972,19 @@ Per edge (`layout_edge`):
    sequence start -> center -> end are `r1 + r2 + gap` apart. The start slot packs from the
    start of the free span, the end slot from its end (its first panel nearest the end); each
    panel's `offset` is extra space before it, counted from the end (first panel) or from its
-   neighbour. The center slot is centred on the edge as one group, shifted by its first
-   panel's offset, and pushed clear of the start and end groups.
+   neighbour. The center slot is centred on the edge as one group and pushed clear of the
+   start and end groups; its first panel's offset then shifts the group from there (a
+   negative offset on a later center panel counts as 0).
 4. `pos` (deprecated alias): the panel is placed alone at `pos` px from the start of the
    edge, clamped into its free span (warning); it takes no part in the slots.
 
 Across the monitor (`layout_monitor`): panels are checked in config order; a panel whose body
 box (full depth, from the screen edge, grown by its `r`) overlaps an earlier panel's is not
 shown (warning). On one edge that is the minimum gap `r1 + r2`; it also catches deep panels on
-neighbouring edges, and `pos` panels dropped onto slotted ones. Touching is allowed.
+neighbouring edges (two panels meeting at a shared screen corner at offset 0 always collide:
+one needs an offset of at least the other's depth + r - R), and `pos` panels dropped onto
+slotted ones. Touching is allowed. A hidden panel keeps the slot space it was given: its
+neighbours do not close up.
 
 Every warning names the key path (`where`.panels.N (widget)).
 
@@ -994,30 +1115,33 @@ def layout_edge(
         if k + 1 < len(end):
             cursor = it.pos - space(it, end[k + 1])
     if center:
+        head, shift = center[0], center[0].req.offset
         inner = sum(space(a, b) for a, b in pairwise(center))
         total = math.ceil(
-            sum(it.length for it in center) + inner + sum(it.req.offset for it in center[1:])
+            sum(it.length for it in center)
+            + inner
+            + sum(max(0, it.req.offset) for it in center[1:])
         )
-        wanted = (extent - total) // 2 + center[0].req.offset
         left = (
-            math.ceil(start[-1].pos + start[-1].length + space(start[-1], center[0]))
+            math.ceil(start[-1].pos + start[-1].length + space(start[-1], head))
             if start
-            else center[0].lo
+            else head.lo
         )
         right = math.floor(end[-1].pos - space(center[-1], end[-1])) if end else center[-1].hi
-        first = max(left, min(wanted, right - total))
-        if center[0].req.offset and first != wanted:
+        base = max(left, min((extent - total) // 2, right - total))  # without the offset
+        first = max(left, min(base + shift, right - total))
+        if shift and first != base + shift:
             notes.append(
                 (
-                    center[0].index,
-                    f"{center[0].name}: offset {center[0].req.offset} would run into a screen "
-                    f"corner or a neighbour; moved to {first}",
+                    head.index,
+                    f"{head.name}: offset {shift} would run into a screen corner or a "
+                    f"neighbour; moved to {first}",
                 )
             )
         cursor = first
         for k, it in enumerate(center):
             if k:
-                cursor = math.ceil(cursor + space(center[k - 1], it) + it.req.offset)
+                cursor = math.ceil(cursor + space(center[k - 1], it) + max(0, it.req.offset))
             it.pos = min(max(int(cursor), it.lo), it.hi - it.length)
             cursor = it.pos + it.length
     for it in items:
@@ -1163,12 +1287,12 @@ git commit -m "feat(layout): resolver core with align slots, order, gap, offset 
 ### Task 4: Length modes: percent, content, fill, min/max
 
 **Files:**
-- Modify: `shell/panel_layout.py` (docstring items 2 and 4, constants, `_wanted`, `_fit`, the fill block in `layout_edge`, the `pos` loop)
+- Modify: `shell/panel_layout.py` (docstring items 2 and 4, constants, `_wanted`, `_fit`, the fill block in `layout_edge`, the center-offset warning condition, the `pos` loop)
 - Test: `tests/test_layout_resolver.py`
 
 **Interfaces:**
 - Consumes: Task 3.
-- Produces: `CONTENT_PAD = 12`; `content_length(natural: int) -> int` (= `max(MIN_LENGTH, natural + 2 * CONTENT_PAD)`, used by `EdgePanel.natural_length` in Task 7); `layout_edge` / `layout_monitor` honour `"NN%"` (of the panel's own free span), `"content"` (`natural[index]`, else `fallback_length`), `"fill"` (decision 4), `min_length` / `max_length` and the 60 px floor for every mode; a `pos` panel with `"fill"` runs to the end of its free span. Signatures unchanged.
+- Produces: `CONTENT_PAD = 12`; `content_length(natural: int) -> int` (= `max(MIN_LENGTH, natural + 2 * CONTENT_PAD)`, used by `EdgePanel.natural_length` in Task 7); `layout_edge` / `layout_monitor` honour `"NN%"` (of the panel's own free span), `"content"` (`natural[index]`, else `fallback_length`), `"fill"` (decision 4; a fill that is the first center panel gives up `abs(offset)` px and moves that way, without a warning), `min_length` / `max_length` and the 60 px floor for every mode; a `pos` panel with `"fill"` runs to the end of its free span. Signatures unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1253,6 +1377,18 @@ def test_a_fill_without_room_gets_the_floor_and_the_later_neighbour_goes():
 
 def test_fill_with_a_pos_runs_to_the_end_of_the_free_span():
     assert placed(req("bar", "right", pos=600, length="fill", depth=56))[0] == [(600, 442)]
+
+
+@pytest.mark.parametrize(("offset", "expected"), [(100, (138, 1744)), (-100, (38, 1744))])
+def test_a_centred_fill_gives_up_its_offset_and_moves_that_way(offset, expected):
+    assert placed(req(length="fill", offset=offset)) == ([expected], [])
+
+
+def test_a_centred_fill_between_neighbours_leaves_its_offset_free_before_it():
+    a = req("a", "top", "start", length=168, depth=46)
+    f = req("f", "top", offset=40, length="fill", depth=46)
+    c = req("c", "top", "end", length=168, depth=46)
+    assert placed(a, f, c) == ([(38, 168), (282, 1396), (1714, 168)], [])
 
 
 def test_a_smaller_monitor_recentres_rescales_and_clamps():
@@ -1350,14 +1486,28 @@ with
     if fills:
         fixed = sum(it.length for it in seq if it.req.length != "fill")
         gaps = sum(space(a, b) for a, b in pairwise(seq))
-        offsets = sum(it.req.offset for it in start + end + center[1:])
+        offsets = sum(it.req.offset for it in start + end) + sum(
+            max(0, it.req.offset) for it in center[1:]
+        )
+        if center and center[0].req.length == "fill":  # it gives up its offset (see below)
+            offsets += abs(center[0].req.offset)
         room = math.floor(seq[-1].hi - seq[0].lo - fixed - gaps - offsets)
         share, extra = divmod(max(0, room), len(fills))
         for k, it in enumerate(fills):
             it.length = _fit(it, share + (extra if k == 0 else 0), notes)
 ```
 
-7. Replace the `pos` loop body
+(The center group's offset is not in the sum: it only shifts the group. A fill that is the first center panel is the exception: it leaves `abs(offset)` px free so the shift has room; decision 4.)
+
+7. In the center block of `layout_edge` replace `        if shift and first != base + shift:` with
+
+```python
+        if shift and first != base + shift and head.req.length != "fill":
+```
+
+(a fill took its offset as room: the clamp only decides which side the free space is on, so it is no warning).
+
+8. Replace the `pos` loop body
 
 ```python
         if it.req.pos is not None:
@@ -1755,6 +1905,7 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
 1. **Bottom edge, three panels:** the dock is centred (x 680..1240); a clock sits at each bottom corner (x 38..206 and 1714..1882). At both corners the screen-corner arc flows straight into the clock's join: no notch, no bump, no stray fill.
 2. **Top centre slot:** two clocks side by side as one centred group, the 120 px one on the left (order 0), the 168 px one on the right; between them exactly an 8 px straight piece of frame between the two curved joins.
 3. **Right edge:** the system bar ends 60 px above the end of the free span (y 682..982), its lower join clear of the bottom-right clock's join.
+   - **Shared screen corner (decision 3):** set panel 5's `offset = 0` and save: the bar disappears and a "Panels adjusted" notification says `monitors.HDMI-A-1.panels.5 (system_bar): overlaps monitors.HDMI-A-1.panels.2 (clock) or leaves less than the minimum gap between their joins; not shown`; nothing is drawn crossed in the bottom-right corner. Set `offset = 46` (the clock's depth) and save: the bar is back at y 696..996, its lower join just clear of the clock's. Set `offset = 60` again.
 4. **Behaviour unchanged:** click, hover peek and drag still work on a top clock, a bottom clock and the system bar; collapsed handles are visible.
 5. **Gap reload:** add `[monitors.HDMI-A-1.layout]` with `gap = 40` right after `shell = "edge"` and save: only the two top clocks move apart (32 px more); the bottom panels and the system bar do not flicker or rebuild. Remove it and save: back. Note whether the moving clocks' rebuild flicker is acceptable (decision 7).
 6. **Order:** change panel 3's `order = 1` to `order = 0` and save: equal order keeps config order, so the 168 px clock moves to the left of the 120 px one. Undo.
@@ -1770,27 +1921,28 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
 ### Task 7: "content" lengths measured after build; content clipped in short bodies
 
 **Files:**
-- Modify: `shell/edge_panel.py:25` (import), after `HANDLE_LENGTH` (line 28) (`clip_container`), `shell/edge_panel.py:84-89` (content container), before `raise_to_top` (`natural_length`)
-- Modify: `shell/monitors.py` (`__init__`, `_layout`, end of `_sync_panels`, new measurement methods, `apply`, `close`, module function `_measure_key`)
-- Modify: `shell/app.py:85-88` (`sync_monitors`)
+- Modify: `shell/edge_panel.py:25` (import), after `HANDLE_LENGTH` (line 28) (`_centre_view`, `clip_container`), `shell/edge_panel.py:84-89` (content container), before `raise_to_top` (`natural_length`)
+- Modify: `shell/monitors.py` (`__init__`, `_layout`, end of `_sync_panels`, `_new_panel`, new measurement methods, `apply`, `close`, module function `_measure_key`)
+- Modify: `shell/app.py` (`__init__`, `sync_monitors`, `_reload`, new `_relayout_failed`)
 - Test: `tests/test_monitor_shell.py`, `tests/test_edge_panel_drag.py`, `tests/test_app_sync.py`
 
 **Interfaces:**
 - Consumes: `content_length` (Task 4), `layout_monitor(..., natural=...)`.
 - Produces:
-  - `shell.edge_panel.clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow` (name `panel-clip`, both policies `EXTERNAL`, hexpand/vexpand, `scroll-event` swallowed)
+  - `shell.edge_panel.clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow` (name `panel-clip`, both policies `EXTERNAL`, hexpand/vexpand, both adjustments' `changed` connected to `_centre_view`, `scroll-event` swallowed); `shell.edge_panel._centre_view(adjustment) -> None` (sets the value to `(lower + upper - page_size) / 2`)
   - `EdgePanel.natural_length() -> int` (content natural size along the edge + 2 x `CONTENT_PAD`, floor 60); attribute `EdgePanel._inner` (the widget from `build_content()`)
-  - `MonitorShell(name, monitor, config, register_window, unregister_window=None, on_layout=None)`; `on_layout(shell)` is called after a re-layout the shell starts itself
-  - `MonitorShell` attributes `_config`, `_theme`, `_requests: list[PanelRequest]`, `_natural: dict[int, tuple[tuple[str, bool], int]]`, `_measure_id: int`; methods `_measured() -> dict[int, int]`, `_schedule_measure()`, `_measure() -> bool`; module function `_measure_key(req: PanelRequest) -> tuple[str, bool]`
-  - `EdgeShellApp.sync_monitors` passes `on_layout=lambda shell, n=name: self._report_layout(n, shell)`
+  - `MonitorShell(name, monitor, config, register_window, unregister_window=None, on_layout=None, on_error=None)`; `on_layout(shell)` is called after a re-layout the shell starts itself; `on_error(shell)` after such a re-layout raised (the exception is logged with its traceback and never reaches the main loop; decision 11)
+  - `MonitorShell` attributes `_config`, `_theme`, `_requests: list[PanelRequest]`, `_natural: dict[int, tuple[tuple[str, bool], int]]`, `_remeasure: set[int]` (indices built since the last measurement, or all after a restyle), `_measure_id: int`; methods `_measured() -> dict[int, int]`, `_to_measure() -> list[int]`, `_schedule_measure()`, `_measure() -> bool`; module function `_measure_key(req: PanelRequest) -> tuple[str, bool]`
+  - `EdgeShellApp.sync_monitors` passes `on_layout=lambda shell, n=name: self._report_layout(n, shell)` and `on_error=lambda shell, n=name: self._relayout_failed(n, shell)`; `EdgeShellApp._relayout_failed(name: str, shell) -> None`; `EdgeShellApp._relayout_rebuilt: set[str]` (monitors rebuilt after a failed re-layout since the last successful reload)
 
 - [ ] **Step 1: Write the failing tests**
 
 1. `tests/test_monitor_shell.py`:
-   - In `FakeWindow.__init__` add `self.natural = 200` after `self.states = []`, and add the method:
+   - In `FakeWindow.__init__` add `self.natural = 200` and `self.measured = 0` after `self.states = []`, and add the method:
 
      ```python
          def natural_length(self):
+             self.measured += 1
              return self.natural
      ```
 
@@ -1805,11 +1957,11 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
          monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda fn: idles.append(fn) or 100 + len(idles))
          monkeypatch.setattr(mon_mod.GLib, "source_remove", removed.append)
 
-         def _build(monitors, theme=None, on_layout=None):
+         def _build(monitors, theme=None, on_layout=None, on_error=None):
              tracked = []
              cfg = make_config(monitors=monitors, theme=theme)
              shell = mon_mod.MonitorShell(
-                 "HDMI-A-1", MONITOR, cfg, tracked.append, on_layout=on_layout
+                 "HDMI-A-1", MONITOR, cfg, tracked.append, on_layout=on_layout, on_error=on_error
              )
              shell.test_idles, shell.test_removed = idles, removed
              return shell, tracked, timers
@@ -1859,6 +2011,58 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
          shell.close()
          assert 101 in shell.test_removed  # the pending idle was cancelled
          assert pending() is False
+
+
+     def test_only_panels_built_since_the_last_measurement_are_measured(build, make_config):
+         dock = {"widget": "dock", "length": "content"}
+         clock = {"widget": "clock", "length": "content"}
+         shell, _, _ = build(edge(dock, clock))
+         shell.test_idles[0]()  # both measured at 200 px: both rebuilt
+         shell.test_idles[1]()  # the rebuilt pair is measured once: nothing changes
+         kept = shell.panels[0]
+         seen = kept.measured
+         shell.apply(
+             make_config(monitors=edge(dock, {**clock, "min_length": 250})),
+             [Change("panel-rebuild", "HDMI-A-1", 1)],
+         )
+         assert shell.panels[0] is kept and len(shell.test_idles) == 3
+         assert shell.test_idles[2]() is False
+         assert kept.measured == seen  # not rebuilt: not measured again
+         assert shell.panels[1].measured == 1 and shell.panels[1].args[0].length == 250
+
+
+     def test_a_restyle_measures_every_content_panel_again(build, make_config):
+         panels = ({"widget": "dock", "length": "content"}, {"widget": "clock"})
+         shell, _, _ = build(edge(*panels))
+         shell.test_idles[0]()  # measured: rebuilt at 200 px
+         shell.test_idles[1]()  # settled
+         kept = shell.panels[0]
+         kept.natural = 260  # the new theme's font is larger
+         shell.apply(
+             make_config(theme={"accent": "#112233"}, monitors=edge(*panels)),
+             [Change("restyle", "HDMI-A-1")],
+         )
+         assert shell.panels[0] is kept and len(shell.test_idles) == 3
+         shell.test_idles[2]()
+         assert kept.destroyed and shell.panels[0].args[0].length == 260
+
+
+     def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog):
+         errors, reports = [], []
+         shell, _, _ = build(
+             edge({"widget": "dock", "length": "content"}),
+             on_layout=reports.append,
+             on_error=errors.append,
+         )
+         shell.panels[0].natural = 300
+
+         def explode(*a, **k):
+             raise RuntimeError("widget broke")
+
+         monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+         assert shell.test_idles[0]() is False  # never raises into the main loop
+         assert errors == [shell] and reports == []
+         assert "widget broke" in caplog.text
      ```
 
 2. `tests/test_edge_panel_drag.py`, append:
@@ -1889,19 +2093,39 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
        assert tuple(clip.get_preferred_height()) == (0, 0)
        assert clip.get_policy() == (Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
        assert clip.get_child().get_child() is content  # inside the auto-added viewport
+       h = clip.get_hadjustment()
+       h.configure(0, 0, 800, 1, 10, 300)  # what the viewport sets for a 300 px long body
+       assert h.get_value() == 250  # centred: 250 px cut off at each end
+       h.set_page_size(500)  # the body got longer
+       assert h.get_value() == 150
+
+
+   def test_clipped_content_is_centred_in_the_body():
+       values = []
+       adjustment = SimpleNamespace(
+           get_lower=lambda: 0.0,
+           get_upper=lambda: 800.0,
+           get_page_size=lambda: 300.0,
+           set_value=values.append,
+       )
+       ep._centre_view(adjustment)
+       assert values == [250.0]
    ```
 
 3. `tests/test_app_sync.py`: `FakeShell.__init__` becomes
 
    ```python
-       def __init__(self, name, monitor, config, register, unregister=None, on_layout=None):
+       def __init__(
+           self, name, monitor, config, register, unregister=None, on_layout=None, on_error=None
+       ):
            self.name = name
            self.monitor = monitor
            self.on_layout = on_layout
+           self.on_error = on_error
            FakeShell.opened.append(name)
    ```
 
-   and in `test_shell_receives_unregister_callback` the inner `Capturing.__init__` signature becomes `def __init__(self, name, monitor, config, register, unregister=None, on_layout=None):`. Append:
+   and in `test_shell_receives_unregister_callback` the inner `Capturing.__init__` signature becomes `def __init__(self, name, monitor, config, register, unregister=None, **callbacks):`. Append:
 
    ```python
    def test_a_relayout_started_by_the_shell_reports_through_the_app(env, monkeypatch):
@@ -1914,10 +2138,26 @@ Edit `/tmp/edge-layout.toml` while it runs; each save applies within about a sec
        shell.layout_warnings = ["monitors.HDMI-A-1.panels.0 (dock): shrunk"]
        shell.on_layout(shell)  # what MonitorShell calls after measuring or a geometry change
        assert notes == ["monitors.HDMI-A-1.panels.0 (dock): shrunk"]
+
+
+   def test_a_failed_relayout_rebuilds_the_shell_once(env, monkeypatch):
+       app, mapping = env
+       notes = []
+       monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(title))
+       mapping["HDMI-A-1"] = object()
+       app.sync_monitors()
+       shell = app.shells["HDMI-A-1"]
+       shell.on_error(shell)  # what MonitorShell calls when _measure or _relayout raised
+       rebuilt = app.shells["HDMI-A-1"]
+       assert rebuilt is not shell and notes == ["Panels rebuilt"]
+       assert FakeShell.closed == ["HDMI-A-1"] and FakeShell.opened == ["HDMI-A-1", "HDMI-A-1"]
+       rebuilt.on_error(rebuilt)  # fails again before the next reload: logged, shell kept
+       shell.on_error(shell)  # a late call from the closed shell: ignored
+       assert app.shells["HDMI-A-1"] is rebuilt and FakeShell.closed == ["HDMI-A-1"]
    ```
 
 Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_app_sync.py`
-Expected: FAIL (`MonitorShell` has no `on_layout`; `EdgePanel` has no `natural_length`; no `clip_container`).
+Expected: FAIL (`MonitorShell` has no `on_layout` / `on_error`; `EdgePanel` has no `natural_length`; no `clip_container` / `_centre_view`; `EdgeShellApp` has no `_relayout_failed`).
 
 - [ ] **Step 2: `shell/edge_panel.py`**
 
@@ -1927,10 +2167,19 @@ Expected: FAIL (`MonitorShell` has no `on_layout`; `EdgePanel` has no `natural_l
 ```python
 
 
+def _centre_view(adjustment) -> None:
+    """Keep clipped content centred: equal parts cut off at both ends of the body."""
+    adjustment.set_value(
+        (adjustment.get_lower() + adjustment.get_upper() - adjustment.get_page_size()) / 2
+    )
+
+
 def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
-    """Show `child` at its natural size but never ask for more room than the body has: a body
-    shrunk below its content (spec 17: shrink to fit) clips the content instead of growing the
-    layer surface. No scrollbars, and wheel events never scroll the clipped content."""
+    """Show `child` at its natural size, centred, and clip it at the body edge. The layer
+    surface cannot grow either way (Gtk.Overlay never measures its overlay children); without
+    this, content longer than a shrunk body (spec 17: shrink to fit, max_length, a small
+    percentage) would draw over the joins and the frame. No scrollbars, and wheel events never
+    scroll the clipped content."""
     clip = Gtk.ScrolledWindow(
         name="panel-clip",
         hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
@@ -1939,6 +2188,8 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
     clip.set_hexpand(True)
     clip.set_vexpand(True)
     clip.add(child)
+    for adjustment in (clip.get_hadjustment(), clip.get_vadjustment()):
+        adjustment.connect("changed", _centre_view)  # the viewport re-configures on allocate
     clip.connect("scroll-event", lambda *_args: True)  # stop before the class handler scrolls
     return clip
 ```
@@ -1968,21 +2219,24 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
 
 - [ ] **Step 3: `shell/monitors.py`**
 
-1. Imports: add `from shell import geometry` as the first `shell` import (before `from shell.canvas.canvas import ShapeCanvas`), and `from shell.panel_spec import PanelGeometry, PanelRequest`.
-2. `__init__`: add the parameter `on_layout=None` after `unregister_window=None`, the docstring and the callback, and the new state after `self._keys = …`:
+1. Imports: add `from shell import geometry` as the first `shell` import (before `from shell.canvas.canvas import ShapeCanvas`), and replace the existing `from shell.panel_spec import PanelGeometry` with `from shell.panel_spec import PanelGeometry, PanelRequest`.
+2. `__init__`: add the parameters `on_layout=None, on_error=None` after `unregister_window=None`, the docstring and the callbacks, and the new state after `self._keys = …`:
 
 ```python
         register_window,
         unregister_window=None,
         on_layout=None,
+        on_error=None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
-        measured, monitor geometry changed), so the app can report new layout warnings."""
+        measured, monitor geometry changed), so the app can report new layout warnings;
+        `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us)."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
         self._unregister = unregister_window or (lambda _window: None)
         self._on_layout = on_layout or (lambda _shell: None)
+        self._on_error = on_error or (lambda _shell: None)
 ```
 
 ```python
@@ -1993,6 +2247,7 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
         # Measured "content" lengths: index -> ((widget, horizontal), px). Kept across
         # re-layouts; an entry only counts while the same widget sits at that index.
         self._natural: dict[int, tuple[tuple[str, bool], int]] = {}
+        self._remeasure: set[int] = set()  # built since the last measurement (or restyled)
         self._measure_id = 0  # pending idle measurement
 ```
 
@@ -2027,38 +2282,53 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
 
 ```python
     # ---- "content" lengths ----------------------------------------------------------------
+    def _to_measure(self) -> list[int]:
+        """Live "content" panels built since the last measurement (or restyled), or without a
+        measurement for the widget now at their index."""
+        known = self._measured()
+        return [
+            i
+            for i, (panel, req) in enumerate(zip(self.panels, self._requests, strict=True))
+            if panel is not None
+            and req.length == "content"
+            and (i in self._remeasure or i not in known)
+        ]
+
     def _schedule_measure(self) -> None:
-        """Measure the live "content" panels when the main loop is next idle: by then the app's
+        """Measure "content" panels when the main loop is next idle: by then the app's
         stylesheet is applied (EdgeShellApp.run sets it after building the shells), so fonts
-        have their real size. Every (re)build is measured; an unchanged size changes nothing."""
+        have their real size. Only new, restyled or unmeasured panels are measured; an
+        unchanged size changes nothing."""
         if self._measure_id or self._closed:
             return
-        if any(
-            panel is not None and req.length == "content"
-            for panel, req in zip(self.panels, self._requests, strict=True)
-        ):
+        if self._to_measure():
             self._measure_id = GLib.idle_add(self._measure)
 
     def _measure(self) -> bool:
         self._measure_id = 0
         if self._closed:
             return False
-        changed = False
-        for i, (panel, req) in enumerate(zip(self.panels, self._requests, strict=True)):
-            if panel is None or req.length != "content":
-                continue
-            entry = (_measure_key(req), panel.natural_length())
-            if self._natural.get(i) != entry:
-                self._natural[i] = entry
-                changed = True
-        if changed:
-            self._sync_panels(self._config, self._theme, startup=False)
-            self._on_layout(self)
+        try:
+            todo = self._to_measure()
+            self._remeasure.clear()
+            changed = False
+            for i in todo:
+                entry = (_measure_key(self._requests[i]), self.panels[i].natural_length())
+                if self._natural.get(i) != entry:
+                    self._natural[i] = entry
+                    changed = True
+            if changed:
+                self._sync_panels(self._config, self._theme, startup=False)
+                self._on_layout(self)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("measuring the content panels of %s failed", self.name)
+            self._on_error(self)
         return False
 ```
 
-5. `apply`: right after `theme = config.theme_for(self.name)` add `self._config, self._theme = config, theme`.
-6. `close`: after `self._closed = True` add
+5. `_new_panel`: as its first line (before `key = next(self._keys)`) add `self._remeasure.add(index)  # measured when idle if it is a "content" panel`.
+6. `apply`: right after `theme = config.theme_for(self.name)` add `self._config, self._theme = config, theme`, and inside the `if any(change.kind == "restyle" …)` block, after the `for panel in self.live_panels(): panel.apply_theme(theme)` loop, add `self._remeasure.update(range(len(self.panels)))  # fonts may have changed`.
+7. `close`: after `self._closed = True` add
 
 ```python
         if self._measure_id:
@@ -2066,7 +2336,7 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
             self._measure_id = 0
 ```
 
-7. At the end of the module add:
+8. At the end of the module add:
 
 ```python
 
@@ -2076,7 +2346,9 @@ def _measure_key(req: PanelRequest) -> tuple[str, bool]:
     return req.widget, geometry.is_horizontal(req.edge)
 ```
 
-- [ ] **Step 4: `shell/app.py`** — in `sync_monitors` the shell is created as
+- [ ] **Step 4: `shell/app.py`**
+
+1. In `sync_monitors` the shell is created as
 
 ```python
             self.shells[name] = MonitorShell(
@@ -2086,8 +2358,38 @@ def _measure_key(req: PanelRequest) -> tuple[str, bool]:
                 self.register_window,
                 self.unregister_window,
                 on_layout=lambda shell, n=name: self._report_layout(n, shell),
+                on_error=lambda shell, n=name: self._relayout_failed(n, shell),
             )
 ```
+
+2. In `__init__`, after `self._layout_reported: dict[str, list[str]] = {}  # …`, add `self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload`.
+3. In `_reload`, right after `old, new = result` (and the Task 2 `self._log_deprecated(new)`), add `self._relayout_rebuilt.clear()  # a new config may fix the failing widget`.
+4. Before `def _report_layout` add:
+
+```python
+    def _relayout_failed(self, name: str, shell) -> None:
+        """A re-layout the shell started by itself raised (MonitorShell._measure / _relayout
+        logged it): close that shell and rebuild it from the current config, as a failed
+        reload does. Only once per monitor until the next reload, so a widget that always
+        fails cannot rebuild forever; a stale call from a closed shell is ignored."""
+        if self.shells.get(name) is not shell:
+            return
+        if name in self._relayout_rebuilt:
+            log.error("re-layout of %s failed again; keeping its panels as they are", name)
+            return
+        self._relayout_rebuilt.add(name)
+        log.error("re-layout of %s failed; rebuilding its panels", name)
+        self._notify("Panels rebuilt", f"{name}: laying out the panels failed; rebuilt them")
+        self.shells.pop(name)
+        try:
+            shell.close()
+        except Exception:
+            log.exception("closing the failed shell on %s failed", name)
+        self.sync_monitors()  # reopens it from self.config (and refreshes the CSS)
+
+```
+
+(`_relayout_failed` runs inside the shell's own GLib callback, after that callback caught the exception; the shell does nothing after `on_error` returns, so closing it there is safe.)
 
 - [ ] **Step 5: Run the tests**
 
@@ -2099,7 +2401,7 @@ Expected: all pass (`test_clip_container_never_asks_for_the_content_size` skips 
 ```bash
 scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q
 git add shell/edge_panel.py shell/monitors.py shell/app.py tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_app_sync.py
-git commit -m "feat(layout): measure content lengths after build; clip content in short bodies" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git commit -m "feat(layout): measure content lengths after build; clip and centre content in short bodies" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2112,8 +2414,8 @@ git commit -m "feat(layout): measure content lengths after build; clip content i
 - Test: `tests/test_monitor_shell.py`, `tests/test_canvas_window.py`
 
 **Interfaces:**
-- Consumes: Task 7 (`_config`, `_theme`, `_on_layout`).
-- Produces: `shell.monitors.RELAYOUT_DELAY_MS = 250`; `MonitorShell._relayout_id: int`, `MonitorShell._monitor_handlers: list[int]`; `MonitorShell._on_geometry(*args) -> None` (debounced) and `MonitorShell._relayout() -> bool` (re-layout from the monitor's current geometry, `canvas.set_monitor_size`, `_on_layout(self)`); `ShapeCanvas.set_monitor_size(width: int, height: int) -> None`.
+- Consumes: Task 7 (`_config`, `_theme`, `_on_layout`, `_on_error`).
+- Produces: `shell.monitors.RELAYOUT_DELAY_MS = 250`; `MonitorShell._relayout_id: int`, `MonitorShell._monitor_handlers: list[int]`; `MonitorShell._on_geometry(*args) -> None` (debounced) and `MonitorShell._relayout() -> bool` (re-layout from the monitor's current geometry, `canvas.set_monitor_size`, `_on_layout(self)`; a zero or negative width or height is ignored; any exception is logged and passed to `_on_error(self)`, decision 11); `ShapeCanvas.set_monitor_size(width: int, height: int) -> None`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2160,11 +2462,16 @@ git commit -m "feat(layout): measure content lengths after build; clip content i
    - In the `build` fixture, `_build` gets a `monitor` parameter:
 
      ```python
-         def _build(monitors, theme=None, monitor=None, on_layout=None):
+         def _build(monitors, theme=None, monitor=None, on_layout=None, on_error=None):
              tracked = []
              cfg = make_config(monitors=monitors, theme=theme)
              shell = mon_mod.MonitorShell(
-                 "HDMI-A-1", monitor or FakeMonitor(), cfg, tracked.append, on_layout=on_layout
+                 "HDMI-A-1",
+                 monitor or FakeMonitor(),
+                 cfg,
+                 tracked.append,
+                 on_layout=on_layout,
+                 on_error=on_error,
              )
              shell.test_idles, shell.test_removed = idles, removed
              return shell, tracked, timers
@@ -2199,6 +2506,41 @@ git commit -m "feat(layout): measure content lengths after build; clip content i
          shell, _, _ = build(edge({"widget": "dock"}), monitor=monitor)
          shell.close()
          assert monitor.handlers == {}
+
+
+     def test_a_zero_geometry_is_ignored(build):
+         reports = []
+         monitor = FakeMonitor()
+         shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+         dock = shell.panels[0]
+         ((_, handler),) = monitor.handlers.values()
+         monitor.width = monitor.height = 0  # what an unplugged monitor reports
+         handler(monitor, None)
+         assert timers[-1][0] == mon_mod.RELAYOUT_DELAY_MS and timers[-1][1]() is False
+         assert shell.panels[0] is dock and not dock.destroyed  # no 0 px layout, no warnings
+         assert shell.layout_warnings == [] and reports == [] and shell.canvas.monitor_sizes == []
+
+
+     def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
+         errors, reports = [], []
+         monitor = FakeMonitor()
+         shell, _, timers = build(
+             edge({"widget": "dock"}),
+             monitor=monitor,
+             on_layout=reports.append,
+             on_error=errors.append,
+         )
+         ((_, handler),) = monitor.handlers.values()
+
+         def explode(*a, **k):
+             raise RuntimeError("widget broke")
+
+         monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+         monitor.width, monitor.height = 1280, 720
+         handler(monitor, None)
+         assert timers[-1][1]() is False  # never raises into the main loop
+         assert errors == [shell] and reports == []
+         assert "widget broke" in caplog.text
      ```
 
 2. `tests/test_canvas_window.py`, append:
@@ -2251,10 +2593,16 @@ RELAYOUT_DELAY_MS = 250
         self._relayout_id = 0
         if self._closed:
             return False
-        g = self.monitor.get_geometry()
-        self.canvas.set_monitor_size(g.width, g.height)
-        self._sync_panels(self._config, self._theme, startup=False)
-        self._on_layout(self)
+        try:
+            g = self.monitor.get_geometry()
+            if g.width <= 0 or g.height <= 0:  # being unplugged: the hot-plug sync closes us
+                return False
+            self.canvas.set_monitor_size(g.width, g.height)
+            self._sync_panels(self._config, self._theme, startup=False)
+            self._on_layout(self)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("re-laying out %s after a geometry change failed", self.name)
+            self._on_error(self)
         return False
 ```
 
@@ -2309,7 +2657,7 @@ git commit -m "feat(layout): re-layout panels when the monitor geometry changes"
 
 **Interfaces:**
 - Consumes: `layout_monitor`, `requests_for`, `Config.layout_for`.
-- Produces: `shell.canvas.simulate.config_shapes(config: Config, monitor: str, width: int, height: int) -> tuple[list[PanelShape], list[str]]` (shown panels only, plus warnings); CLI `python -m shell.canvas.simulate --config PATH [--monitor NAME]` lays out that monitor's panels with its theme (`--elevation` / `--border` still override), prints each layout warning as `layout: …`, exits 2 on a bad config.
+- Produces: `shell.canvas.simulate.config_shapes(config: Config, monitor: str, width: int, height: int) -> tuple[list[PanelShape], list[str]]` (shown panels only, plus warnings); CLI `python -m shell.canvas.simulate --config PATH [--monitor NAME]` lays out that monitor's panels with its theme (`--elevation` / `--border` still override), prints each layout warning as `layout: …`, exits 2 on a bad config or an unknown widget (`validate_widgets` runs inside the same `try` as `load_config`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2358,6 +2706,19 @@ def test_cli_reports_a_bad_config(tmp_path):
     with pytest.raises(SystemExit) as exc:
         main(["--config", str(path), "--frames", "1"])
     assert exc.value.code == 2
+
+
+def test_cli_reports_an_unknown_widget(tmp_path, capsys):
+    pytest.importorskip("gi")
+    pytest.importorskip("fabric")
+    path = tmp_path / "unknown.toml"
+    path.write_text(
+        '[monitors.HDMI-A-1]\nshell = "edge"\n[[monitors.HDMI-A-1.panels]]\nwidget = "nope"\n'
+    )
+    with pytest.raises(SystemExit) as exc:  # a usage error, not a traceback
+        main(["--config", str(path), "--frames", "1"])
+    assert exc.value.code == 2
+    assert "unknown widget 'nope'" in capsys.readouterr().err
 ```
 
 Append to `tests/test_canvas_scene.py`:
@@ -2397,7 +2758,7 @@ Expected: FAIL (`ImportError: cannot import name 'config_shapes'`; the CLI rejec
 ```python
 from shell.config.models import Config, Theme
 from shell.panel_layout import layout_monitor
-from shell.registry import requests_for
+from shell.registry import requests_for, validate_widgets
 ```
 
 2. After `default_shapes` add:
@@ -2445,6 +2806,7 @@ replace `theme = load_config(None).theme` with
 
         try:
             config = load_config(args.config, required=True)
+            validate_widgets(config)  # an unknown widget is a usage error (exit 2), as in main.py
         except ConfigError as exc:
             p.error(str(exc))
         theme = config.theme_for(args.monitor)
@@ -2534,18 +2896,19 @@ scripts/py main.py --config /tmp/edge-sizes.toml -v
 ```
 
 1. **content:** the two bottom clocks hug their text (about 12 px of body either side of HH:MM) at the two bottom corners; the system bar on the right hugs its two labels vertically and is centred on the edge.
-2. **Startup rebuild (decision 5):** just after start the content panels may appear at their default length for a moment and then shrink once. Is that flash acceptable? (If not, decision 5's cost applies.)
+2. **Startup rebuild (decision 5, default pending Phil):** just after start the content panels may appear at their default length for a moment and then shrink once. Record whether that flash is visible. Only a visible flash plans the in-place resize (decision 5's cost: 1-2 tasks).
 3. **fill:** the dock body spans everything between the two clocks with exactly 8 px of straight frame either side between the joins; the three dock buttons stay centred in the long body.
 4. **percent + max:** the top clock body is 700 px (50 % = 922 px, capped by `max_length = 700`), centred (x 610..1310).
 5. **Live reload:** set the top clock `length = "25%"` -> 461 px, centred; `length = "fill"` -> spans the whole top free span (x 38..1882); back to `"50%"`. Only the top clock rebuilds each time.
-6. **Clipping:** set the dock `length = 100` (replacing `"fill"`) -> the dock body is 100 px, centred between the clocks; its buttons are cut off at the body edge, there is no scrollbar, the mouse wheel over it does nothing, and the panel does not grow or move. Back to `"fill"`.
-7. **min/max on fill:** add `max_length = 900` to the dock -> 900 px centred between the clocks. Remove it.
-8. **Hot-plug** (terminal on DP-1; never touch DP-1 itself): `kscreen-doctor output.HDMI-A-1.disable`, then `kscreen-doctor output.HDMI-A-1.enable`: within about 3 s everything returns, the content panels measured again (same sizes as item 1).
-9. **Resolution change (optional, see open question 1):** `kscreen-doctor -o` lists the modes of HDMI-A-1; switch to a smaller one, e.g. `kscreen-doctor output.HDMI-A-1.mode.1280x720@60`. Within about a second the panels re-lay out: the top clock re-centres at 602 px (50 % of 1204), the dock fill shrinks, the system bar re-centres, nothing runs into a corner. Switch back with `kscreen-doctor output.HDMI-A-1.mode.1920x1080@60`: the original layout returns. If KScreen moves DP-1 while doing this, put it back from System Settings > Display.
-10. **Measurement:** quit, then `scripts/py main.py --config /tmp/edge-sizes.toml --stats 10`: `fps while animating` >= 55, `canvas damaged draws` p95 <= 8 ms (Plan 1 targets).
-11. The `-v` logs have no errors.
+6. **Clipping (decision 8):** set the dock `length = 100` (replacing `"fill"`) -> the dock body is 100 px, centred between the clocks; its row of buttons is cut off equally at both body ends (the middle "Files" button stays whole in the centre), nothing is drawn over the joins or the frame, there is no scrollbar, and the mouse wheel over it does nothing. Keep `length = 100` for item 7.
+7. **Interaction through the clip container:** on the clipped 100 px dock and on the unclipped bottom-left clock, exactly as Gate A item 4 checks them: click the dock's middle button -> Dolphin opens (close it); hover the dock's middle button -> its "Files" tooltip appears; collapse each panel and hover it -> the peek shows; drag each panel -> the body follows and settles; collapse and expand each panel -> the content fades out and back in, with no flicker of the clipped dock content. Then set the dock back to `"fill"`.
+8. **min/max on fill:** add `max_length = 900` to the dock -> 900 px centred between the clocks. Remove it.
+9. **Hot-plug** (terminal on DP-1; never touch DP-1 itself): `kscreen-doctor output.HDMI-A-1.disable`, then `kscreen-doctor output.HDMI-A-1.enable`: within about 3 s everything returns, the content panels measured again (same sizes as item 1); no "Panels adjusted" notification while HDMI-A-1 is off (decision 6).
+10. **Resolution change (required; only HDMI-A-1, never touch DP-1's settings):** change HDMI-A-1's resolution through **System Settings > Display**: pick HDMI-A-1, choose a smaller mode (1280x720 if listed, otherwise the smallest), Apply. During the ~15 s Keep/Revert window watch the panels re-lay out within about a second: the top clock re-centres (at 1280x720: 602 px, 50 % of 1204), the dock fill shrinks, the system bar re-centres, nothing runs into a corner. Then press **Revert** (or let it time out): the original 1920x1080 layout returns. If `kscreen-doctor` is used instead, first save the current state with `kscreen-doctor -o > /tmp/kscreen-before.txt`, pick a mode string listed there for HDMI-A-1 (e.g. `kscreen-doctor output.HDMI-A-1.mode.1280x720@60`), and switch back with the original mode string from that file. In both cases record from the `-v` log which path ran: an `opening Edge Shell on HDMI-A-1` line = the hot-plug path (the shell was rebuilt); no reopen = the `notify::geometry` path (Task 8).
+11. **Measurement:** quit, then `scripts/py main.py --config /tmp/edge-sizes.toml --stats 10`: `fps while animating` >= 55, `canvas damaged draws` p95 <= 8 ms (Plan 1 targets).
+12. The `-v` logs have no errors.
 
-**On failure:** item 1/2 wrong sizes -> log `natural_length()` values (add a temporary `log.debug` in `MonitorShell._measure`, not committed) and compare with the CSS font size; reproduce with a fake in `tests/test_monitor_shell.py` before fixing. Item 6: the panel grows or moves -> the clip container is not limiting the request: add a failing case to `test_clip_container_never_asks_for_the_content_size` (e.g. a `Gtk.Label`) before fixing. Item 9: nothing happens -> GDK did not emit `notify::geometry`; fallback: also call `MonitorShell._on_geometry` from `ShapeCanvas._on_allocate` when `painter.resize(...)` returns True (pass a callback from `MonitorShell` into `ShapeCanvas`), add a test on a stand-in, and repeat item 9. Item 10 misses targets -> record the report and compare with `examples/panels-test.toml` (fill bodies are longer, so damaged boxes are wider); discuss with Phil.
+**On failure:** item 1/2 wrong sizes -> log `natural_length()` values (add a temporary `log.debug` in `MonitorShell._measure`, not committed) and compare with the CSS font size; reproduce with a fake in `tests/test_monitor_shell.py` before fixing. Item 6: content drawn over the joins or not centred -> add a failing case to `test_clip_container_never_asks_for_the_content_size` (e.g. a `Gtk.Label`, or a page size the viewport really sets) before fixing. Item 7: clicks, hover, drags or tooltips no longer reach the content -> confirm the clip container is the cause with a local, uncommitted edit that builds the content without `clip_container`; then add a stand-in test for the event path (e.g. the swallowed `scroll-event` handler must not return True for button events) before fixing. Item 10: nothing happens and the log shows no reopen -> GDK did not emit `notify::geometry`; fallback: also call `MonitorShell._on_geometry` from `ShapeCanvas._on_allocate` when `painter.resize(...)` returns True (pass a callback from `MonitorShell` into `ShapeCanvas`), add a test on a stand-in, and repeat item 10. Item 11 misses targets -> record the report and compare with `examples/panels-test.toml` (fill bodies are longer, so damaged boxes are wider); discuss with Phil.
 
 ---
 
@@ -2592,10 +2955,23 @@ gap = 8                   # straight frame between neighbouring panels, on top o
 ```
 
 Each edge's free span stops `thickness + radius + join radius` (38 px by default) short of
-each screen corner. A panel that does not fit is shrunk (its content is clipped), one that
-would overlap an earlier panel is hidden; both send a "Panels adjusted" notification. `pos`
-(pixels from the start of the edge) still works but is deprecated and cannot be combined with
-`align` or `offset`. "content" panels are measured once after they are built.
+each screen corner. A panel that does not fit is shrunk (its content is clipped at the body
+edge, centred), one that would overlap an earlier panel is hidden and keeps its place in the
+slot (its neighbours do not close up); both send a "Panels adjusted" notification. A negative
+`offset` only works on the first centred panel of an edge (it shifts the group towards the
+start); on a later centred panel it counts as 0. Two panels that meet at a shared screen
+corner (an `align = "end"` bottom panel and an `align = "end"` right panel, or `"start"` on
+the top and the left edge) always collide at offset 0: give one of them an `offset` of at
+least the other panel's depth (exactly `depth + r - radius`, which is the depth for any panel
+at least 28 px deep). "content" panels are measured after they are built.
+
+`pos` (pixels from the start of the edge) still works but is deprecated: it cannot be combined
+with `align` or `offset`, and every start logs one line listing the entries that use it. A
+lone `pos = N` equals `align = "start"`, `offset = N - 38` at the default theme (38 =
+`thickness + radius + join radius`; 32-38 px depending on the panel's depth). The system
+bar's own default moved from `pos = 600` to `align = "end"`, `offset = 142`: the same place on
+a 1080 px tall monitor (y = 600), but 142 px from the end of the free span elsewhere (y = 960
+at 1440 px, y = 240 at 720 px, where `pos = 600` gave 600 and, clamped, 382).
 ````
 
 5. In **Known limitations / planned**, replace the bullet `- Several panels on one edge are not auto-arranged …` (both lines) with
@@ -2621,11 +2997,11 @@ and add the row `| Layout \`gap\` (\`[layout]\`, \`[monitors.X.layout]\`) | Re-l
 
 2. Section 16: after the **Today (core plan, as built)** paragraph add:
 
-`**Implemented (2026-10-13, plan \`docs/superpowers/plans/2026-10-13-layout-anchoring.md\`):** \`shell/panel_layout.py\` (\`layout_edge\`, \`layout_monitor\`) resolves every panel per edge from slots (start, center, end), \`order\` within a slot (ties keep config order) and one \`gap\` per monitor (\`[layout]\`, \`[monitors.X.layout]\`, default 8 px) measured between neighbouring joins, on top of \`r1 + r2\`. \`pos\` keeps its old meaning (pixels from the start of the edge) as a deprecated alias placed outside the slots; combining it with \`align\`/\`offset\` is a validation error. Overlaps hide the later panel (config order) with a notification. No \`panel-move\` change kind: moved panels are rebuilt; a \`gap\` change is a \`relayout\`.`
+`**Implemented (2026-10-13, plan \`docs/superpowers/plans/2026-10-13-layout-anchoring.md\`):** \`shell/panel_layout.py\` (\`layout_edge\`, \`layout_monitor\`) resolves every panel per edge from slots (start, center, end), \`order\` within a slot (ties keep config order) and one \`gap\` per monitor (\`[layout]\`, \`[monitors.X.layout]\`, default 8 px) measured between neighbouring joins, on top of \`r1 + r2\`. \`pos\` keeps its old meaning (pixels from the start of the edge) as a deprecated alias placed outside the slots; combining it with \`align\`/\`offset\` is a validation error whose message gives the conversion (\`pos = N\` = \`align = "start"\`, \`offset = N - (T + R + r)\`), and each config load logs one INFO line listing the entries still using it. The system bar's default moved from \`pos = 600\` to \`align = "end"\`, \`offset = 142\` (identical on a 1080 px monitor only). Overlaps hide the later panel (config order) with a notification. No \`panel-move\` change kind: moved panels are rebuilt; a \`gap\` change is a \`relayout\`.`
 
 3. Section 17: replace the bullet that starts with `**Interim implementation (2026-10-13):**` with:
 
-`- **Implemented (2026-10-13, layout plan):** the free span is \`T + R + r\` from each end; \`length\` takes px, \`"fill"\` (equal shares of what the neighbours, offsets and spacing leave), \`"content"\` (the content's natural size plus 12 px each side, measured in an idle callback after each build, the widget's default until then) or a percentage of the free span, then \`min_length\`/\`max_length\` and a 60 px floor; too long is shrunk with a warning and the content is clipped (a scroll-less container), never growing the surface. \`MonitorShell\` re-lays out on the monitor's \`notify::geometry\` (debounced 250 ms), so centred, percentage and fill panels follow resolution changes.`
+`- **Implemented (2026-10-13, layout plan):** the free span is \`T + R + r\` from each end; \`length\` takes px, \`"fill"\` (equal shares of what the neighbours, offsets and spacing leave), \`"content"\` (the content's natural size plus 12 px each side, measured in an idle callback after each build, the widget's default until then) or a percentage of the free span, then \`min_length\`/\`max_length\` and a 60 px floor; too long is shrunk with a warning and the content is clipped at the body edge and kept centred (a scroll-less container), never drawn over the joins and frame. \`MonitorShell\` re-lays out on the monitor's \`notify::geometry\` (debounced 250 ms; a zero geometry while unplugging is ignored), so centred, percentage and fill panels follow resolution changes. Two panels meeting at a shared screen corner collide at offset 0 (one needs an offset of at least the other's depth + r - R); a panel hidden by an overlap keeps its slot space; a re-layout the shell starts itself that fails is logged and rebuilds that monitor once.`
 
 and in **Design implications** replace `- \`anchor_and_margin\` moves behind this resolver; \`EdgePanel\` receives a resolved offset and length.` with `- Done: \`anchor_and_margin\` takes the resolved start; \`EdgePanel\` receives a resolved \`PanelGeometry\` (pos and length in px).`
 
@@ -2653,7 +3029,9 @@ git commit -m "docs: layout and anchoring in README and spec" -m "Co-Authored-By
 | Free span `T + R + r`, 38 px default; shrink with warning; clamp offsets | 3, 4 |
 | Overlap / too close: hide the later panel and notify, minimum gap `r1 + r2` | 3 (and the existing `_report_layout`) |
 | Deterministic ordering (slots, ties, warnings by config index) | 3 |
-| `content` measured once after build, re-measured on rebuild | 7 |
+| `content` measured once after build, re-measured on rebuild (only new, restyled or unmeasured panels) | 7 (decision 5) |
+| Self-started re-layouts (measurement, geometry change) never crash the main loop | 7, 8 (decision 11) |
+| Panels meeting at a shared screen corner; hidden panels keep their slot space | 3, 6, 11 (decision 3) |
 | `EdgePanel` receives resolved pos/length; `anchor_and_margin` behind the resolver | 5 |
 | Reload semantics (which changes rebuild which panels; `panel-move` considered) | 2, 5 (decision 7) |
 | Re-layout on monitor geometry change (README limitation) | 8, 11 |
@@ -2668,15 +3046,19 @@ Not covered by design (out of scope): handle customization (15), settings window
 
 **2. Placeholder scan:** every code step carries the code; every test step carries the test; the gate checklists name exact values. The only conditional work is in the gates' "On failure" paths, each with a concrete first action.
 
-**3. Type consistency:** `PanelRequest` field order (widget, edge, align, offset, pos, order, length, min_length, max_length, depth, state, label, fallback_length) is the same in Task 2's dataclass and every positional construction (Tasks 3, 5, 9 tests). `layout_monitor(requests, width, height, thickness, radius, gap, natural=None, where="monitor")` is called with that order in Tasks 5, 7, 9 and the gate checks. `MonitorShell(..., on_layout=None)` (Task 7) matches `FakeShell` in `tests/test_app_sync.py` and the `build` fixture. `content_length` (Task 4) is the one `EdgePanel.natural_length` (Task 7) uses. `RELAYOUT_DELAY_MS`, `set_monitor_size` (Task 8) match their tests.
+**3. Type consistency:** `PanelRequest` field order (widget, edge, align, offset, pos, order, length, min_length, max_length, depth, state, label, fallback_length) is the same in Task 2's dataclass and every positional construction (Tasks 3, 5, 9 tests). `layout_monitor(requests, width, height, thickness, radius, gap, natural=None, where="monitor")` is called with that order in Tasks 5, 7, 9 and the gate checks. `MonitorShell(name, monitor, config, register_window, unregister_window=None, on_layout=None, on_error=None)` (Task 7) matches `FakeShell` and `Capturing` (`**callbacks`) in `tests/test_app_sync.py`, the `build` fixture of Tasks 7 and 8 (`on_layout=`, `on_error=` by keyword) and `EdgeShellApp.sync_monitors` (`on_layout=`, `on_error=` -> `_report_layout`, `_relayout_failed`). `content_length` (Task 4) is the one `EdgePanel.natural_length` (Task 7) uses. `_centre_view` / `clip_container` (Task 7) match their two tests. `RELAYOUT_DELAY_MS`, `set_monitor_size` (Task 8) match their tests; Task 8's `close` replaces Task 7's `_measure_id` block. `deprecated_pos_paths(config)` (Task 2, `shell/registry.py`) is called only by `EdgeShellApp._log_deprecated` (Task 2), never by `request_for`. `validate_widgets` (existing) is imported by `shell/canvas/simulate.py` in Task 9.
 
-**4. Review Focus:** each of the five lines has its pinning test in the owning task (Tasks 1, 2, 3, 4, 5, 7, 8) plus a gate item.
+**4. Review Focus:** each of the six lines has its pinning test in the owning task (Tasks 1, 2, 3, 4, 5, 7, 8, 9) plus a gate item where a gate can see it.
 
-Verification while planning: Tasks 1-9 were prototyped in a scratch copy of the worktree (not committed): the interim state after Tasks 1-4 and the final state after Task 9 both pass the full suite and ruff with the code and tests exactly as written here; the two example configs resolve without warnings at 1920x1080 and 1280x720.
+**5. Test counts (expected, counted from the tests written here):** baseline 493 passed. After Task 1: 519 (+26). Task 2: 541 (+22). Task 3: 573 (+32, `tests/test_layout_resolver.py` has 32). Task 4: 588 (+15, the resolver file has 47). Task 5: 586 (`tests/test_panel_layout.py` 29 -> 30, `tests/test_monitor_shell.py` +3, `tests/test_registry.py` -5, `tests/test_geometry.py` -1). Task 7: 599 (+13). Task 8: 604 (+5). Task 9: 609 (+5). Without a display `test_clip_container_never_asks_for_the_content_size` is skipped (one fewer passed, one skipped). A different total is not a failure by itself, but check which test it is.
 
-## Open questions for Phil
+Verification while planning: Tasks 1-9 were first prototyped in a scratch copy of the worktree (not committed), and the interim state after Tasks 1-4 and the final state after Task 9 passed the full suite and ruff. After the review corrections, Tasks 2-4 were re-extracted from this file's text into a fresh scratch copy: `tests/test_layout_resolver.py` passes with the Task 3 code (32) and after the Task 4 edits (47), the full suite there passes (540 = 493 + 47; Tasks 1-2 tests not included) and ruff is clean. `clip_container`'s preferred size and the adjustment centring (`configure(0, 0, 800, 1, 10, 300)` -> value 250; page size 500 -> 150) were checked with a standalone GTK script (widgets only, no window). The other review changes in Tasks 2 and 5-11 (the deprecation log line, `on_error`, the measurement subset, the zero-geometry guard, the simulator's `validate_widgets`) were written against the current code but not run. The two example configs still resolve without warnings at 1920x1080 and 1280x720 (no center offsets, no corner neighbours at offset 0).
 
-1. Gate B item 9 changes HDMI-A-1's resolution with `kscreen-doctor`; KScreen may move DP-1's position while doing so (its Plasma panel is not touched). Run it, or skip it and rely on the unit tests and the hot-plug item?
-2. Default `gap = 8` px (straight frame between two neighbouring panels' joins): OK, or another value?
-3. Decision 5: is a one-off rebuild of "content" panels right after startup acceptable (Gate B item 2), or should the in-place resize be planned now?
-4. Decision 2: should `pos` stay silent (documented as deprecated), or log one deprecation line per start (log only, no notification)?
+## Defaults pending Phil
+
+Phil has not answered these yet; the plan is written for the default, and each changes little if he disagrees.
+
+1. **Gap (decision 1): default pending Phil, 8 px kept.** Another value changes one default and the expected positions in the tests and gates.
+2. **"content" startup rebuild (decision 5): default pending Phil, the one-off rebuild is accepted.** The in-place resize (1-2 tasks) is planned only if Gate B item 2 shows a visible flash.
+3. **`pos` deprecation (decision 2): default pending Phil, no notification; one INFO log line per config load and reload** listing the key paths still using `pos` (`deprecated_pos_paths`, Task 2).
+4. Resolution change at Gate B (former open question): now a required item done through System Settings > Display with Revert (or a saved `kscreen-doctor -o`), on HDMI-A-1 only; DP-1's settings are never touched.
