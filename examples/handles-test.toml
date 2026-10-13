@@ -1,0 +1,40 @@
+# Gate B (handle plan): handle shapes, colours, offsets and per-interaction toggles, on
+# HDMI-A-1 only (DP-1 is left alone).
+#   cp examples/handles-test.toml /tmp/edge-handles.toml
+#   scripts/py main.py --config /tmp/edge-handles.toml -v      (edit the copy while it runs)
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: dock, bottom centre: today's dots, every interaction
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]    # 1: top left, click only: "auto" draws a chevron
+widget = "clock"
+align = "start"
+interaction.hover = false
+interaction.drag = false
+
+[[monitors.HDMI-A-1.panels]]    # 2: top right, hover + drag (no click): "auto" draws a bar
+widget = "clock"
+align = "end"
+state = "collapsed"
+interaction.click = false
+handle.size = 28
+handle.color = "#8fd3b6"
+handle.hover_color = "#ffffff"
+
+[[monitors.HDMI-A-1.panels]]    # 3: right edge: an explicit chevron, thinner, 100 px up
+widget = "system_bar"
+handle.shape = "chevron"
+handle.size = 24
+handle.weight = 2
+handle.offset = -100
+
+[[monitors.HDMI-A-1.panels]]    # 4: bottom left, every interaction off: only `state` opens it
+widget = "clock"
+edge = "bottom"
+align = "start"
+state = "collapsed"
+interaction.click = false
+interaction.hover = false
+interaction.drag = false
