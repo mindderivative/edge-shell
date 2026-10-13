@@ -68,6 +68,12 @@ class ShapeCanvas(WaylandWindow):
         """Colour / border / shadow change (a restyle): full redraw, no rebuild."""
         self.painter.set_style(style_for(theme))
 
+    def set_monitor_size(self, width: int, height: int) -> None:
+        """The monitor's resolution changed (MonitorShell re-layout): the allocation that
+        follows resizes the scene; only the size check needs to know."""
+        self._monitor_size = (width, height)
+        self._size_warned = False
+
     def add_panel(self, key: Hashable, shape: PanelShape) -> None:
         self.painter.add_panel(key, shape)
 

@@ -103,3 +103,11 @@ def test_canvas_window_setup():
         "keyboard_mode": "none",
         "pass_through": True,
     }
+
+
+def test_a_new_monitor_size_is_expected_and_warned_about_again(make_config, caplog):
+    s = stand_in(make_config, size=(1920, 1080))
+    ShapeCanvas.set_monitor_size(s, 1280, 720)
+    assert s._monitor_size == (1280, 720) and s._size_warned is False
+    ShapeCanvas._check_size(s)  # the scene is still 1920x1080 until the allocation
+    assert caplog.text.count("panels may be misaligned") == 1

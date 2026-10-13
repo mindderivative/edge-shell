@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 # second raise is a safety net for a slow compositor; both are no-ops after close().
 RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
+# A resolution change arrives as several notify::geometry signals; re-layout once it settles.
+RELAYOUT_DELAY_MS = 250
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
@@ -132,6 +134,8 @@ class MonitorShell:
         self._natural: dict[int, tuple[tuple[str, bool], int]] = {}
         self._remeasure: set[int] = set()  # built since the last measurement (or restyled)
         self._measure_id = 0  # pending idle measurement
+        self._relayout_id = 0  # pending geometry re-layout
+        self._monitor_handlers: list[int] = []
         try:
             self._build(config)
         except BaseException:
@@ -151,6 +155,7 @@ class MonitorShell:
         if self.live_panels():
             for delay in raise_delays():
                 GLib.timeout_add(delay, self._raise_panels)
+        self._monitor_handlers.append(monitor.connect("notify::geometry", self._on_geometry))
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -258,6 +263,32 @@ class MonitorShell:
                 log.exception("handling the measurement failure of %s failed", self.name)
         return False
 
+    # ---- monitor geometry -----------------------------------------------------------------
+    def _on_geometry(self, *_args) -> None:
+        """The monitor's resolution (or position) changed: re-layout once it settles."""
+        if self._relayout_id:
+            GLib.source_remove(self._relayout_id)
+        self._relayout_id = GLib.timeout_add(RELAYOUT_DELAY_MS, self._relayout)
+
+    def _relayout(self) -> bool:
+        self._relayout_id = 0
+        if self._closed:
+            return False
+        try:
+            g = self.monitor.get_geometry()
+            if g.width <= 0 or g.height <= 0:  # being unplugged: the hot-plug sync closes us
+                return False
+            self.canvas.set_monitor_size(g.width, g.height)
+            self._sync_panels(self._config, self._theme, startup=False)
+            self._on_layout(self)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("re-laying out %s after a geometry change failed", self.name)
+            try:
+                self._on_error(self)
+            except Exception:
+                log.exception("handling the re-layout failure of %s failed", self.name)
+        return False
+
     @property
     def measure_pending(self) -> bool:
         """True while a "content" measurement is queued: lengths are still provisional and
@@ -355,9 +386,16 @@ class MonitorShell:
 
     def close(self) -> None:
         self._closed = True
-        if self._measure_id:
-            GLib.source_remove(self._measure_id)
-            self._measure_id = 0
+        for source in (self._measure_id, self._relayout_id):
+            if source:
+                GLib.source_remove(source)
+        self._measure_id = self._relayout_id = 0
+        for handler in self._monitor_handlers:
+            try:
+                self.monitor.disconnect(handler)
+            except Exception:  # the monitor may be gone already (unplugged)
+                log.debug("could not disconnect from %s", self.name, exc_info=True)
+        self._monitor_handlers.clear()
         for window in self.windows:
             self._release(window)
         self.windows.clear()

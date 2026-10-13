@@ -50,6 +50,10 @@ class FakeCanvas(FakeWindow):
         super().__init__(*args, **kwargs)
         self.shapes = {}
         self.depths = []
+        self.monitor_sizes = []
+
+    def set_monitor_size(self, width, height):
+        self.monitor_sizes.append((width, height))
 
     def set_theme(self, theme):
         self.themes.append(theme)
@@ -64,7 +68,25 @@ class FakeCanvas(FakeWindow):
         self.depths.append((key, d))
 
 
-MONITOR = SimpleNamespace(get_geometry=lambda: SimpleNamespace(x=0, y=0, width=1920, height=1080))
+class FakeMonitor:
+    """A Gdk.Monitor stand-in: geometry, plus the notify::geometry connection."""
+
+    def __init__(self, width=1920, height=1080):
+        self.width, self.height = width, height
+        self.handlers = {}
+
+    def get_geometry(self):
+        return SimpleNamespace(x=0, y=0, width=self.width, height=self.height)
+
+    def connect(self, signal, fn):
+        self.handlers[len(self.handlers) + 1] = (signal, fn)
+        return len(self.handlers)
+
+    def disconnect(self, handler):
+        del self.handlers[handler]
+
+
+MONITOR = FakeMonitor()
 
 
 def bare_shell(windows, panels=(), unregister=None):
@@ -77,7 +99,9 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.strips = []
     shell._closed = False
     shell._unregister = unregister or (lambda _w: None)
-    shell._measure_id = 0
+    shell.monitor = FakeMonitor()
+    shell._monitor_handlers = []
+    shell._measure_id = shell._relayout_id = 0
     return shell
 
 
@@ -153,11 +177,16 @@ def build(monkeypatch, make_config, fake_registry):
     monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda fn: idles.append(fn) or 100 + len(idles))
     monkeypatch.setattr(mon_mod.GLib, "source_remove", removed.append)
 
-    def _build(monitors, theme=None, on_layout=None, on_error=None):
+    def _build(monitors, theme=None, monitor=None, on_layout=None, on_error=None):
         tracked = []
         cfg = make_config(monitors=monitors, theme=theme)
         shell = mon_mod.MonitorShell(
-            "HDMI-A-1", MONITOR, cfg, tracked.append, on_layout=on_layout, on_error=on_error
+            "HDMI-A-1",
+            monitor or FakeMonitor(),
+            cfg,
+            tracked.append,
+            on_layout=on_layout,
+            on_error=on_error,
         )
         shell.test_idles, shell.test_removed = idles, removed
         return shell, tracked, timers
@@ -528,3 +557,66 @@ def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypa
     assert shell.test_idles[0]() is False
     assert "handler broke" in caplog.text
     assert shell.measure_pending is False
+
+
+# ---- monitor geometry ---------------------------------------------------------------
+
+
+def test_a_resolution_change_relayouts_once_it_settles(build):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    dock = shell.panels[0]
+    assert dock.args[0].pos == 680
+    ((signal, handler),) = monitor.handlers.values()
+    assert signal == "notify::geometry"
+    monitor.width, monitor.height = 1280, 720
+    handler(monitor, None)
+    handler(monitor, None)  # a burst: the first timer is replaced
+    relayouts = [t for t in timers if t[0] == mon_mod.RELAYOUT_DELAY_MS]
+    assert len(relayouts) == 2 and len(shell.test_removed) == 1
+    assert relayouts[-1][1]() is False
+    assert dock.destroyed and shell.panels[0].args[0].pos == (1280 - 560) // 2  # re-centred
+    assert shell.canvas.monitor_sizes == [(1280, 720)] and reports == [shell]
+
+
+def test_close_disconnects_from_the_monitor(build):
+    monitor = FakeMonitor()
+    shell, _, _ = build(edge({"widget": "dock"}), monitor=monitor)
+    shell.close()
+    assert monitor.handlers == {}
+
+
+def test_a_zero_geometry_is_ignored(build):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    dock = shell.panels[0]
+    ((_, handler),) = monitor.handlers.values()
+    monitor.width = monitor.height = 0  # what an unplugged monitor reports
+    handler(monitor, None)
+    assert timers[-1][0] == mon_mod.RELAYOUT_DELAY_MS and timers[-1][1]() is False
+    assert shell.panels[0] is dock and not dock.destroyed  # no 0 px layout, no warnings
+    assert shell.layout_warnings == [] and reports == [] and shell.canvas.monitor_sizes == []
+
+
+def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
+    errors, reports = [], []
+    monitor = FakeMonitor()
+    shell, _, timers = build(
+        edge({"widget": "dock"}),
+        monitor=monitor,
+        on_layout=reports.append,
+        on_error=errors.append,
+    )
+    ((_, handler),) = monitor.handlers.values()
+
+    def explode(*a, **k):
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+    monitor.width, monitor.height = 1280, 720
+    handler(monitor, None)
+    assert timers[-1][1]() is False  # never raises into the main loop
+    assert errors == [shell] and reports == []
+    assert "widget broke" in caplog.text
