@@ -383,3 +383,27 @@ def test_recorder_is_attached_to_every_opened_canvas(env, monkeypatch):
     mapping["HDMI-A-1"] = object()
     app.sync_monitors()
     assert painter.recorder is app.recorder
+
+
+# ---- pos deprecation ------------------------------------------------------------------
+
+
+def test_deprecated_pos_is_logged_once_at_start(make_config, caplog):
+    caplog.set_level("INFO", logger="shell.app")
+    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}])})
+    app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
+    lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
+    assert len(lines) == 1 and "monitors.HDMI-A-1.panels.0.pos" in lines[0]
+
+
+def test_deprecated_pos_is_logged_once_per_reload(renv, caplog):
+    app, store, _, _, make_config = renv
+    caplog.set_level("INFO", logger="shell.app")
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}, {"widget": "dock"}])}
+    )
+    app.reload()
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    app.reload()  # no pos left: no line
+    lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
+    assert len(lines) == 1 and lines[0].endswith("monitors.HDMI-A-1.panels.0.pos")

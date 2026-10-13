@@ -24,6 +24,7 @@ from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
 from shell.monitors import MonitorShell, monitors_by_name
+from shell.registry import deprecated_pos_paths
 from shell.theme import scope_class, to_css
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class EdgeShellApp:
         self._early: list = []  # windows created before the Application exists
         self._sync_timers: list[int] = []  # pending hot-plug sync timer ids
         self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
+        self._log_deprecated(store.config)
 
     @property
     def config(self):
@@ -149,6 +151,7 @@ class EdgeShellApp:
                 self._report_error(self.store.last_error)
             return
         old, new = result
+        self._log_deprecated(new)
         changes = diff_configs(old, new)
         log.info("config reloaded: %d change(s)", len(changes))
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
@@ -179,6 +182,17 @@ class EdgeShellApp:
         if failed:
             self.sync_monitors()  # rebuild the dropped shells from the new config
         self.refresh_css()
+
+    def _log_deprecated(self, config) -> None:
+        """One INFO line per config load listing the entries that still use `pos` (decision 2:
+        a notification would repeat on every start)."""
+        paths = deprecated_pos_paths(config)
+        if paths:
+            log.info(
+                'deprecated key pos (use align = "start" and offset = pos - 38 at the default '
+                "theme): %s",
+                ", ".join(paths),
+            )
 
     def _report_layout(self, name: str, shell) -> None:
         """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but

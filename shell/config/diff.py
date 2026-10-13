@@ -7,10 +7,16 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from shell.config.models import Config
-from shell.registry import panels_for
+from shell.registry import requests_for
 
 Kind = Literal[
-    "restyle", "rebuild-monitor", "panel-add", "panel-remove", "panel-rebuild", "panel-state"
+    "restyle",
+    "relayout",
+    "rebuild-monitor",
+    "panel-add",
+    "panel-remove",
+    "panel-rebuild",
+    "panel-state",
 ]
 _STRUCTURAL = ("thickness", "radius", "peek", "hover_zone", "duration_ms")
 
@@ -41,7 +47,9 @@ def diff_configs(old: Config, new: Config) -> list[Change]:
             continue
         if old_theme != new_theme:
             changes.append(Change("restyle", name))
-        changes.extend(_diff_panels(name, panels_for(old, name), panels_for(new, name)))
+        if old.layout_for(name) != new.layout_for(name):
+            changes.append(Change("relayout", name))
+        changes.extend(_diff_panels(name, requests_for(old, name), requests_for(new, name)))
     return changes
 
 
