@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status (2026-10-13):** complete. Gates 1-5 passed with Phil on HDMI-A-1. Fallback B applied (the delayed panel re-raise is kept); Task 11 fallbacks A, C, D were not needed. After Gate 4 the border moved outside the mass (Task 13b, `514573f`). Results: `docs/superpowers/findings/2026-10-12-shape-canvas-spike.md` section 10.
+
 **Goal:** Replace the per-window panel drawing with one click-through shape canvas per monitor that draws the frame, the screen corners and every panel as one outline, and add the opt-in inner border and uniform shadow, without regressing any existing behaviour.
 
 **Architecture:** Spec 18 option B, as proven by the shape-canvas spike. A pure core (`shell/canvas/`: outline, effects, style, scene, painter, simulation, stats; `shell/panel_layout.py`) is built and tested headlessly first. A thin GTK window (`ShapeCanvas`) wraps the pure `CanvasPainter`; each panel keeps a transparent full-depth `EdgePanel` window for content, handle and input, and reports its animated depth to the canvas, which redraws only the damaged box. Frame strips become invisible, input-less, zone-reserving surfaces on the `bottom` layer; the screen-corner windows disappear. Every on-screen step ends in a human gate on `HDMI-A-1`.

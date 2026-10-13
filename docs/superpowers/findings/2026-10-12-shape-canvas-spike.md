@@ -193,3 +193,37 @@ Recommended defaults for the real feature:
 10. Multi-monitor and scale handling (reach times scale). Risk: fractional scales.
 11. Profile CPU during animation (content ticks, margin relayout, 3-window setup). Risk: may need a different animation path.
 12. Human visual gates as in the core plan, including dark themes. Risk: subjective.
+
+## 10. Follow-up status (plan 2026-10-13, shape canvas and effects)
+
+| Section 9 item | Where |
+|---|---|
+| 1 Layout resolver | Plan 2; interim corner-clearance / minimum-gap rules in `shell/panel_layout.py` (plan Task 5) |
+| 2 Alpha colours, theme models | Plan Tasks 1-2 |
+| 3 Promote outline/effects | Plan Task 3 (contract: `tests/test_canvas_outline.py` vs `tests/legacy_draw.py`); legacy code removed in Task 12 |
+| 4 Canvas, invisible strips, content windows | Plan Tasks 6-8 |
+| 5 Remove `raise_to_top` | Not done (Fallback B): the delayed re-raise is still needed, see Gate 1 below; `EDGE_SHELL_RAISE_MS=0` is a debug switch |
+| 6 Damaged-region invalidation | Plan Task 4 (`shell/canvas/scene.py`, simulation tests) |
+| 7 Config and reload | Plan Tasks 2, 7, 8, 9 (layout notifications), Gate 4 |
+| 8 Fullscreen | Gate 5 item 10 |
+| 9 Handle customization | Later plan (spec 15) |
+| 10 Multi-monitor and scale | Later; the canvas warns on scale != 1 |
+| 11 CPU profile | `main.py --stats` (Gate 5); deeper profiling later |
+| 12 Human gates | Gates 1-5 |
+
+The spike code (`spikes/canvas/`, `spikes/tests/`) was removed in plan Task 12; it is in git history at `872eff9`.
+
+### Gate results (visual tester: Phil, HDMI-A-1 only)
+
+- Gate 1 (stacking with the invisible bottom-layer strips, plan Task 7): passed. Items 1-6 and 8 pass with the re-raise off (`EDGE_SHELL_RAISE_MS=0`). Item 7 (collapsed handle dots visible) fails with the re-raise off and passes with it on, so Fallback B applies: the delayed `raise_to_top` workaround is kept (`raise_delays`), and plan Task 12 did not remove it. Bottom-layer strips reserve their zones correctly.
+- Gate 2 (panels through the canvas, plan Task 8): passed. Handle-to-body sync held without driving the tween from the canvas clock, so Fallback D was not needed.
+- Gate 3 (layout rules and notifications, plan Task 10): passed. Task 11 fallbacks A, C and D were not needed; only Fallback B applied (no code).
+- Gate 4 (border and shadow, plan Task 13): passed. Phil then changed the border design: it is drawn outside the mass (desktop side), the frame band keeps its thickness (10 px frame + 4 px border = 14 px footprint), the shadow is measured from the outer border edge, and the strips reserve thickness + border width when the border is enabled (commit `514573f`).
+- Gate 4b (live re-check of that change): passed. Border outside, dots visible with a 4 px border, a maximised window stops at the outer edge, and the live toggle resized the strips in place (grow and shrink); the rebuild fallback was not needed.
+- Gate 5 (regression and measurement, plan Task 15): passed. Targets (fps >= 55, damaged-draw p95 <= 8 ms, ticks between draws mostly 1) were all met. Live run on HDMI-A-1, 3 panels toggling every 300 ms for 10 s:
+  - fps while animating: 56.8; frame interval mean 17.62 ms, median 16.83 ms, p95 26.97 ms
+  - canvas damaged draws: 582, median 3.44 ms, p95 4.37 ms, max 4.92 ms; 1 full draw, 8.09 ms
+  - ticks between canvas draws per panel: {0: about 33, 1: about 547, 2: 1-2} (in step about 99 %)
+  - CPU: 3.70 s over 10 s wall = 0.37 of a core
+
+Known limitations carried forward: centred panels are resolved once and do not re-centre on a resolution change while running; HiDPI / fractional scale is unsupported (warning only); `--stats` mixes scene keys across monitors when two or more monitors are configured; the "Panels adjusted" notification is not repeated after unplug/replug with identical warnings; the border and shadow are faint on dark wallpapers.
