@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cairo
 
@@ -14,7 +15,9 @@ from shell.anim import Tween
 from shell.canvas.painter import CanvasPainter
 from shell.canvas.scene import Box, PanelShape, Scene, box_to_rect, union_boxes
 from shell.canvas.style import style_for
-from shell.config.models import Theme
+from shell.config.models import Config, Theme
+from shell.panel_layout import layout_monitor
+from shell.registry import requests_for, validate_widgets
 
 FRAME_US = 16_667  # 60 Hz
 # cairo's arc tessellation differs by a few levels between a clipped and a full redraw on a
@@ -156,15 +159,35 @@ def _draw_like_gtk(
 
 def default_shapes(width: int, height: int) -> list[PanelShape]:
     """The built-in panels (widgets/: dock, clock, system_bar): their registered defaults at
-    1920x1080, shrunk and moved on smaller sizes so that no layout rule (shell.panel_layout)
-    would move, shrink or hide one on the simulated surface."""
+    1920x1080 (the system bar aligned to the end, 142 px from the corner), shrunk and moved on
+    smaller sizes so that no layout rule (shell.panel_layout) would move, shrink or hide one on
+    the simulated surface. Pure: it does not import the widgets."""
     dock = min(560, width - 160)
     bar = min(300, height // 3)
     return [
         PanelShape("bottom", (width - dock) // 2, dock, 64),
         PanelShape("top", (width - 168) // 2, 168, 46),
-        PanelShape("right", min(600, height - 110 - bar), bar, 56),  # clear of the dock
+        PanelShape("right", height - 142 - bar, bar, 56),  # end-aligned, clear of the dock
     ]
+
+
+def config_shapes(
+    config: Config, monitor: str, width: int, height: int
+) -> tuple[list[PanelShape], list[str]]:
+    """The shown panels of `monitor` in `config`, laid out by shell.panel_layout at width x
+    height, plus the layout warnings. The widgets must be registered (import widgets)."""
+    theme = config.theme_for(monitor)
+    layout = layout_monitor(
+        requests_for(config, monitor),
+        width,
+        height,
+        theme.thickness,
+        theme.radius,
+        config.layout_for(monitor).gap,
+        where=f"monitors.{monitor}",
+    )
+    shapes = [PanelShape(p.edge, p.pos, p.length, p.depth) for p in layout.panels if p]
+    return shapes, layout.warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -175,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from shell.canvas.stats import StatsRecorder
     from shell.config.loader import load_config
-    from shell.config.models import deep_merge
+    from shell.config.models import ConfigError, deep_merge
 
     p = argparse.ArgumentParser(
         prog="python -m shell.canvas.simulate",
@@ -185,12 +208,33 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--size", default="1920x1080", help="WxH (default 1920x1080)")
     p.add_argument("--elevation", type=int, default=None, help="enable the shadow at 0-100 %%")
     p.add_argument("--border", type=int, default=None, help="enable the border, width in px")
+    p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="lay out this config's panels and use its theme (needs Fabric for the widgets)",
+    )
+    p.add_argument("--monitor", default="HDMI-A-1", help="monitor of --config (default HDMI-A-1)")
     args = p.parse_args(argv)
     try:
         width, height = (int(v) for v in args.size.lower().split("x"))
     except ValueError:
         p.error(f"--size must be WxH, got {args.size!r}")
-    theme = load_config(None).theme
+    shapes = default_shapes(width, height)
+    if args.config is None:
+        theme = load_config(None).theme
+    else:
+        import widgets  # noqa: F401  (registers the built-in panels: their default geometry)
+
+        try:
+            config = load_config(args.config, required=True)
+            validate_widgets(config)  # an unknown widget is a usage error (exit 2), as in main.py
+        except ConfigError as exc:
+            p.error(str(exc))
+        theme = config.theme_for(args.monitor)
+        shapes, warnings = config_shapes(config, args.monitor, width, height)
+        for warning in warnings:
+            print(f"layout: {warning}")
     over: dict = {}
     if args.elevation is not None:
         over["shadow"] = {"enabled": True, "elevation": args.elevation}
@@ -206,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     res = simulate(
         theme,
         (width, height),
-        default_shapes(width, height),
+        shapes,
         args.frames,
         recorder=recorder,
         clock=clock,

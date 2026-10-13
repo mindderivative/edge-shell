@@ -229,6 +229,30 @@ def test_random_depth_jumps_never_leave_stale_pixels(make_config):
     assert noisy <= 40 and worst <= 32, (worst, noisy)
 
 
+def test_corner_aligned_panels_redraw_cleanly_with_border_and_shadow(make_config):
+    """End- and start-aligned panels resolved by the layout, one next to each screen corner,
+    animating under the strongest effects: clipped redraws still equal a full redraw."""
+    from shell.panel_layout import layout_monitor
+    from shell.panel_spec import PanelRequest
+
+    theme = make_config(theme=THEMES[-1]).theme
+    requests = [
+        PanelRequest(w, e, a, 0, None, 0, 160, None, None, d, "extended", w, 160)
+        for w, e, a, d in [
+            ("a", "bottom", "end", 64),
+            ("b", "left", "end", 40),
+            ("c", "top", "start", 46),
+            ("d", "right", "start", 56),
+        ]
+    ]
+    layout = layout_monitor(requests, 640, 400, theme.thickness, theme.radius, 8)
+    assert None not in layout.panels and layout.warnings == []
+    shapes = [PanelShape(p.edge, p.pos, p.length, p.depth) for p in layout.panels]
+    res = simulate(theme, (640, 400), shapes, 80, check_every=7)
+    assert res.checked == 12
+    assert res.max_noisy <= 40 and res.max_diff <= 32, res
+
+
 def test_simulation_at_1080p_keeps_damage_small(make_config):
     theme = make_config(theme={"shadow": {"enabled": True}}).theme
     res = simulate(theme, (W, H), [DOCK], 40)
