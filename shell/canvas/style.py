@@ -18,10 +18,20 @@ class CanvasStyle:
 
     @property
     def pad(self) -> int:
-        """How far past a panel's box a depth change can alter pixels: reach + border width."""
+        """How far past a panel's box a depth change can alter pixels: reach + border width.
+
+        The border is drawn outside the mass and the shadow is measured from its outer edge.
+        """
         reach = reach_px(self.shadow[0]) if self.shadow is not None else 0
         width = math.ceil(self.border[0]) if self.border is not None else 0
         return reach + width
+
+
+def reserved_px(theme: Theme) -> int:
+    """Width of the zone each frame strip reserves: the frame thickness plus the border drawn
+    outside it (so maximized windows stop at the outer border edge)."""
+    border = theme.border
+    return theme.thickness + (math.ceil(border.width) if border.enabled else 0)
 
 
 def style_for(theme: Theme) -> CanvasStyle:

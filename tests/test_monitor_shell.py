@@ -68,6 +68,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.panels = list(panels)
     shell._resolved = [None] * len(shell.panels)
     shell.canvas = FakeCanvas()
+    shell.strips = []
     shell._closed = False
     shell._unregister = unregister or (lambda _w: None)
     return shell
@@ -227,6 +228,19 @@ def test_restyle_redraws_the_canvas_with_the_monitor_theme(build, make_config):
     (theme,) = shell.canvas.themes
     assert theme.shadow.enabled and theme.shadow.elevation == 90
     assert shell.panels[0].themes == [theme]
+
+
+def test_restyle_resizes_the_strips_in_place_with_the_monitor_theme(build, make_config):
+    shell, tracked, _ = build(edge({"widget": "dock"}))
+    strips = list(shell.strips)
+    assert len(strips) == 4 and all(s in tracked for s in strips)
+    new = make_config(
+        theme={"border": {"enabled": True, "width": 3}},
+        monitors=edge({"widget": "dock"}, theme={"border": {"width": 4}}),
+    )
+    shell.apply(new, [Change("restyle", "HDMI-A-1")])
+    assert shell.strips == strips and not any(s.destroyed for s in strips)  # no rebuild
+    assert all(len(s.themes) == 1 and s.themes[0].border.width == 4 for s in strips)
 
 
 def test_state_change_retargets_without_rebuilding(build, make_config):

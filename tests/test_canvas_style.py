@@ -1,6 +1,6 @@
 import pytest
 
-from shell.canvas.style import CanvasStyle, style_for
+from shell.canvas.style import CanvasStyle, reserved_px, style_for
 
 
 def test_effects_off_by_default(make_config):
@@ -19,6 +19,14 @@ def test_enabled_effects_carry_width_elevation_and_rgba(make_config):
     assert style.shadow[0] == 100
     assert style.shadow[1] == pytest.approx((0.0, 0.0, 0.0, 0x80 / 255))
     assert style.pad == 48 + 2
+
+
+def test_reserved_covers_the_frame_plus_the_outer_border(make_config):
+    assert reserved_px(make_config().theme) == 10
+    on = make_config(theme={"border": {"enabled": True, "width": 4}}).theme
+    assert reserved_px(on) == 14
+    off = make_config(theme={"border": {"enabled": False, "width": 4}}).theme
+    assert reserved_px(off) == 10
 
 
 def test_zero_elevation_means_no_shadow(make_config):

@@ -8,6 +8,7 @@ from shell.canvas.effects import (
     MAX_REACH_PX,
     draw_border,
     draw_scene,
+    draw_shadow_reach,
     draw_shadow_uniform,
     reach_px,
     shadow_levels,
@@ -188,29 +189,129 @@ def mass_with_border(width, rgba):
     return s
 
 
+def border_only(width, rgba):
+    s = new_surface()
+    draw_border(cairo.Context(s), W, H, T, R, PANEL, width, rgba)
+    return s
+
+
 @pytest.mark.parametrize("width", [1, 2, 4])
-def test_border_exactly_width_thick_on_mass_side_nothing_on_desktop(width):
-    px = pixels(mass_with_border(width, (1, 1, 1, 0.5)))
+def test_border_exactly_width_thick_on_desktop_side_nothing_on_mass(width):
+    px = pixels(border_only(width, (1, 1, 1, 0.5)))
     edge = T + BUMP_DEPTH
-    # R channel: mass ~10, 50% white over it ~132
-    lit = [y for y in range(H // 2) if px(300, y)[2] > 60]
-    assert abs(len(lit) - width) <= 1, lit
-    assert lit[-1] == edge - 1  # adjacent to the desktop, inside the mass
-    assert all(px(300, y)[3] == 0 for y in range(edge + 1, H - T - 1))  # desktop untouched
-    lit_f = [y for y in range(H // 2) if px(100, y)[2] > 60]
-    assert abs(len(lit_f) - width) <= 1 and lit_f[-1] == T - 1
-    assert all(px(100, y)[3] == 0 for y in range(T + 1, H - T - 1))
+    # under the panel bump: the band starts at the outline and runs `width` px into the desktop
+    lit = [y for y in range(edge - 5, H // 2) if px(300, y)[3] > 60]
+    assert abs(len(lit) - width) <= 1 and lit[0] == edge, lit
+    assert all(px(300, y)[3] == 0 for y in range(0, edge))  # nothing inside the mass
+    # along the frame
+    lit_f = [y for y in range(H // 2) if px(100, y)[3] > 60]
+    assert abs(len(lit_f) - width) <= 1 and lit_f[0] == T, lit_f
+    assert all(px(100, y)[3] == 0 for y in range(0, T))
+    assert all(px(100, y)[3] == 0 for y in range(T + width + 1, H - T - width - 1))
+
+
+@pytest.mark.parametrize("width", [2, 6])
+def test_border_never_touches_a_mass_pixel(width):
+    plain = new_surface()
+    fill_mass(cairo.Context(plain), W, H, T, R, PANEL, MASS)
+    bordered = mass_with_border(width, (1, 1, 1, 0.5))
+    p0, p1 = pixels(plain), pixels(bordered)
+    checked = 0
+    for y in range(H):
+        for x in range(W):
+            if p0(x, y)[3] == 255:
+                checked += 1
+                assert p1(x, y) == p0(x, y), f"mass pixel changed at ({x},{y})"
+    assert checked > 10000
 
 
 @pytest.mark.parametrize("alpha", [1.0, 0.5, 0.25])
-def test_border_alpha_blends_over_the_mass(alpha):
+def test_border_alpha_is_the_colour_alpha_blended_once(alpha):
     rgba = (ACCENT[0], ACCENT[1], ACCENT[2], alpha)
-    px = pixels(mass_with_border(4, rgba))
-    b, g, r, a = px(100, T - 2)  # well inside the 4 px band
-    assert a == 255
-    for got, border_c, mass_c in zip((r, g, b), rgba[:3], MASS[:3], strict=True):
-        expected = 255 * (border_c * alpha + mass_c * (1 - alpha))
-        assert abs(got - expected) <= 2, (got, expected)
+    s = border_only(6, rgba)
+    px = pixels(s)
+    b, g, r, a = px(100, T + 2)  # well inside the 6 px band
+    assert abs(a - 255 * alpha) <= 1
+    for got, border_c in zip((r, g, b), rgba[:3], strict=True):
+        assert abs(got - 255 * border_c * alpha) <= 2, (got, border_c)
+    # no pixel anywhere is darker than a single stroke (overlaps at joins / fillets / corners)
+    top = max(px(x, y)[3] for y in range(H) for x in range(W))
+    assert top <= round(255 * alpha) + 1, top
+
+
+def test_border_blends_once_at_the_panel_joins_and_fillets():
+    px = pixels(border_only(6, (1, 1, 1, 0.5)))
+    # the inner join of the panel bump meets the frame near (200, 10) / (400, 10)
+    for x in range(180, 230):
+        for y in range(T, T + 20):
+            assert px(x, y)[3] <= 129, (x, y, px(x, y))
+    for x in range(0, 40):  # the screen-corner fillet
+        for y in range(0, 40):
+            assert px(x, y)[3] <= 129, (x, y, px(x, y))
+
+
+def test_border_with_zero_width_or_colour_alpha_draws_nothing_on_the_mass():
+    s = new_surface()
+    fill_mass(cairo.Context(s), W, H, T, R, PANEL, MASS)
+    before = bytes(s.get_data())
+    draw_border(cairo.Context(s), W, H, T, R, PANEL, 4, (1, 1, 1, 0.0))
+    assert bytes(s.get_data()) == before
+
+
+# ---- shadow measured from the outer border edge ---------------------------------------------
+
+
+def shadow_reach_surface(reach, alpha, offset=None):
+    s = new_surface()
+    cr = cairo.Context(s)
+    if offset is None:
+        draw_shadow_reach(cr, W, H, T, R, PANEL, reach, (0, 0, 0, alpha))
+    else:
+        draw_shadow_reach(cr, W, H, T, R, PANEL, reach, (0, 0, 0, alpha), offset=offset)
+    return s
+
+
+def test_shadow_offset_zero_is_exactly_the_old_behaviour():
+    a = shadow_reach_surface(24, 0.45)
+    b = shadow_reach_surface(24, 0.45, offset=0)
+    assert bytes(a.get_data()) == bytes(b.get_data())
+
+
+@pytest.mark.parametrize("offset", [2, 4, 6])
+def test_shadow_profile_is_shifted_by_the_offset(offset):
+    reach, alpha = 24, 0.45
+    base = pixels(shadow_reach_surface(reach, alpha))
+    moved = pixels(shadow_reach_surface(reach, alpha, offset=offset))
+    for k in range(reach + 3):
+        assert abs(moved(100, T + offset + k)[3] - base(100, T + k)[3]) <= 1, k
+    # under the border band the shadow is at full edge strength, never beyond it
+    edge_alpha = base(100, T)[3]
+    for k in range(offset):
+        assert abs(moved(100, T + k)[3] - edge_alpha) <= 1
+    # and it ends `reach` px past the OUTER border edge
+    assert moved(100, T + offset + reach + 1)[3] == 0
+    assert moved(100, T + offset + reach - 3)[3] > 0
+
+
+def test_shadow_offset_stays_off_the_mass():
+    moved = pixels(shadow_reach_surface(24, 0.5, offset=5))
+    assert all(moved(100, y)[3] == 0 for y in range(0, T))
+    assert all(moved(300, y)[3] == 0 for y in range(0, T + BUMP_DEPTH))
+
+
+def test_draw_scene_shadow_starts_at_the_outer_border_edge():
+    width, reach = 4, reach_px(50)
+    rgba = (ACCENT[0], ACCENT[1], ACCENT[2], 1.0)
+    s = new_surface()
+    sh = (50, (0.0, 0.0, 0.0, 0.5))
+    draw_scene(cairo.Context(s), W, H, T, R, PANEL, MASS, border=(width, rgba), shadow=sh)
+    px = pixels(s)
+    ref = pixels(shadow_reach_surface(reach, 0.5))
+    for k in range(reach + 2):
+        assert abs(px(100, T + width + k)[3] - ref(100, T + k)[3]) <= 1, k
+    # the (opaque) border sits over the shadow
+    b, g, r, a = px(100, T + 1)
+    assert (r, g, b, a) == (*(round(c * 255) for c in ACCENT[:3]), 255)
 
 
 # ---- scene + damaged region ----------------------------------------------------------------
@@ -234,8 +335,9 @@ def snapshot(s):
 def test_draw_scene_order_shadow_under_mass_border_over():
     px = pixels(scene(40.0))
     edge = T + BUMP_DEPTH
-    assert px(300, edge - 1)[2] > 60  # border lit on the mass side
-    assert px(300, edge + 1)[3] > 0 and px(300, edge + 1)[2] == 0  # shadow: black, on the desktop
+    assert px(300, edge - 1)[3] == 255 and px(300, edge - 1)[2] == round(MASS[0] * 255)  # mass
+    assert px(300, edge + 1)[2] > 60  # border lit just outside the mass (desktop side)
+    assert px(300, edge + 2 + 4)[3] > 0 and px(300, edge + 2 + 4)[2] == 0  # shadow beyond it
     assert px(300, 5)[3] == 255 and px(300, 5)[2] == round(MASS[0] * 255)  # mass
 
 

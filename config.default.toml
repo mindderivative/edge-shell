@@ -16,10 +16,12 @@ hover_zone = 16     # invisible hover target past the frame, px
 duration_ms = 280
 font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]
 
-# Inner border along the frame and panel outline (spec section 18). Opt-in.
+# Border around the outside of the frame and panel outline (spec section 18). Opt-in.
+# It adds to the frame: a 10 px frame with a 4 px border covers 14 px (the frame band itself,
+# panel depth and layout rules stay as configured; maximized windows stop at the outer edge).
 [theme.border]
 enabled = false
-width = 2               # px, drawn on the frame side of the outline
+width = 2               # px, drawn on the desktop side of the outline
 color = "#8fd3b6ff"     # #rrggbb or #rrggbbaa (the alpha makes it translucent)
 
 # Uniform shadow of the frame and panels onto the desktop. Opt-in.

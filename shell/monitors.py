@@ -109,6 +109,7 @@ class MonitorShell:
         self._scope = scope_class(name)
         self._closed = False
         self.windows: list = []
+        self.strips: list = []  # the 4 zone strips (also in `windows`)
         # Config order; None = not shown (rejected by shell.panel_layout, see layout_warnings).
         self.panels: list[EdgePanel | None] = []
         self._resolved: list[PanelGeometry | None] = []
@@ -118,8 +119,9 @@ class MonitorShell:
         # The canvas first: it draws the frame and corners and must stay below every panel.
         self.canvas = ShapeCanvas(monitor, theme, self._scope)
         self._track(self.canvas)
-        for edge in EDGES:
-            self._track(FrameEdge(edge, monitor, theme, self._scope))
+        self.strips = [FrameEdge(edge, monitor, theme, self._scope) for edge in EDGES]
+        for strip in self.strips:
+            self._track(strip)
         self._sync_panels(config, theme, startup=True)
         if self.live_panels():
             for delay in raise_delays():
@@ -249,6 +251,8 @@ class MonitorShell:
         theme = config.theme_for(self.name)
         if any(change.kind == "restyle" for change in changes):
             self.canvas.set_theme(theme)
+            for strip in self.strips:  # the border width changes what the strips reserve
+                strip.apply_theme(theme)
             for panel in self.live_panels():
                 panel.apply_theme(theme)
         self._sync_panels(config, theme, startup=False)

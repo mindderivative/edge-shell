@@ -10,6 +10,7 @@ gi.require_version("GtkLayerShell", "0.1")
 from fabric.widgets.box import Box
 from fabric.widgets.wayland import WaylandWindow
 
+from shell.canvas.style import reserved_px
 from shell.config.models import Theme
 from shell.gdk_util import monitor_index
 
@@ -40,18 +41,29 @@ def strip_window(edge: str) -> dict:
     }
 
 
+def strip_size(edge: str, theme: Theme) -> tuple[int, int]:
+    """Size request of one strip: the reserved width across, unconstrained along the edge."""
+    t = reserved_px(theme)
+    return (-1, t) if edge in ("top", "bottom") else (t, -1)
+
+
 class FrameEdge(WaylandWindow):
-    """One side of the frame: reserves T px so maximized windows stop at the frame."""
+    """One side of the frame: reserves thickness (+ the outer border) px so maximized windows
+    stop at the outer edge of the frame."""
 
     def __init__(self, edge: str, monitor, theme: Theme, scope: str):
-        horizontal = edge in ("top", "bottom")
-        t = theme.thickness
+        self._edge = edge
+        self._strip = Box(name="frame-strip", size=strip_size(edge, theme))
         # Fabric's `monitor` property is an int; a Gdk.Monitor object is silently ignored.
         super().__init__(
             **strip_window(edge),
             monitor=monitor_index(monitor),
             title=f"edge-shell-frame-{edge}",
             style_classes=[scope],
-            child=Box(name="frame-strip", size=(-1, t) if horizontal else (t, -1)),
+            child=self._strip,
             all_visible=True,
         )
+
+    def apply_theme(self, theme: Theme) -> None:
+        """Restyle in place: resize the strip (and so the exclusive zone) without a rebuild."""
+        self._strip.set_size_request(*strip_size(self._edge, theme))

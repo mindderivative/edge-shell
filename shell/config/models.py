@@ -58,7 +58,8 @@ def deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 
 class Border(_Strict):
-    """Inner border along the outline of the frame and panels (spec 18). Opt-in."""
+    """Border along the outside of the frame and panel outline (spec 18). Opt-in. It adds `width`
+    px to the footprint; the frame thickness and panel depth are unchanged."""
 
     enabled: bool = False
     width: Annotated[int, Field(ge=1, le=16)] = 2

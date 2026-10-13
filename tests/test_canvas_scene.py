@@ -166,6 +166,10 @@ THEMES = [
     {"border": {"enabled": True, "width": 3, "color": "#ffffff80"}},
     {"shadow": {"enabled": True, "elevation": 50}},
     {"shadow": {"enabled": True, "elevation": 100}, "border": {"enabled": True}},
+    {
+        "shadow": {"enabled": True, "elevation": 60, "color": "#000000a0"},
+        "border": {"enabled": True, "width": 6, "color": "#ffffffa0"},
+    },
 ]
 
 
