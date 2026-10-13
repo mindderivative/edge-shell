@@ -91,3 +91,51 @@ def test_on_depth_is_stored_before_the_tweens_exist():
 
     src = inspect.getsource(ep.EdgePanel.__init__)
     assert src.index("self._on_depth = on_depth") < src.index("Tween(")
+
+
+@pytest.mark.parametrize(("edge", "expected"), [("bottom", 200 + 24), ("right", 90 + 24)])
+def test_natural_length_measures_along_the_edge(edge, expected):
+    s = SimpleNamespace(
+        spec=SimpleNamespace(edge=edge),
+        _inner=SimpleNamespace(
+            get_preferred_width=lambda: (50, 200), get_preferred_height=lambda: (40, 90)
+        ),
+    )
+    assert ep.EdgePanel.natural_length(s) == expected
+
+
+def test_clip_container_never_asks_for_the_content_size():
+    from gi.repository import Gtk
+
+    if not Gtk.init_check()[0]:
+        pytest.skip("no display")
+    content = Gtk.Box()
+    content.set_size_request(800, 40)  # wider than any body it could be shrunk into
+    clip = ep.clip_container(content)
+    clip.show_all()  # visibility only; no window is created
+    assert content.get_preferred_width() == (800, 800)
+    assert tuple(clip.get_preferred_width()) == (0, 0)
+    assert tuple(clip.get_preferred_height()) == (0, 0)
+    assert clip.get_policy() == (Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+    assert clip.get_child().get_child() is content  # inside the auto-added viewport
+    h = clip.get_hadjustment()
+    h.configure(0, 0, 800, 1, 10, 300)  # what the viewport sets for a 300 px long body
+    assert h.get_value() == 250  # centred: 250 px cut off at each end
+    h.set_page_size(500)  # the body got longer
+    assert h.get_value() == 150
+    assert clip.get_can_focus() is False
+    assert clip.get_kinetic_scrolling() is False
+    h.set_value(0)  # any scroll source: snaps back to the centre
+    assert h.get_value() == 150
+
+
+def test_clipped_content_is_centred_in_the_body():
+    values = []
+    adjustment = SimpleNamespace(
+        get_lower=lambda: 0.0,
+        get_upper=lambda: 800.0,
+        get_page_size=lambda: 300.0,
+        set_value=values.append,
+    )
+    ep._centre_view(adjustment)
+    assert values == [250.0]

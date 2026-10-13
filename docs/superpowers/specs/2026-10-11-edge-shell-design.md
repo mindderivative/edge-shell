@@ -151,6 +151,8 @@ theme.shadow.elevation = 80   # nested tables merge key by key
 widget = "clock"
 edge = "top"                  # omitted keys fall back to the widget's defaults
 length = 168
+align = "center"              # start | center | end; offset = px from that end
+order = 0                     # within the slot (edge + align)
 depth = 46
 state = "extended"            # collapsed | extended
 
@@ -175,7 +177,8 @@ shell = "plasma"
   | --- | --- |
   | Theme colour, border or shadow | Regenerate CSS; redraw the canvas (no rebuild) |
   | Panel `state` | Retarget the tween |
-  | Panel `edge`, `pos`, `length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
+  | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
+  | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
   | Monitor `shell` mode | Create or destroy that monitor's windows |
   | Invalid config | Keep the old config; report the error |
@@ -306,11 +309,15 @@ Requested by Phil at Gate D of the core plan. It is not part of the core plan, b
 - Today's code touch points: `EdgePanel._build_handle`, `_place_handle`, the pointer handlers, the `.handle-dot` CSS in `shell/theme.py`, and the `handle`/`handle_hover` theme tokens.
 - The settings window (section 13) exposes these controls.
 
-## 16. Planned: several panels on one edge (layout and separation)
+## 16. Implemented: several panels on one edge (layout and separation)
 
 Raised by Phil at Gate E of the core plan.
 
 **Today (core plan, as built).** Each panel positions itself independently: `edge` plus `pos`, the distance in pixels along the edge where the panel body starts; no `pos` means centred. Nothing arranges panels relative to each other and nothing detects overlap: two centred panels on one edge sit on top of each other, and side-by-side placement means hand-computing `pos` values. The default layout avoids this by using a different edge per panel.
+
+**Implemented (2026-10-13, plan `docs/superpowers/plans/2026-10-13-layout-anchoring.md`):** `shell/panel_layout.py` (`layout_edge`, `layout_monitor`) resolves every panel per edge from slots (start, center, end), `order` within a slot (ties keep config order) and one `gap` per monitor (`[layout]`, `[monitors.X.layout]`, default 8 px) measured between neighbouring joins, on top of `r1 + r2`. `pos` keeps its old meaning (pixels from the start of the edge) as a deprecated alias placed outside the slots; combining it with `align`/`offset` is a validation error whose message gives the conversion (`pos = N` = `align = "start"`, `offset = N - (T + R + r)`), and each config load logs one INFO line listing the entries still using it. The system bar's default moved from `pos = 600` to `align = "end"`, `offset = 142` (the same place as `pos = 600` only on a 1080 px tall monitor with edge right or left, length 300, depth >= 28 and the default thickness and radius; an entry overriding edge, length or depth without `pos`/`align`/`offset` moves, and each config load logs one INFO line listing such entries, with `pos = 600` as the way to keep the old place at 1080p). Gate B (live, 2026-10-13): no startup flash was visible with content panels, so the in-place resize stays unplanned; a resolution change (System Settings, HDMI-A-1 to 1280x720 and back) took the `notify::geometry` path (`re-laying out HDMI-A-1 for 1280x720`, then `for 1920x1080`, no shell reopen) and the collapsed handle dots survived it; a scale change is not verified. Overlaps hide the later panel (config order) with a notification. No `panel-move` change kind: moved panels are rebuilt; a `gap` change is a `relayout`.
+
+Resolver details settled in review: spacing is rounded up per neighbour pair; a `MIN_LENGTH` floor (60 px) applies after the `max_length` clamp; extra warnings `{name}: no room after its neighbours in the {align} slot; moved to {q}` and `{name}: no room to fill; shown at 60 px`. Inside a slot the gap is always honoured; between different slot groups (start, centre, end) that run out of room only `r1 + r2` (not the gap) is guaranteed. Two panels meeting at a shared screen corner collide at offset 0; the minimum offset is the other panel's depth + r - R (its depth for panels at least 28 px deep). Verified live on HDMI-A-1 (Gates A and B, both passed): layout, offsets, the corner rule (offset 0 hides the later panel with a "Panels adjusted" notification, offset 46 shows it), fill/content/percent lengths, and the resolution-change re-layout. Gate B `--stats 10` on `examples/layout-sizes-test.toml`: 56.8 fps while animating, damaged canvas draws median 0.30 / p95 0.58 / max 1.00 ms, one full draw 1.60 ms, CPU 0.21 of a core. Known limits: HiDPI is unsupported (one warning); a "content" panel hidden at its default length is never measured and stays hidden.
 
 **Requirements**
 
@@ -323,12 +330,12 @@ Raised by Phil at Gate E of the core plan.
 **Design implications (for the future plan)**
 
 - Config: panel entries gain `align` (default `center`) and optionally `order`; a per-edge/per-monitor `gap` setting; `pos` remains and wins when present.
-- Layout: a pure function `layout_edge(panels, extent, gap, radius) -> {panel: pos}` (no GTK) computes positions per edge, so it is unit-testable like the geometry; `EdgePanel` keeps taking a resolved `pos`.
+- Layout: a pure function (as built: `layout_edge` / `layout_monitor` in `shell/panel_layout.py`, no GTK) computes the positions per edge, so it is unit-testable like the geometry; `EdgePanel` takes a resolved `PanelGeometry`.
 - Reload: reordering or changing `align`/`gap` moves panels, which today means rebuilding the affected panels' windows (their surface margin changes); the diff gains a `panel-move` change kind if rebuild flicker proves annoying.
 - Handle placement (section 15) should be relative to the panel body, independent of the slot.
 - The settings window (section 13) exposes slot, order and gap, and shows the overlap warning.
 
-## 17. Planned: panel anchoring, sizing and corner behaviour
+## 17. Implemented: panel anchoring, sizing and corner behaviour
 
 Raised by Phil after Gate G of the core plan; the three choices below were decided with Phil. This extends section 16 and, with it, replaces today's `pos`-only placement.
 
@@ -345,19 +352,19 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
 1. **Anchoring: `align` + `offset`.** `align = start | center | end` and `offset` is the distance in pixels from **that** end (default 0). A bottom-right bar is `edge = "bottom"`, `align = "end"`, `offset = 0`. This subsumes `pos` (start-aligned offset) and composes with the slot/order/gap layout of section 16.
 2. **Sizing: `length` accepts a pixel number, `"fill"`, `"content"`, or a percentage** (e.g. `"50%"`), with optional `min_length` / `max_length`. `"fill"` spans the available span between the corner zones (minus gaps and neighbours); `"content"` wraps the widget's natural size; percentages are of the available span. Depth stays in pixels. Growth along the edge is from the anchored end toward the free side (an end-aligned panel grows toward the start).
 3. **Overflow and corners: clamp to the free span.**
-   - The **free span** of an edge is the monitor extent minus a corner clearance at each end (`T + R`, so panels never run into the rounded corner pieces).
+   - The **free span** of an edge is the monitor extent minus a corner clearance at each end (`T + R`, so panels never run into the rounded corner pieces; now `T + R + r`, see the Implemented note).
    - A requested length larger than the free span is **shrunk to fit**, with a log warning (and a notification on config reload); content that no longer fits is clipped. It is never a load-time error, so smaller or hot-plugged monitors keep working.
    - Offsets that would push a panel past the free span are clamped inward.
    - **Minimum geometry rules (found by the shape-canvas spike):** the single-outline renderer self-intersects (fills overlap, about 20-30 wrong pixels) when two curves collide. Two cases: (a) a panel whose concave fillet lands inside a screen-corner arc, so the **corner clearance is `pos - r >= T + R`** where `r = min(R, depth/2)` is the current join radius; (b) neighbouring panels on one edge whose fillets overlap, so the **minimum gap between adjacent panels is `r1 + r2`** (up to `2R` = 28 px at full depth). The layout resolver enforces both (clamping, with a warning); a panel exactly at the clearance renders correctly.
-   - **Interim implementation (2026-10-13):** `shell/panel_layout.py` clamps `pos` into the free span (`T + R + r` from each end, `r` at full depth), shrinks over-long panels, and hides a later panel whose grown body box overlaps an earlier one (minimum gap `r1 + r2` on one edge), with a notification. The full resolver replaces it.
+   - **Implemented (2026-10-13, layout plan):** the free span is `T + R + r` from each end; `length` takes px, `"fill"` (equal shares of what the neighbours, offsets and spacing leave), `"content"` (the content's natural size plus 12 px each side, measured once after build in an idle callback, the widget's default until then; a one-off startup rebuild of content panels, an in-place resize is planned only if a flash is observed) or a percentage of the free span, then `min_length`/`max_length` and a 60 px floor; too long is shrunk with a warning and the content is clipped (not scrolled) at the body edge and kept centred, never drawn over the joins and frame. `MonitorShell` re-lays out on the monitor's `notify::geometry` (debounced 250 ms; a zero geometry while unplugging is ignored), so centred, percentage and fill panels follow resolution changes. Two panels meeting at a shared screen corner collide at offset 0 (one needs an offset of at least the other's depth + r - R); a panel hidden by an overlap keeps its slot space; a re-layout the shell starts itself that fails is logged and rebuilds that monitor once, with a "Panels rebuilt" notification.
    - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), built later; they are the only panels that meet two edges.
 
 **Design implications (for the future plan)**
 
-- Pure layout module (`layout_edge(panels, extent, gap, radius, thickness) -> {panel: (offset, length)}`) resolving align/offset/length/fill/content/percent/min/max and the free span for each edge; no GTK, headless tests. `"content"` needs the widget's natural size, which comes from GTK, so the layout takes it as an input (measured once after build, re-measured on rebuild) and the pure function stays testable with fake sizes.
-- `anchor_and_margin` moves behind this resolver; `EdgePanel` receives a resolved offset and length.
+- Pure layout module (as built: `layout_edge` / `layout_monitor`, planned as `layout_edge(panels, extent, gap, radius, thickness) -> {panel: (offset, length)}`) resolving align/offset/length/fill/content/percent/min/max and the free span for each edge; no GTK, headless tests. `"content"` needs the widget's natural size, which comes from GTK, so the layout takes it as an input (measured once after build, re-measured on rebuild) and the pure function stays testable with fake sizes.
+- Done: `anchor_and_margin` takes the resolved start; `EdgePanel` receives a resolved `PanelGeometry` (pos and length in px).
 - Models: `PanelConfig` gains `align`, `offset`, `length: int | "fill" | "content" | str-percent`, `min_length`, `max_length`; `pos` is kept as a deprecated alias for start-aligned offset until removed.
-- The free span depends on the monitor extent, so geometry/scale changes (see README limitation) must trigger a re-layout; the same hook should handle that known gap.
+- The free span depends on the monitor extent, so geometry/scale changes must trigger a re-layout; the same hook should handle that known gap.
 - Tests: headless unit tests for the layout function (align/offset/fill/content/percent/min/max/clamping/corner clearance) plus a render test for a panel at the end of an edge next to the corner piece.
 
 ## 18. Planned: frame/panel border and shadow (drawing architecture)

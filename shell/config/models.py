@@ -18,6 +18,7 @@ from pydantic import (
 Edge = Literal["top", "bottom", "left", "right"]
 PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
+Align = Literal["start", "center", "end"]
 
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
@@ -138,25 +139,87 @@ ThemeOverride = _override_of(
 Length = Annotated[int, Field(ge=60, le=4000)]
 Depth = Annotated[int, Field(ge=16, le=2000)]
 Offset = Annotated[int, Field(ge=0, le=20000)]
+SignedOffset = Annotated[int, Field(ge=-20000, le=20000)]
+Order = Annotated[int, Field(ge=0, le=1000)]
+_PERCENT = re.compile(r"[0-9]{1,3}(\.[0-9]+)?%")
+
+
+def check_length(value: int | str) -> int | str:
+    """A panel length: px (60-4000), "fill" (the free span the neighbours leave), "content"
+    (the widget's natural size) or a percentage of the free span such as "50%" (spec 17)."""
+    if isinstance(value, int) and not isinstance(value, bool) and 60 <= value <= 4000:
+        return value
+    if value in ("fill", "content"):
+        return value
+    if isinstance(value, str) and _PERCENT.fullmatch(value) and 1 <= float(value[:-1]) <= 100:
+        return value
+    raise ValueError(
+        'must be a length in px (60-4000), "fill", "content" or a percentage from "1%" to "100%"'
+    )
+
+
+class LayoutSettings(_Strict):
+    """Per-monitor layout settings (spec 16). `gap` is the straight frame left between two
+    neighbouring panels' joins on one edge, ON TOP of the joins (r1 + r2), so any value keeps
+    the minimum gap the outline needs."""
+
+    gap: Annotated[int, Field(ge=0, le=400)] = 8
+
+
+LayoutOverride = _override_of("LayoutOverride", LayoutSettings)
 
 
 class PanelConfig(_Strict):
     widget: str
     edge: Edge | None = None
-    pos: Offset | Literal["center"] | None = None
-    length: Length | None = None
+    pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
+    align: Align | None = None
+    offset: SignedOffset | None = None
+    order: Order | None = None
+    length: int | str | None = None
+    min_length: Length | None = None
+    max_length: Length | None = None
     depth: Depth | None = None
     state: PanelState | None = None
+
+    @field_validator("length")
+    @classmethod
+    def _length(cls, value: int | str | None) -> int | str | None:
+        return None if value is None else check_length(value)
+
+    @model_validator(mode="after")
+    def _placement(self) -> PanelConfig:
+        if self.pos is not None and (self.align is not None or self.offset is not None):
+            advice = (
+                "drop pos; center is the default align (use offset to shift it)"
+                if self.pos == "center"
+                else 'pos = N is align = "start", offset = N - 38 at the default theme '
+                "(38 = thickness + radius + join radius; 32-38 depending on depth)"
+            )
+            raise ValueError(
+                f"pos cannot be combined with align or offset (pos is deprecated): {advice}"
+            )
+        if self.offset is not None and self.offset < 0 and (self.align or "center") != "center":
+            raise ValueError('a negative offset only works with align = "center"')
+        if (
+            self.min_length is not None
+            and self.max_length is not None
+            and self.min_length > self.max_length
+        ):
+            raise ValueError("min_length must not be larger than max_length")
+        return self
 
 
 class MonitorConfig(_Strict):
     shell: ShellMode = "plasma"
     theme: ThemeOverride = Field(default_factory=ThemeOverride)
+    layout: LayoutOverride = Field(default_factory=LayoutOverride)
     panels: list[PanelConfig] = Field(default_factory=list)
 
 
 class Config(_Strict):
     theme: Theme
+    layout: LayoutSettings = Field(default_factory=LayoutSettings)
     monitors: dict[str, MonitorConfig] = Field(default_factory=dict)
 
     def monitor(self, name: str) -> MonitorConfig:
@@ -166,14 +229,19 @@ class Config(_Strict):
         override = self.monitor(name).theme.model_dump(exclude_none=True)
         return Theme.model_validate(deep_merge(self.theme.model_dump(), override))
 
+    def layout_for(self, name: str) -> LayoutSettings:
+        override = self.monitor(name).layout.model_dump(exclude_none=True)
+        return LayoutSettings.model_validate({**self.layout.model_dump(), **override})
+
     @model_validator(mode="after")
     def _check_overrides(self) -> Config:
         for name in self.monitors:
-            try:
-                self.theme_for(name)
-            except ValidationError as exc:
-                detail = "; ".join(
-                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
-                )
-                raise ValueError(f"monitors.{name}.theme: {detail}") from None
+            for table, resolve in (("theme", self.theme_for), ("layout", self.layout_for)):
+                try:
+                    resolve(name)
+                except ValidationError as exc:
+                    detail = "; ".join(
+                        f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+                    )
+                    raise ValueError(f"monitors.{name}.{table}: {detail}") from None
         return self

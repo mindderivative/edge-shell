@@ -78,11 +78,10 @@ def input_rect(
 
 
 def anchor_and_margin(
-    edge: Edge, pos: int | None, along: int, radius: int, extent: int
+    edge: Edge, pos: int, along: int, radius: int, extent: int
 ) -> tuple[str, str]:
-    """Layer-shell anchor string and margin string. `pos=None` centers along the edge."""
-    if pos is None:
-        return edge, "0px 0px 0px 0px"
+    """Layer-shell anchor string and margin string for a panel surface whose body starts at the
+    resolved `pos` (shell.panel_layout), measured from the start of the edge."""
     offset = max(0, pos - radius)  # the body starts `radius` into the surface
     offset = min(offset, max(0, extent - along))  # keep the surface on screen
     if is_horizontal(edge):

@@ -28,7 +28,10 @@ class FakeArea:
 def stand_in(make_config, size=(400, 300), monitor_size=None):
     area = FakeArea()
     s = SimpleNamespace(area=area, _size_warned=False)
-    s._monitor_size = monitor_size or size
+    s.live = monitor_size or size  # the monitor's live geometry; tests may change it
+    s._monitor = SimpleNamespace(
+        get_geometry=lambda: SimpleNamespace(width=s.live[0], height=s.live[1])
+    )
     s._invalidate = lambda box: ShapeCanvas._invalidate(s, box)
     s._check_size = lambda: ShapeCanvas._check_size(s)
     s.painter = CanvasPainter(Scene(*size, 10, 14), style_for(make_config().theme), s._invalidate)
@@ -103,3 +106,29 @@ def test_canvas_window_setup():
         "keyboard_mode": "none",
         "pass_through": True,
     }
+
+
+def test_a_resolution_change_does_not_warn_once_the_allocation_matches(make_config, caplog):
+    s = stand_in(make_config, size=(1920, 1080))
+    s.live = (1280, 720)  # the monitor changed; the allocation has not arrived yet
+    ShapeCanvas._on_allocate(s, None, SimpleNamespace(width=1280, height=720))
+    ShapeCanvas._check_size(s)
+    assert caplog.text.count("panels may be misaligned") == 0
+
+
+def test_an_allocation_that_differs_from_the_live_monitor_warns_once(make_config, caplog):
+    s = stand_in(make_config, size=(1920, 1080))
+    s.live = (1280, 720)
+    ShapeCanvas._on_allocate(s, None, SimpleNamespace(width=1000, height=700))
+    ShapeCanvas._check_size(s)
+    ShapeCanvas._check_size(s)
+    assert caplog.text.count("panels may be misaligned") == 1
+
+
+def test_a_changed_allocation_rearms_the_size_warning(make_config):
+    s = stand_in(make_config, size=(1920, 1080))
+    s._size_warned = True
+    ShapeCanvas._on_allocate(s, None, SimpleNamespace(width=1920, height=1080))
+    assert s._size_warned is True  # same size: stays latched
+    ShapeCanvas._on_allocate(s, None, SimpleNamespace(width=1280, height=720))
+    assert s._size_warned is False

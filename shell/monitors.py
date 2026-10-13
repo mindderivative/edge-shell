@@ -14,6 +14,7 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gdk, GLib, GtkLayerShell
 
+from shell import geometry
 from shell.canvas.canvas import ShapeCanvas
 from shell.canvas.scene import PanelShape
 from shell.config.diff import Change
@@ -21,9 +22,9 @@ from shell.config.models import Config
 from shell.edge_panel import EdgePanel
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
-from shell.panel_layout import Layout, resolve_layout
-from shell.panel_spec import PanelGeometry
-from shell.registry import panels_for, widget_class
+from shell.panel_layout import Layout, layout_monitor
+from shell.panel_spec import PanelGeometry, PanelRequest
+from shell.registry import requests_for, widget_class
 from shell.theme import scope_class
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ log = logging.getLogger(__name__)
 # second raise is a safety net for a slow compositor; both are no-ops after close().
 RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
+# A resolution change arrives as several notify::geometry signals; re-layout once it settles.
+RELAYOUT_DELAY_MS = 250
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
@@ -102,11 +105,18 @@ class MonitorShell:
         config: Config,
         register_window,
         unregister_window=None,
+        on_layout=None,
+        on_error=None,
     ):
+        """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
+        measured, monitor geometry changed), so the app can report new layout warnings;
+        `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us)."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
         self._unregister = unregister_window or (lambda _window: None)
+        self._on_layout = on_layout or (lambda _shell: None)
+        self._on_error = on_error or (lambda _shell: None)
         self._scope = scope_class(name)
         self._closed = False
         self.windows: list = []
@@ -116,6 +126,17 @@ class MonitorShell:
         self._resolved: list[PanelGeometry | None] = []
         self.layout_warnings: list[str] = []
         self._keys = itertools.count()  # scene keys for the canvas
+        self._config = config
+        self._theme = config.theme_for(name)
+        self._requests: list[PanelRequest] = []  # of the last layout, config order
+        # Measured "content" lengths: index -> ((widget, horizontal), px). Kept across
+        # re-layouts; an entry only counts while the same widget sits at that index.
+        self._natural: dict[int, tuple[tuple[str, bool], int]] = {}
+        self._remeasure: set[int] = set()  # built since the last measurement (or restyled)
+        self._measure_id = 0  # pending idle measurement
+        self._relayout_id = 0  # pending geometry re-layout
+        self._scale_warned = False
+        self._monitor_handlers: list[int] = []
         try:
             self._build(config)
         except BaseException:
@@ -135,6 +156,7 @@ class MonitorShell:
         if self.live_panels():
             for delay in raise_delays():
                 GLib.timeout_add(delay, self._raise_panels)
+        self._monitor_handlers.append(monitor.connect("notify::geometry", self._on_geometry))
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -142,18 +164,35 @@ class MonitorShell:
     # ---- panels ---------------------------------------------------------------------------
     def _layout(self, config: Config, theme) -> Layout:
         g = self.monitor.get_geometry()
-        return resolve_layout(
-            panels_for(config, self.name),
+        self._requests = requests_for(config, self.name)
+        return layout_monitor(
+            self._requests,
             g.width,
             g.height,
             theme.thickness,
             theme.radius,
+            config.layout_for(self.name).gap,
+            self._measured(),
             where=f"monitors.{self.name}",
         )
 
+    def _measured(self) -> dict[int, int]:
+        """Measured natural lengths that still belong to the widget at each index."""
+        out = {}
+        for i, req in enumerate(self._requests):
+            got = self._natural.get(i)
+            if got is not None and got[0] == _measure_key(req):
+                out[i] = got[1]
+        return out
+
     def _sync_panels(self, config: Config, theme, startup: bool) -> None:
         """Make the panels match the resolved layout: rebuild a panel whose resolved geometry
-        changed (also when a neighbour's change moved or hid it), retarget a state change."""
+        changed (also when a neighbour's change moved or hid it), retarget a state change.
+        Does nothing while the monitor reports no size (being unplugged: the hot-plug sync
+        closes this shell), so no 0 px layout hides every panel."""
+        g = self.monitor.get_geometry()
+        if g.width <= 0 or g.height <= 0:
+            return
         layout = self._layout(config, theme)
         self.layout_warnings = list(layout.warnings)
         for message in layout.warnings:
@@ -179,8 +218,102 @@ class MonitorShell:
             elif old.state != geo.state:
                 panel.set_state(geo.state)
             self._resolved[i] = geo
+        self._schedule_measure()
+
+    # ---- "content" lengths ----------------------------------------------------------------
+    def _to_measure(self) -> list[int]:
+        """Live "content" panels built since the last measurement (or restyled), or without a
+        measurement for the widget now at their index. A "content" panel hidden at its default
+        length is never built, so it is never measured and stays hidden."""
+        known = self._measured()
+        return [
+            i
+            for i, (panel, req) in enumerate(zip(self.panels, self._requests, strict=True))
+            if panel is not None
+            and req.length == "content"
+            and (i in self._remeasure or i not in known)
+        ]
+
+    def _schedule_measure(self) -> None:
+        """Measure "content" panels when the main loop is next idle: by then the app's
+        stylesheet is applied (EdgeShellApp.run sets it after building the shells), so fonts
+        have their real size. Only new, restyled or unmeasured panels are measured; an
+        unchanged size changes nothing."""
+        if self._measure_id or self._closed:
+            return
+        if self._to_measure():
+            self._measure_id = GLib.idle_add(self._measure)
+
+    def _measure(self) -> bool:
+        self._measure_id = 0
+        if self._closed:
+            return False
+        try:
+            todo = self._to_measure()
+            self._remeasure.clear()
+            changed = False
+            for i in todo:
+                entry = (_measure_key(self._requests[i]), self.panels[i].natural_length())
+                if self._natural.get(i) != entry:
+                    self._natural[i] = entry
+                    changed = True
+            if changed:
+                self._sync_panels(self._config, self._theme, startup=False)
+            # always: the app skips its own report while a measurement is pending
+            self._on_layout(self)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("measuring the content panels of %s failed", self.name)
+            try:
+                self._on_error(self)
+            except Exception:
+                log.exception("handling the measurement failure of %s failed", self.name)
+        return False
+
+    # ---- monitor geometry -----------------------------------------------------------------
+    def _on_geometry(self, *_args) -> None:
+        """The monitor's resolution (or position) changed: re-layout once it settles."""
+        if self._closed:
+            return
+        if self._relayout_id:
+            GLib.source_remove(self._relayout_id)
+        self._relayout_id = GLib.timeout_add(RELAYOUT_DELAY_MS, self._relayout)
+
+    def _relayout(self) -> bool:
+        self._relayout_id = 0
+        if self._closed:
+            return False
+        try:
+            g = self.monitor.get_geometry()
+            if g.width <= 0 or g.height <= 0:  # being unplugged: the hot-plug sync closes us
+                log.debug("ignoring %dx%d geometry of %s", g.width, g.height, self.name)
+                return False
+            log.info("re-laying out %s for %dx%d", self.name, g.width, g.height)
+            if self.monitor.get_scale_factor() != 1 and not self._scale_warned:
+                self._scale_warned = True
+                log.warning(
+                    "scale %d is not supported yet: %s is laid out at scale 1",
+                    self.monitor.get_scale_factor(),
+                    self.name,
+                )
+            self._sync_panels(self._config, self._theme, startup=False)
+            if not self.measure_pending:  # else the measurement reports afterwards
+                self._on_layout(self)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("re-laying out %s after a geometry change failed", self.name)
+            try:
+                self._on_error(self)
+            except Exception:
+                log.exception("handling the re-layout failure of %s failed", self.name)
+        return False
+
+    @property
+    def measure_pending(self) -> bool:
+        """True while a "content" measurement is queued: lengths are still provisional and
+        on_layout will fire after it."""
+        return bool(self._measure_id)
 
     def _new_panel(self, index: int, geo: PanelGeometry, theme, raise_later: bool) -> EdgePanel:
+        self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
         self.canvas.add_panel(key, PanelShape(geo.edge, geo.pos, geo.length, geo.depth))
         try:
@@ -258,18 +391,35 @@ class MonitorShell:
         """Apply a reload in place: restyle the canvas and panels, then reconcile the panels
         against the newly resolved layout (the diff's panel kinds only say that it changed)."""
         theme = config.theme_for(self.name)
+        self._config, self._theme = config, theme
         if any(change.kind == "restyle" for change in changes):
             self.canvas.set_theme(theme)
             for strip in self.strips:  # the border width changes what the strips reserve
                 strip.apply_theme(theme)
             for panel in self.live_panels():
                 panel.apply_theme(theme)
+            self._remeasure.update(range(len(self.panels)))  # fonts may have changed
         self._sync_panels(config, theme, startup=False)
 
     def close(self) -> None:
         self._closed = True
+        for source in (self._measure_id, self._relayout_id):
+            if source:
+                GLib.source_remove(source)
+        self._measure_id = self._relayout_id = 0
+        for handler in self._monitor_handlers:
+            try:
+                self.monitor.disconnect(handler)
+            except Exception:  # the monitor may be gone already (unplugged)
+                log.debug("could not disconnect from %s", self.name, exc_info=True)
+        self._monitor_handlers.clear()
         for window in self.windows:
             self._release(window)
         self.windows.clear()
         self.panels.clear()
         self._resolved.clear()
+
+
+def _measure_key(req: PanelRequest) -> tuple[str, bool]:
+    """A measurement belongs to a widget at an orientation (along a horizontal edge or not)."""
+    return req.widget, geometry.is_horizontal(req.edge)

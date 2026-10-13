@@ -1,0 +1,31 @@
+# Gate B (layout plan): fill, content and percentage lengths, on HDMI-A-1 only.
+#   cp examples/layout-sizes-test.toml /tmp/edge-sizes.toml
+#   scripts/py main.py --config /tmp/edge-sizes.toml -v       (edit the copy while it runs)
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: bottom, fills the span between the two clocks
+widget = "dock"
+length = "fill"
+
+[[monitors.HDMI-A-1.panels]]    # 1: bottom-left, as long as its content
+widget = "clock"
+edge = "bottom"
+align = "start"
+length = "content"
+
+[[monitors.HDMI-A-1.panels]]    # 2: bottom-right, as long as its content
+widget = "clock"
+edge = "bottom"
+align = "end"
+length = "content"
+
+[[monitors.HDMI-A-1.panels]]    # 3: top, half of the free span but at most 700 px
+widget = "clock"
+length = "50%"
+max_length = 700
+
+[[monitors.HDMI-A-1.panels]]    # 4: right, as long as its content, centred
+widget = "system_bar"
+align = "center"
+length = "content"

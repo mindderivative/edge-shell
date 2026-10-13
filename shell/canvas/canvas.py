@@ -53,7 +53,7 @@ class ShapeCanvas(WaylandWindow):
         )
         # "none" alone is zone 0, which makes KWin shift us clear of other zones; -1 = cover all.
         GtkLayerShell.set_exclusive_zone(self, -1)
-        self._monitor_size = (geo.width, geo.height)
+        self._monitor = monitor  # read live by _check_size
         self._size_warned = False
         self.area = Gtk.DrawingArea()
         self.add(self.area)
@@ -85,6 +85,9 @@ class ShapeCanvas(WaylandWindow):
             self.area.queue_draw_area(*box_to_rect(box))
 
     def _on_allocate(self, _area, alloc) -> None:
+        scene = self.painter.scene
+        if (alloc.width, alloc.height) != (scene.width, scene.height):
+            self._size_warned = False  # a new size: check it against the monitor again
         self.painter.resize(alloc.width, alloc.height)
 
     def _on_draw(self, _area, cr) -> bool:
@@ -98,10 +101,12 @@ class ShapeCanvas(WaylandWindow):
 
     def _check_size(self) -> None:
         size = (self.painter.scene.width, self.painter.scene.height)
-        if size != self._monitor_size and not self._size_warned:
+        g = self._monitor.get_geometry()  # live: the stored size would lag a resolution change
+        if size != (g.width, g.height) and not self._size_warned:
             self._size_warned = True
             log.warning(
                 "shape canvas is %dx%d but the monitor is %dx%d: panels may be misaligned",
                 *size,
-                *self._monitor_size,
+                g.width,
+                g.height,
             )

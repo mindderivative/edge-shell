@@ -29,3 +29,9 @@ color = "#8fd3b6ff"     # #rrggbb or #rrggbbaa (the alpha makes it translucent)
 enabled = false
 elevation = 50          # 0-100 %; 100 % reaches 48 px
 color = "#00000080"     # #rrggbb or #rrggbbaa; the alpha is the shadow's strength
+
+# Panel layout (spec 16-17). `gap` is the straight piece of frame left between two neighbouring
+# panels on one edge, on top of their curved joins (so any value keeps the minimum the outline
+# needs). Per monitor: [monitors.NAME.layout].
+[layout]
+gap = 8

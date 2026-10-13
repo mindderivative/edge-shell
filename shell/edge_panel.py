@@ -22,10 +22,44 @@ from shell import geometry, panel_state
 from shell.anim import Tween
 from shell.config.models import Theme
 from shell.gdk_util import monitor_index
+from shell.panel_layout import content_length
 from shell.panel_spec import PanelGeometry
 
 HANDLE_DEPTH = 14  # handle size across the depth axis
 HANDLE_LENGTH = 44  # handle size along the edge
+
+
+def _centre_view(adjustment) -> None:
+    """Keep clipped content centred: equal parts cut off at both ends of the body."""
+    adjustment.set_value(
+        (adjustment.get_lower() + adjustment.get_upper() - adjustment.get_page_size()) / 2
+    )
+
+
+def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+    """Show `child` at its natural size, centred, and clip it at the body edge. The layer
+    surface cannot grow either way (Gtk.Overlay never measures its overlay children); without
+    this, content longer than a shrunk body (spec 17: shrink to fit, max_length, a small
+    percentage) would draw over the joins and the frame. No scrollbars, and wheel events never
+    scroll the clipped content. The cross axis is clipped and centred too: content deeper than
+    the body depth is cut, not overflowing."""
+    clip = Gtk.ScrolledWindow(
+        name="panel-clip",
+        hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+        vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+    )
+    clip.set_hexpand(True)
+    clip.set_vexpand(True)
+    clip.add(child)
+    clip.set_can_focus(False)
+    clip.set_kinetic_scrolling(False)
+    for adjustment in (clip.get_hadjustment(), clip.get_vadjustment()):
+        adjustment.connect("changed", _centre_view)  # the viewport re-configures on allocate
+        # Any other scroll source snaps back too; set_value with an unchanged value emits
+        # nothing, so this cannot recurse.
+        adjustment.connect("value-changed", _centre_view)
+    clip.connect("scroll-event", lambda *_args: True)  # stop before the class handler scrolls
+    return clip
 
 
 class EdgePanel(WaylandWindow):
@@ -42,8 +76,9 @@ class EdgePanel(WaylandWindow):
         scope: str,
         on_depth: Callable[[float], None] | None = None,
     ):
-        """`spec.pos` must be resolved (shell.panel_layout); `on_depth(d)` is called on every
-        animation frame with the current depth (MonitorShell forwards it to the canvas)."""
+        """`spec` is resolved by shell.panel_layout (exact pos and length in px); `on_depth(d)`
+        is called on every animation frame with the current depth (MonitorShell forwards it to
+        the canvas)."""
         t, r = theme.thickness, theme.radius
         mon = monitor.get_geometry()
         extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
@@ -86,7 +121,8 @@ class EdgePanel(WaylandWindow):
         inner.set_vexpand(True)
         inner.set_halign(Gtk.Align.CENTER)
         inner.set_valign(Gtk.Align.CENTER)
-        self._content = Box(name="panel-content", children=[inner])
+        self._inner = inner
+        self._content = Box(name="panel-content", children=[clip_container(inner)])
         self._handle = self._build_handle()
         # Transparent base: the body is painted by the shape canvas underneath this window.
         self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
@@ -130,6 +166,15 @@ class EdgePanel(WaylandWindow):
         if hasattr(self, "_theme") and hasattr(self, "_d"):
             self._last_rect = None
             self._update_input_region(self._d)
+
+    def natural_length(self) -> int:
+        """The body length the content needs along the edge (natural size plus padding): the
+        measured input of a `length = "content"` panel (MonitorShell._measure)."""
+        if geometry.is_horizontal(self.spec.edge):
+            _minimum, natural = self._inner.get_preferred_width()
+        else:
+            _minimum, natural = self._inner.get_preferred_height()
+        return content_length(natural)
 
     def raise_to_top(self) -> None:
         """Re-map the window so the compositor stacks it above the shape canvas.

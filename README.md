@@ -8,6 +8,7 @@ alongside Plasma and does not replace it.
 - [Design spec](docs/superpowers/specs/2026-10-11-edge-shell-design.md)
 - [Implementation plan](docs/superpowers/plans/2026-10-11-edge-shell-core.md)
 - [Shape canvas plan](docs/superpowers/plans/2026-10-13-shape-canvas-and-effects.md)
+- [Layout and anchoring plan](docs/superpowers/plans/2026-10-13-layout-anchoring.md)
 
 **Status:** early development.
 
@@ -20,6 +21,7 @@ alongside Plasma and does not replace it.
 - Optional outer border and soft uniform shadow (`[theme.border]`, `[theme.shadow]`),
   live-reloadable and overridable per monitor.
 - Panels: `dock` (bottom), `clock` (top), `system_bar` (right).
+- Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
 - Monitor hot-plug, and per-monitor theme overrides scoped to that monitor.
@@ -41,6 +43,8 @@ scripts/py main.py --config examples/hdmi-test.toml -v     # frame only, on HDMI
 scripts/py main.py --config examples/dock-test.toml -v     # frame + dock
 scripts/py main.py --config examples/panels-test.toml -v   # frame + dock, clock, system bar
 scripts/py main.py --config examples/effects-test.toml -v  # with border and shadow
+scripts/py main.py --config examples/layout-test.toml -v        # several panels per edge
+scripts/py main.py --config examples/layout-sizes-test.toml -v  # fill, content, percent
 scripts/py main.py --config examples/panels-test.toml --stats 10  # 10 s measurement, then quit
 ```
 
@@ -62,8 +66,50 @@ accent = "#d3a68f"        # overrides the global theme for this monitor only
 
 [[monitors.HDMI-A-1.panels]]
 widget = "dock"           # dock | clock | system_bar
-depth = 80                # edge, pos, length, depth, state override the widget's defaults
+depth = 80                # edge, length, depth, state, align, offset, order override the defaults
 ```
+
+Panels are placed per edge in three slots and sized in one of four ways:
+
+```toml
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+edge = "bottom"
+align = "end"             # start | center (default) | end of the edge
+offset = 0                # px from that end (centre: shifts the centre group); for a later panel in the slot: extra space before it
+order = 0                 # order within the slot; equal orders keep the config order
+length = "content"        # px, "fill", "content" or a percentage such as "50%"
+min_length = 100          # optional bounds, for every length mode
+max_length = 600
+
+[monitors.HDMI-A-1.layout]
+gap = 8                   # straight frame between neighbouring panels, on top of their joins
+```
+
+Each edge's free span stops `thickness + radius + join radius` (38 px by default) short of
+each screen corner. A panel that does not fit is shrunk (its content is clipped at the body
+edge, centred), one that would overlap an earlier panel is hidden and keeps its place in the
+slot (its neighbours do not close up); both send a "Panels adjusted" notification. A negative
+`offset` only works on the first centred panel of an edge (it shifts the group towards the
+start); on a later centred panel it counts as 0. Two panels that meet at a shared screen
+corner (an `align = "end"` bottom panel and an `align = "end"` right panel, or `"start"` on
+the top and the left edge) always collide at offset 0: give one of them an `offset` of at
+least the other panel's depth (exactly `depth + r - radius`, which is the depth for any panel
+at least 28 px deep). "content" panels are measured after they are built.
+
+`pos` (pixels from the start of the edge) still works but is deprecated: it cannot be combined
+with `align` or `offset`, and every config load or reload logs one line listing the entries
+that use it. A lone `pos = N` equals `align = "start"`, `offset = N - 38` at the default theme
+(38 = `thickness + radius + join radius`; 32-38 px depending on the panel's depth). The system
+bar's own default moved from `pos = 600` to `align = "end"`, `offset = 142`. That is the same
+place as `pos = 600` only on a 1080 px tall monitor with `edge` right (or left), `length` 300,
+`depth` of at least 28 and the default thickness and radius (y = 600). An entry that overrides
+`edge`, `length` or `depth` without `pos`/`align`/`offset` now moves (at 1080p: `edge = "top"`
+moves x from 600 to about 1440, `length = 524` moves y from 518 to 376, `depth = 20` gives 604,
+`thickness = 20` gives 590); add `pos = 600` to keep the old place at 1080p. Each config load
+logs one INFO line listing such entries. On other monitors the bar sits 142 px from the end of
+the free span (y = 960 at 1440 px, y = 240 at 720 px, where `pos = 600` gave 600 and, clamped,
+382).
 
 Colours are `#rrggbb` or `#rrggbbaa`. Border and shadow are off unless enabled:
 
@@ -92,6 +138,7 @@ frame strips reserve thickness plus border width while the border is enabled.
 scripts/py -m pytest -q                            # display-free tests
 scripts/py -m ruff format . && scripts/py -m ruff check .
 scripts/py -m shell.canvas.simulate --elevation 50 --border 2   # headless canvas benchmark
+scripts/py -m shell.canvas.simulate --config examples/layout-test.toml   # a config's layout, headless
 ```
 
 `EDGE_SHELL_RAISE_MS=0` disables the startup re-raise of panels (debug switch only; the
@@ -107,17 +154,20 @@ that need `gi` or Fabric skip themselves there.
 
 - Plasma integration (workspaces panel, tray host, hiding Plasma's panel) is not built yet.
 - A settings window is not built yet.
-- Several panels on one edge are not auto-arranged (use `edge` + `pos`). A panel too close
-  to a screen corner is moved, one that overlaps an earlier panel (or leaves less than the
-  minimum gap between their joins) is hidden; both send a notification. Planned: spec 16-17.
+- Moving a panel (a layout change on reload or a resolution change) rebuilds its window; there
+  is no in-place move yet. "content" panels are built twice at startup (default length, then
+  measured); no startup flash was visible with content panels at Gate B, so an in-place resize stays
+  unplanned. A "content" panel that is hidden at its default length is never measured and stays
+  hidden.
 - Handle customization (shape, color, size, position) and per-interaction opt-in/out
   (click, hover, drag) are planned, see spec section 15.
 - Panel startup includes a brief re-raise (`raise_to_top`) about half a second after launch.
   Live testing showed it is still needed: without it the collapsed handle dots are hidden
   behind the canvas. `EDGE_SHELL_RAISE_MS=0` turns it off for debugging.
-- Changing a connected monitor's resolution or scale does not reflow panels: neither those
-  with an explicit `pos` nor, since the shape canvas, centred ones (every position is
-  resolved once, when the panel is built). Restart the shell or save a change to the config. Planned fix.
+- One layout gap per monitor (no per-edge gap). Resolution changes re-lay out panels (verified live on
+  HDMI-A-1: 1920x1080 to 1280x720 and back, via `notify::geometry`, with no shell reopen and the
+  collapsed handle dots intact); a scale change is not verified, and HiDPI drawing is not
+  supported yet (see below).
 - The frame band is click-through: clicks on the frame reach the desktop.
 - HiDPI / fractional scaling: the canvas assumes scale 1 (it logs a warning otherwise).
 - `--stats` mixes scene keys across monitors when two or more monitors are configured.

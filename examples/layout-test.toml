@@ -1,0 +1,31 @@
+# Gate A (layout plan): several panels per edge, on HDMI-A-1 only (DP-1 is left alone).
+#   cp examples/layout-test.toml /tmp/edge-layout.toml
+#   scripts/py main.py --config /tmp/edge-layout.toml -v      (edit the copy while it runs)
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: centre of the bottom edge (the dock's default)
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]    # 1: bottom-left, next to the corner
+widget = "clock"
+edge = "bottom"
+align = "start"
+
+[[monitors.HDMI-A-1.panels]]    # 2: bottom-right, next to the corner
+widget = "clock"
+edge = "bottom"
+align = "end"
+
+[[monitors.HDMI-A-1.panels]]    # 3: top centre slot, second (order 1)
+widget = "clock"
+order = 1
+
+[[monitors.HDMI-A-1.panels]]    # 4: top centre slot, first (order 0), shorter
+widget = "clock"
+length = 120
+
+[[monitors.HDMI-A-1.panels]]    # 5: right edge, 60 px up from the bottom end
+widget = "system_bar"
+align = "end"
+offset = 60

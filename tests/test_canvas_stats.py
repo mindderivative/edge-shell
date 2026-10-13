@@ -71,13 +71,18 @@ def test_simulation_draws_once_per_tick(make_config):
 
 @pytest.mark.parametrize("size", [(1920, 1080), (640, 400)])
 def test_default_shapes_fit_the_simulated_surface(size):
-    from shell.panel_layout import resolve_layout
-    from shell.panel_spec import PanelGeometry
+    from shell.panel_layout import layout_monitor
+    from shell.panel_spec import PanelRequest
 
     w, h = size
     shapes = default_shapes(w, h)
-    geos = [PanelGeometry("p", s.edge, s.pos, s.length, s.depth, "extended", "p") for s in shapes]
-    layout = resolve_layout(geos, w, h, 10, 14)
+    requests = [
+        PanelRequest(
+            "p", s.edge, "start", 0, s.pos, 0, s.length, None, None, s.depth, "extended", "p", 60
+        )
+        for s in shapes
+    ]
+    layout = layout_monitor(requests, w, h, 10, 14, 8)
     assert layout.warnings == []  # nothing clamped, shrunk or hidden
     assert [(p.pos, p.length) for p in layout.panels] == [(s.pos, s.length) for s in shapes]
     if size == (1920, 1080):  # the registered widget defaults
@@ -97,3 +102,60 @@ def test_cli_rejects_bad_input(argv):
     with pytest.raises(SystemExit) as exc:
         main(argv)
     assert exc.value.code == 2
+
+
+def test_config_shapes_lays_out_the_monitors_panels(fake_registry, make_config):
+    from shell.canvas.simulate import config_shapes
+
+    cfg = make_config(
+        monitors={
+            "HDMI-A-1": {
+                "shell": "edge",
+                "panels": [
+                    {"widget": "dock", "align": "end"},
+                    {"widget": "dock", "pos": 1300},  # dropped onto the first: not shown
+                ],
+            }
+        }
+    )
+    shapes, warnings = config_shapes(cfg, "HDMI-A-1", 1920, 1080)
+    assert [(s.edge, s.pos, s.length, s.depth) for s in shapes] == [("bottom", 1322, 560, 64)]
+    assert warnings[0].startswith("monitors.HDMI-A-1.panels.1 (dock): overlaps")
+
+
+def test_cli_simulates_a_config(tmp_path, capsys):
+    pytest.importorskip("gi")
+    pytest.importorskip("fabric")
+    path = tmp_path / "layout.toml"
+    path.write_text(
+        '[theme.shadow]\nenabled = true\n[monitors.HDMI-A-1]\nshell = "edge"\n'
+        '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\nalign = "end"\n'
+        '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\nlength = "fill"\n'
+    )
+    assert main(["--config", str(path), "--frames", "20", "--size", "1280x720"]) == 0
+    out = capsys.readouterr().out
+    assert "panel 1:" in out and "panel 2:" not in out  # exactly the two configured panels
+    assert "simulated 20 frames at 1280x720" in out and "layout:" not in out
+
+
+def test_cli_reports_a_bad_config(tmp_path):
+    pytest.importorskip("gi")
+    pytest.importorskip("fabric")
+    path = tmp_path / "bad.toml"
+    path.write_text('[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\nlength = "half"\n')
+    with pytest.raises(SystemExit) as exc:
+        main(["--config", str(path), "--frames", "1"])
+    assert exc.value.code == 2
+
+
+def test_cli_reports_an_unknown_widget(tmp_path, capsys):
+    pytest.importorskip("gi")
+    pytest.importorskip("fabric")
+    path = tmp_path / "unknown.toml"
+    path.write_text(
+        '[monitors.HDMI-A-1]\nshell = "edge"\n[[monitors.HDMI-A-1.panels]]\nwidget = "nope"\n'
+    )
+    with pytest.raises(SystemExit) as exc:  # a usage error, not a traceback
+        main(["--config", str(path), "--frames", "1"])
+    assert exc.value.code == 2
+    assert "unknown widget 'nope'" in capsys.readouterr().err

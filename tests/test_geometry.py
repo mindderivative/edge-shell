@@ -68,10 +68,6 @@ def test_input_rect_grows_collapsed_hover_zone():
     assert g.input_rect("bottom", L, 10, 0, T, R, 16) == g.body_rect("bottom", L, 10, 10, T, R)
 
 
-def test_anchor_centered_has_single_edge_and_no_margin():
-    assert g.anchor_and_margin("bottom", None, 588, R, 1920) == ("bottom", "0px 0px 0px 0px")
-
-
 @pytest.mark.parametrize(
     ("edge", "pos", "expected"),
     [

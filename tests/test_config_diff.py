@@ -1,4 +1,6 @@
 # tests/test_config_diff.py
+import pytest
+
 from shell.config.diff import Change, diff_configs
 
 
@@ -76,3 +78,37 @@ def test_non_edge_monitor_panel_changes_ignored(fake_registry, make_config):
     old = make_config(monitors={"DP-1": mon("plasma", panels=[{"widget": "dock"}])})
     new = make_config(monitors={"DP-1": mon("plasma", panels=[{"widget": "clock"}])})
     assert diff_configs(old, new) == []
+
+
+def test_gap_change_relayouts_without_touching_panels(fake_registry, make_config):
+    def cfg(gap):
+        return make_config(
+            monitors={"HDMI-A-1": {**mon(panels=[{"widget": "dock"}]), "layout": {"gap": gap}}}
+        )
+
+    assert diff_configs(cfg(8), cfg(20)) == [Change("relayout", "HDMI-A-1")]
+
+
+def test_global_gap_change_relayouts_every_edge_monitor(fake_registry, make_config):
+    monitors = {"HDMI-A-1": mon(), "DP-1": mon("plasma")}
+    old = make_config(monitors=monitors)
+    new = make_config(monitors=monitors)
+    new = new.model_copy(update={"layout": new.layout.model_copy(update={"gap": 30})})
+    assert diff_configs(old, new) == [Change("relayout", "HDMI-A-1")]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"align": "end"},
+        {"offset": 30},
+        {"order": 2},
+        {"length": "fill"},
+        {"min_length": 100},
+        {"max_length": 900},
+    ],
+)
+def test_placement_and_length_changes_rebuild_that_panel(fake_registry, make_config, entry):
+    old = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    new = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", **entry}])})
+    assert diff_configs(old, new) == [Change("panel-rebuild", "HDMI-A-1", 0)]
