@@ -50,10 +50,6 @@ class FakeCanvas(FakeWindow):
         super().__init__(*args, **kwargs)
         self.shapes = {}
         self.depths = []
-        self.monitor_sizes = []
-
-    def set_monitor_size(self, width, height):
-        self.monitor_sizes.append((width, height))
 
     def set_theme(self, theme):
         self.themes.append(theme)
@@ -73,7 +69,9 @@ class FakeMonitor:
 
     def __init__(self, width=1920, height=1080):
         self.width, self.height = width, height
+        self.scale = 1
         self.handlers = {}
+        self.disconnect_raises = False
 
     def get_geometry(self):
         return SimpleNamespace(x=0, y=0, width=self.width, height=self.height)
@@ -82,7 +80,12 @@ class FakeMonitor:
         self.handlers[len(self.handlers) + 1] = (signal, fn)
         return len(self.handlers)
 
+    def get_scale_factor(self):
+        return self.scale
+
     def disconnect(self, handler):
+        if self.disconnect_raises:
+            raise RuntimeError("monitor gone")
         del self.handlers[handler]
 
 
@@ -577,17 +580,54 @@ def test_a_resolution_change_relayouts_once_it_settles(build):
     assert len(relayouts) == 2 and len(shell.test_removed) == 1
     assert relayouts[-1][1]() is False
     assert dock.destroyed and shell.panels[0].args[0].pos == (1280 - 560) // 2  # re-centred
-    assert shell.canvas.monitor_sizes == [(1280, 720)] and reports == [shell]
+    assert reports == [shell]
+
+
+def test_a_relayout_is_logged(build, caplog):
+    caplog.set_level("DEBUG")
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    ((_, handler),) = monitor.handlers.values()
+    monitor.width, monitor.height = 1280, 720
+    handler(monitor, None)
+    timers[-1][1]()
+    assert "re-laying out HDMI-A-1 for 1280x720" in caplog.text
 
 
 def test_close_disconnects_from_the_monitor(build):
     monitor = FakeMonitor()
     shell, _, _ = build(edge({"widget": "dock"}), monitor=monitor)
+    assert len(monitor.handlers) == 1
     shell.close()
     assert monitor.handlers == {}
 
 
-def test_a_zero_geometry_is_ignored(build):
+def test_close_cancels_a_pending_relayout(build):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    dock = shell.panels[0]
+    ((_, handler),) = monitor.handlers.values()
+    monitor.width, monitor.height = 1280, 720
+    handler(monitor, None)
+    timer_id = len(timers)
+    pending = timers[-1][1]
+    shell.close()
+    assert timer_id in shell.test_removed
+    assert pending() is False
+    assert shell.panels == [] and reports == [] and dock.destroyed
+
+
+def test_close_destroys_every_window_even_if_the_monitor_disconnect_raises(build):
+    monitor = FakeMonitor()
+    shell, tracked, _ = build(edge({"widget": "dock"}), monitor=monitor)
+    monitor.disconnect_raises = True
+    shell.close()
+    assert tracked and all(w.destroyed for w in tracked)
+
+
+def test_a_zero_geometry_is_ignored(build, caplog):
+    caplog.set_level("DEBUG")
     reports = []
     monitor = FakeMonitor()
     shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
@@ -597,7 +637,8 @@ def test_a_zero_geometry_is_ignored(build):
     handler(monitor, None)
     assert timers[-1][0] == mon_mod.RELAYOUT_DELAY_MS and timers[-1][1]() is False
     assert shell.panels[0] is dock and not dock.destroyed  # no 0 px layout, no warnings
-    assert shell.layout_warnings == [] and reports == [] and shell.canvas.monitor_sizes == []
+    assert shell.layout_warnings == [] and reports == []
+    assert "ignoring 0x0 geometry of HDMI-A-1" in caplog.text
 
 
 def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
@@ -620,3 +661,73 @@ def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
     assert timers[-1][1]() is False  # never raises into the main loop
     assert errors == [shell] and reports == []
     assert "widget broke" in caplog.text
+
+
+def _resize(monitor, handler, timers, width, height):
+    monitor.width, monitor.height = width, height
+    handler(monitor, None)
+    return timers[-1][1]
+
+
+def test_shrinking_hides_a_panel_and_growing_brings_it_back(build):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, timers = build(
+        edge({"widget": "dock"}, {"widget": "dock", "pos": 1300}),
+        monitor=monitor,
+        on_layout=reports.append,
+    )
+    ((_, handler),) = monitor.handlers.values()
+    first = shell.panels[1]
+    assert first is not None and shell.layout_warnings == []
+    _resize(monitor, handler, timers, 1000, 700)()
+    assert shell.panels[1] is None and first.destroyed
+    assert shell.layout_warnings and len(reports) == 1
+    _resize(monitor, handler, timers, 1920, 1080)()
+    assert shell.panels[1] is not None and shell.panels[1] is not first
+    assert shell.layout_warnings == [] and reports == [shell, shell]
+
+
+def test_a_start_aligned_panel_is_not_rebuilt_by_a_resize(build):
+    monitor = FakeMonitor()
+    shell, _, timers = build(
+        edge({"widget": "dock", "edge": "top", "align": "start", "length": 400}),
+        monitor=monitor,
+    )
+    ((_, handler),) = monitor.handlers.values()
+    panel = shell.panels[0]
+    _resize(monitor, handler, timers, 1280, 720)()
+    assert shell.panels[0] is panel and not panel.destroyed
+
+
+def test_a_resize_during_a_measurement_does_not_report_before_it(build):
+    reports = []
+    monitor = FakeMonitor()
+    shell, _, timers = build(
+        edge({"widget": "dock", "length": "content"}), monitor=monitor, on_layout=reports.append
+    )
+    ((_, handler),) = monitor.handlers.values()
+    assert shell.measure_pending
+    _resize(monitor, handler, timers, 1280, 720)()
+    assert reports == []  # the pending measurement reports afterwards
+    shell.test_idles[-1]()
+    assert reports == [shell]
+
+
+def test_a_scaled_monitor_warns_once_per_shell(build, caplog):
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    ((_, handler),) = monitor.handlers.values()
+    monitor.scale = 2
+    _resize(monitor, handler, timers, 1280, 720)()
+    _resize(monitor, handler, timers, 1024, 768)()
+    assert caplog.text.count("scale 2 is not supported") == 1
+
+
+def test_a_geometry_signal_on_a_closed_shell_is_ignored(build):
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    before = len(timers)
+    shell._closed = True
+    shell._on_geometry()
+    assert len(timers) == before

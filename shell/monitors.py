@@ -135,6 +135,7 @@ class MonitorShell:
         self._remeasure: set[int] = set()  # built since the last measurement (or restyled)
         self._measure_id = 0  # pending idle measurement
         self._relayout_id = 0  # pending geometry re-layout
+        self._scale_warned = False
         self._monitor_handlers: list[int] = []
         try:
             self._build(config)
@@ -266,6 +267,8 @@ class MonitorShell:
     # ---- monitor geometry -----------------------------------------------------------------
     def _on_geometry(self, *_args) -> None:
         """The monitor's resolution (or position) changed: re-layout once it settles."""
+        if self._closed:
+            return
         if self._relayout_id:
             GLib.source_remove(self._relayout_id)
         self._relayout_id = GLib.timeout_add(RELAYOUT_DELAY_MS, self._relayout)
@@ -277,10 +280,19 @@ class MonitorShell:
         try:
             g = self.monitor.get_geometry()
             if g.width <= 0 or g.height <= 0:  # being unplugged: the hot-plug sync closes us
+                log.debug("ignoring %dx%d geometry of %s", g.width, g.height, self.name)
                 return False
-            self.canvas.set_monitor_size(g.width, g.height)
+            log.info("re-laying out %s for %dx%d", self.name, g.width, g.height)
+            if self.monitor.get_scale_factor() != 1 and not self._scale_warned:
+                self._scale_warned = True
+                log.warning(
+                    "scale %d is not supported yet: %s is laid out at scale 1",
+                    self.monitor.get_scale_factor(),
+                    self.name,
+                )
             self._sync_panels(self._config, self._theme, startup=False)
-            self._on_layout(self)
+            if not self.measure_pending:  # else the measurement reports afterwards
+                self._on_layout(self)
         except Exception:  # a GLib callback: never raise into the main loop (decision 11)
             log.exception("re-laying out %s after a geometry change failed", self.name)
             try:
