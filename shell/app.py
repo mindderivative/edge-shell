@@ -6,6 +6,7 @@ import logging
 import signal
 import subprocess
 import sys
+import time
 import traceback
 from collections import defaultdict
 
@@ -18,6 +19,7 @@ from fabric.core.application import FABRIC_DBUS_INTERFACE_NAME
 from gi.repository import Gdk, GLib
 
 from shell import plan
+from shell.canvas.stats import StatsRecorder
 from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
@@ -27,6 +29,7 @@ from shell.theme import scope_class, to_css
 log = logging.getLogger(__name__)
 
 APP_NAME = "edge-shell"
+EXERCISE_MS = 300  # --stats toggles every panel this often: a 280 ms tween plus a frame
 
 
 def _already_running() -> bool:
@@ -35,8 +38,11 @@ def _already_running() -> bool:
 
 
 class EdgeShellApp:
-    def __init__(self, store: ConfigStore):
+    def __init__(self, store: ConfigStore, stats_seconds: float | None = None):
+        """`stats_seconds`: measure for that long (main.py --stats), print, then quit."""
         self.store = store
+        self._stats_seconds = stats_seconds
+        self.recorder: StatsRecorder | None = None
         self.app: Application | None = None
         self.shells: dict[str, MonitorShell] = {}
         self._watcher: ConfigWatcher | None = None
@@ -81,6 +87,8 @@ class EdgeShellApp:
                 name, desired[name], self.config, self.register_window, self.unregister_window
             )
             self._report_layout(name, self.shells[name])
+            if self.recorder is not None:
+                self.shells[name].canvas.painter.recorder = self.recorder
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
@@ -201,6 +209,8 @@ class EdgeShellApp:
                 file=sys.stderr,
             )
             return 1
+        if self._stats_seconds:
+            self.recorder = StatsRecorder(GLib.get_monotonic_time)
         self.sync_monitors()
         self.app = Application(APP_NAME, *self._early)
         self._early.clear()
@@ -209,5 +219,24 @@ class EdgeShellApp:
         self.start_watching()
         self.watch_displays()
         signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C quits
+        if self.recorder is not None:
+            GLib.timeout_add(EXERCISE_MS, self._exercise)
+            GLib.timeout_add(int(self._stats_seconds * 1000), self._stop)
+        wall0, cpu0 = time.perf_counter(), time.process_time()
         self.app.run()
+        if self.recorder is not None:
+            wall, cpu = time.perf_counter() - wall0, time.process_time() - cpu0
+            print("\n".join(self.recorder.report(wall, cpu)))
         return 0
+
+    def _exercise(self) -> bool:
+        """--stats: keep every panel animating (collapse <-> extend)."""
+        for shell in self.shells.values():
+            for panel in shell.live_panels():
+                panel.toggle()
+        return True
+
+    def _stop(self) -> bool:
+        if self.app is not None:
+            self.app.quit()
+        return False

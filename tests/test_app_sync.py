@@ -348,3 +348,38 @@ def test_unrelated_reload_does_not_repeat_the_layout_notification(renv, monkeypa
     )
     app.reload()
     assert len(notes) == 1
+
+
+# ---- --stats ---------------------------------------------------------------------
+
+
+def test_exercise_toggles_every_live_panel_and_repeats(env):
+    app, _ = env
+    toggled = []
+    panel = type("P", (), {"toggle": lambda self: toggled.append(self)})()
+    app.shells["HDMI-A-1"] = type("S", (), {"live_panels": lambda self: [panel, panel]})()
+    assert app._exercise() is True
+    assert toggled == [panel, panel]
+
+
+def test_stop_quits_once(env):
+    app, _ = env
+    quits = []
+    app.app = type("A", (), {"quit": lambda self: quits.append(1)})()
+    assert app._stop() is False and quits == [1]
+
+
+def test_recorder_is_attached_to_every_opened_canvas(env, monkeypatch):
+    app, mapping = env
+    painter = type("Painter", (), {"recorder": None})()
+
+    class WithCanvas(FakeShell):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.canvas = type("C", (), {"painter": painter})()
+
+    monkeypatch.setattr(app_mod, "MonitorShell", WithCanvas)
+    app.recorder = object()
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert painter.recorder is app.recorder

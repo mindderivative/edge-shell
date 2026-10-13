@@ -11,6 +11,18 @@ from shell.config.loader import USER_PATH
 from shell.config.models import ConfigError
 from shell.config.store import ConfigStore
 
+MAX_STATS_SECONDS = 10  # live probes draw on the user's screen: keep them short
+
+
+def _stats_seconds(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not 0 < value <= MAX_STATS_SECONDS:
+        raise argparse.ArgumentTypeError(f"must be in (0, {MAX_STATS_SECONDS}]")
+    return value
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="edge-shell")
@@ -22,6 +34,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--list-outputs", action="store_true", help="print monitors and connector names"
+    )
+    parser.add_argument(
+        "--stats",
+        type=_stats_seconds,
+        default=None,
+        metavar="SECONDS",
+        help="measure for SECONDS (max 10): toggle every panel every 300 ms, then print frame "
+        "pacing, canvas draw cost, canvas/panel cadence and CPU, and quit",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -46,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from shell.app import EdgeShellApp
 
-    return EdgeShellApp(store).run()
+    return EdgeShellApp(store, stats_seconds=args.stats).run()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,99 @@
+import pytest
+
+from shell.canvas.simulate import FakeClock, default_shapes, main, simulate
+from shell.canvas.stats import StatsRecorder, interval_stats, pct, ticks_between_draws
+
+
+def test_pct():
+    assert pct([3, 1, 2], 0.5) == 2
+    assert pct([], 0.5) != pct([], 0.5)  # nan
+
+
+def test_interval_stats_basic():
+    s = interval_stats([0, 16000, 33000, 50000, 66000])
+    assert s["frames"] == 5
+    assert s["mean_ms"] == pytest.approx(16.5)
+    assert s["median_ms"] == pytest.approx(16.5)
+    assert s["p95_ms"] == pytest.approx(17.0)
+    assert s["fps"] == pytest.approx(1000 / 16.5)
+
+
+def test_interval_stats_skips_idle_gaps():
+    s = interval_stats([0, 16667, 33334, 1_000_000, 1_016_667])
+    assert s["median_ms"] == pytest.approx(16.667, abs=0.01)
+    assert s["mean_ms"] == pytest.approx(16.667, abs=0.01)
+
+
+@pytest.mark.parametrize("ts", [[], [123]])
+def test_interval_stats_too_few_samples(ts):
+    s = interval_stats(ts)
+    assert s["frames"] == len(ts)
+    assert s["mean_ms"] is None and s["fps"] is None
+
+
+def test_ticks_between_draws():
+    ticks = [10, 20, 30, 40, 50, 60]
+    assert ticks_between_draws(ticks, [10, 20, 30, 40, 50, 60]) == [1, 1, 1, 1, 1]
+    assert ticks_between_draws(ticks, [10, 30, 60]) == [2, 3]
+    assert ticks_between_draws(ticks, []) == []
+    assert ticks_between_draws([], [10, 20]) == [0]
+
+
+def test_recorder_splits_full_and_damaged_draws():
+    now = iter(range(0, 1000, 10))
+    rec = StatsRecorder(lambda: next(now))
+    rec.on_draw(5.0, True)
+    rec.on_tick(1, 3.0)
+    rec.on_draw(1.0, False)
+    assert rec.full_draw_ms == [5.0] and rec.draw_ms == [1.0]
+    assert rec.ticks[1] == [10] and rec.draw_ts == [0, 20]
+    text = "\n".join(rec.report(2.0, 0.5))
+    assert "canvas damaged draws: 1" in text and "canvas full draws: 1" in text
+    assert "panel 1: 1 ticks; ticks between canvas draws {1: 1}" in text
+    assert "0.25 of one core" in text
+
+
+def test_report_without_ticks():
+    assert "no panel animated" in "\n".join(StatsRecorder(lambda: 0).report(1.0, 0.0))
+
+
+def test_simulation_draws_once_per_tick(make_config):
+    clock = FakeClock()
+    rec = StatsRecorder(clock.get_frame_time)
+    theme = make_config(theme={"shadow": {"enabled": True}}).theme
+    res = simulate(theme, (800, 600), default_shapes(800, 600)[:1], 40, recorder=rec, clock=clock)
+    assert res.full_draws == 1 and len(rec.full_draw_ms) == 1
+    assert len(rec.draw_ms) == res.draws - 1
+    between = ticks_between_draws(rec.ticks[0], rec.draw_ts)
+    assert set(between) <= {0, 1}  # never a skipped panel frame
+    assert interval_stats(rec.ticks[0])["median_ms"] == pytest.approx(16.667, abs=0.01)
+
+
+@pytest.mark.parametrize("size", [(1920, 1080), (640, 400)])
+def test_default_shapes_fit_the_simulated_surface(size):
+    from shell.panel_layout import resolve_layout
+    from shell.panel_spec import PanelGeometry
+
+    w, h = size
+    shapes = default_shapes(w, h)
+    geos = [PanelGeometry("p", s.edge, s.pos, s.length, s.depth, "extended", "p") for s in shapes]
+    layout = resolve_layout(geos, w, h, 10, 14)
+    assert layout.warnings == []  # nothing clamped, shrunk or hidden
+    assert [(p.pos, p.length) for p in layout.panels] == [(s.pos, s.length) for s in shapes]
+    if size == (1920, 1080):  # the registered widget defaults
+        assert [(s.pos, s.length) for s in shapes] == [(680, 560), (876, 168), (600, 300)]
+
+
+def test_cli_prints_a_report(capsys):
+    assert main(["--frames", "20", "--size", "640x400", "--elevation", "50", "--border", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "=== edge-shell canvas stats ===" in out
+    assert "panel 2:" in out  # all three panels animated
+    assert "simulated 20 frames at 640x400" in out
+
+
+@pytest.mark.parametrize("argv", [["--size", "10x"], ["--elevation", "101"], ["--border", "0"]])
+def test_cli_rejects_bad_input(argv):
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2

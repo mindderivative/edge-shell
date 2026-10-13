@@ -149,3 +149,75 @@ def _draw_like_gtk(
     painter.draw(cr, box_to_rect(extents))
     result.draws += 1
     result.damage_px.append(sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes))
+
+
+# ---- command line: the headless twin of `main.py --stats` -------------------------------
+
+
+def default_shapes(width: int, height: int) -> list[PanelShape]:
+    """The built-in panels (widgets/: dock, clock, system_bar): their registered defaults at
+    1920x1080, shrunk and moved on smaller sizes so that no layout rule (shell.panel_layout)
+    would move, shrink or hide one on the simulated surface."""
+    dock = min(560, width - 160)
+    bar = min(300, height // 3)
+    return [
+        PanelShape("bottom", (width - dock) // 2, dock, 64),
+        PanelShape("top", (width - 168) // 2, 168, 46),
+        PanelShape("right", min(600, height - 110 - bar), bar, 56),  # clear of the dock
+    ]
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import time
+
+    from pydantic import ValidationError
+
+    from shell.canvas.stats import StatsRecorder
+    from shell.config.loader import load_config
+    from shell.config.models import deep_merge
+
+    p = argparse.ArgumentParser(
+        prog="python -m shell.canvas.simulate",
+        description="Headless run of the canvas animation loop with the default theme.",
+    )
+    p.add_argument("--frames", type=int, default=600, help="frames at 60 Hz (default 600)")
+    p.add_argument("--size", default="1920x1080", help="WxH (default 1920x1080)")
+    p.add_argument("--elevation", type=int, default=None, help="enable the shadow at 0-100 %%")
+    p.add_argument("--border", type=int, default=None, help="enable the border, width in px")
+    args = p.parse_args(argv)
+    try:
+        width, height = (int(v) for v in args.size.lower().split("x"))
+    except ValueError:
+        p.error(f"--size must be WxH, got {args.size!r}")
+    theme = load_config(None).theme
+    over: dict = {}
+    if args.elevation is not None:
+        over["shadow"] = {"enabled": True, "elevation": args.elevation}
+    if args.border is not None:
+        over["border"] = {"enabled": True, "width": args.border}
+    try:
+        theme = Theme.model_validate(deep_merge(theme.model_dump(), over))
+    except ValidationError as exc:
+        p.error(str(exc))
+    clock = FakeClock()
+    recorder = StatsRecorder(clock.get_frame_time)
+    wall0, cpu0 = time.perf_counter(), time.process_time()
+    res = simulate(
+        theme,
+        (width, height),
+        default_shapes(width, height),
+        args.frames,
+        recorder=recorder,
+        clock=clock,
+    )
+    print("\n".join(recorder.report(time.perf_counter() - wall0, time.process_time() - cpu0)))
+    print(
+        f"simulated {res.frames} frames at {width}x{height}: "
+        f"{res.draws} draws, {res.full_draws} full"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
