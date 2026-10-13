@@ -237,3 +237,123 @@ def test_a_bad_look_fails_before_the_window_exists(make_config):
             "mon-x",
             handle=HandleSpec(color="red"),
         )
+
+
+# ---- input region -------------------------------------------------------------------
+
+
+def test_with_hover_the_input_region_is_unchanged(make_config):
+    s = stub(make_config)
+    ep.EdgePanel._update_input_region(s, 0.0)
+    assert [rects_of(r) for r in s.regions] == [[(14, 48, 560, 26)]]  # body + hover zone
+    ep.EdgePanel._update_input_region(s, 0.0)
+    assert len(s.regions) == 1  # unchanged: not re-applied
+
+
+def test_without_hover_only_the_hit_target_takes_input(make_config):
+    s = stub(make_config, interaction=Interaction(hover=False))
+    ep.EdgePanel._update_input_region(s, 0.0)
+    assert rects_of(s.regions[-1]) == [(272, 60, 44, 14)]
+
+
+def test_with_every_interaction_off_a_collapsed_panel_is_click_through(make_config):
+    s = stub(make_config, interaction=Interaction(click=False, hover=False, drag=False))
+    ep.EdgePanel._update_input_region(s, 0.0)
+    assert rects_of(s.regions[-1]) == []
+    ep.EdgePanel._update_input_region(s, 64.0)
+    assert rects_of(s.regions[-1]) == [(14, 0, 560, 74)]  # the content still takes input
+
+
+# ---- interaction flags --------------------------------------------------------------
+
+
+def test_a_press_starts_no_drag_without_drag(make_config):
+    s = stub(make_config, interaction=Interaction(drag=False), _press=None)
+    event = SimpleNamespace(button=1, x_root=5.0, y_root=5.0)
+    assert ep.EdgePanel._on_press(s, None, event) is False
+    assert s._press is None
+    s._interaction = ALL
+    s._dragging = s._suppress_click = False
+    ep.EdgePanel._on_press(s, None, event)
+    assert s._press == (5.0, 5.0)
+
+
+def test_a_click_toggles_only_with_click(make_config):
+    toggles = []
+    s = stub(make_config, interaction=Interaction(click=False), _suppress_click=False)
+    s.toggle = lambda: toggles.append(1)
+    ep.EdgePanel._on_clicked(s)
+    assert toggles == []
+    s._interaction = ALL
+    ep.EdgePanel._on_clicked(s)
+    assert toggles == [1]
+
+
+def test_entering_does_not_peek_without_hover(make_config):
+    s = stub(make_config, interaction=Interaction(hover=False), _dragging=False)
+    s._retarget = lambda: s.calls.append("retarget")
+    ep.EdgePanel._on_enter(s)
+    assert s._hovered is False and s.calls == []
+    s._interaction = ALL
+    ep.EdgePanel._on_enter(s)
+    assert s._hovered is True and s.calls == ["retarget"]
+
+
+# ---- in-place updates ---------------------------------------------------------------
+
+
+def test_set_handle_updates_in_place_and_drops_a_peek(make_config):
+    s = stub(make_config, _hovered=True)
+    s._restyle_handle = lambda: s.calls.append("restyle")
+    s._retarget = lambda: s.calls.append(("retarget", s._hovered))
+    new = (HandleSpec(shape="bar"), Interaction(hover=False))
+    ep.EdgePanel.set_handle(s, *new)
+    assert (s._handle_spec, s._interaction) == new
+    assert s.calls == ["restyle", ("retarget", False)]
+
+
+def test_set_handle_keeps_a_peek_that_hover_still_allows(make_config):
+    s = stub(make_config, _hovered=True)
+    s._restyle_handle = lambda: s.calls.append("restyle")
+    s._retarget = lambda: s.calls.append("retarget")
+    ep.EdgePanel.set_handle(s, HandleSpec(shape="bar"), ALL)
+    assert s.calls == ["restyle"] and s._hovered is True
+
+
+def test_turning_drag_off_mid_drag_lets_that_drag_finish(make_config, monkeypatch):
+    monkeypatch.setattr(ep.GLib, "idle_add", lambda fn: None)
+    depths = []
+    s = stub(make_config, _dragging=True, _press=(100.0, 500.0), _press_depth=0.0)
+    s._suppress_click = True
+    s._tween = SimpleNamespace(jump_to=depths.append)
+    s._fade = SimpleNamespace(jump_to=lambda value: None)
+    s._clear_suppress = lambda: None
+    s._finish_drag = lambda: ep.EdgePanel._finish_drag(s)
+    s._restyle_handle = lambda: s.calls.append("restyle")
+    s._retarget = lambda: s.calls.append(("retarget", s._dragging))
+    ep.EdgePanel.set_handle(s, HandleSpec(), Interaction(drag=False))
+    assert s.calls == ["restyle"]  # no retarget: the drag owns the depth until release
+    event = SimpleNamespace(state=ep.Gdk.ModifierType.BUTTON1_MASK, x_root=100.0, y_root=450.0)
+    assert ep.EdgePanel._on_motion(s, None, event) is True  # the drag goes on
+    assert depths == [50.0]
+    s._d = depths[-1]
+    ep.EdgePanel._finish_drag(s)  # the release: 50 of 64 px snaps open
+    assert (s._extended, s._dragging, s._press) == (True, False, None)
+    assert s.calls == ["restyle", ("retarget", False)]
+
+
+@pytest.mark.parametrize(
+    ("interaction", "tooltip", "name", "focus"),
+    [
+        (ALL, "Expand dock", "Expand dock", True),
+        (Interaction(click=False), "Drag to expand dock", "Drag to expand dock", False),
+        (Interaction(click=False, drag=False), None, "dock handle", False),
+    ],
+)
+def test_labels_and_keyboard_follow_click(make_config, interaction, tooltip, name, focus):
+    s = stub(make_config, interaction=interaction)
+    ep.EdgePanel._sync_handle(s)
+    assert s._handle.set["tooltip_text"] == (tooltip,)
+    assert s._handle.name == name
+    assert s._handle.set["can_focus"] == (focus,)
+    assert s._handle_area.draws == 1

@@ -124,7 +124,7 @@ class EdgePanel(WaylandWindow):
         self._extended = spec.state == "extended"
         self._hovered = False
         self._d = 0.0
-        self._last_rect: tuple[int, int, int, int] | None = None
+        self._last_rect: tuple[tuple[int, int, int, int], ...] | None = None
         self._draw_failed = False  # a draw error is logged once per look
         self._press: tuple[float, float] | None = None  # drag state
         self._press_depth = 0.0
@@ -216,9 +216,19 @@ class EdgePanel(WaylandWindow):
         self._theme = theme
         self._restyle_handle()
 
+    def set_handle(self, handle: HandleSpec, interaction: Interaction) -> None:
+        """A reload changed this panel's handle or interactions: update in place, no rebuild."""
+        self._handle_spec, self._interaction = handle, interaction
+        self._restyle_handle()
+        if self._hovered and not interaction.hover:
+            self._hovered = False
+            self._retarget()  # drop a peek that hover no longer allows
+
     # ---- state -----------------------------------------------------------------
     def _on_enter(self, *_) -> None:
         if self._dragging:  # the drag owns the depth until release
+            return
+        if not self._interaction.hover:  # no peek; the handle still lights up on its own
             return
         self._hovered = True
         self._retarget()
@@ -246,9 +256,10 @@ class EdgePanel(WaylandWindow):
 
     def _sync_handle(self) -> None:
         self._content.set_sensitive(self._extended)
-        name = ("Collapse " if self._extended else "Expand ") + self.spec.label
-        self._handle.set_tooltip_text(name)
-        self._handle.get_accessible().set_name(name)
+        label = hd.handle_label(self.spec.label, self._extended, self._interaction)
+        self._handle.set_tooltip_text(label)  # None: no tooltip
+        self._handle.get_accessible().set_name(label or f"{self.spec.label} handle")
+        self._handle.set_can_focus(self._interaction.click)  # keyboard follows click
         self._handle_area.queue_draw()  # the peek highlight may have changed
 
     def _restyle_handle(self) -> None:
@@ -264,6 +275,8 @@ class EdgePanel(WaylandWindow):
         if self._suppress_click:  # the release that ended a drag
             self._suppress_click = False
             return
+        if not self._interaction.click:
+            return
         self.toggle()
 
     # ---- per frame -------------------------------------------------------------
@@ -275,21 +288,27 @@ class EdgePanel(WaylandWindow):
             self._on_depth(d)  # the canvas redraws the body's damaged box
 
     def _update_input_region(self, d: float) -> None:
-        # Only the body (plus an invisible hover zone while collapsed) takes input.
-        t = self._theme
-        rect = geometry.input_rect(
-            self.spec.edge,
-            self.spec.length,
-            self.spec.depth,
-            d,
-            t.thickness,
-            t.radius,
-            t.hover_zone,
+        # The body (plus an invisible hover zone while collapsed, or only the handle's hit
+        # target when hover is off) takes input: shell.handle.input_rects.
+        t, s = self._theme, self.spec
+        rects = tuple(
+            hd.input_rects(
+                s.edge,
+                s.length,
+                s.depth,
+                d,
+                t.thickness,
+                t.radius,
+                t.hover_zone,
+                self._interaction,
+                self._hit(),
+                self._look.offset,
+            )
         )
-        if rect == self._last_rect:
+        if rects == self._last_rect:
             return
-        self._last_rect = rect
-        self.input_shape_combine_region(cairo.Region(cairo.RectangleInt(*rect)))
+        self._last_rect = rects
+        self.input_shape_combine_region(cairo.Region([cairo.RectangleInt(*r) for r in rects]))
 
     # ---- handle ----------------------------------------------------------------
     def _build_handle(self) -> Button:
@@ -356,8 +375,8 @@ class EdgePanel(WaylandWindow):
 
     # ---- drag ------------------------------------------------------------------
     def _on_press(self, _widget, event) -> bool:
-        if event.button != 1:
-            return False
+        if event.button != 1 or not self._interaction.drag:
+            return False  # without drag a press is only ever a click
         self._press = (event.x_root, event.y_root)
         self._press_depth = self._d
         self._dragging = False
