@@ -12,6 +12,7 @@ morph values, enlarged, for a visual check without starting the shell.
 from __future__ import annotations
 
 import math
+import sys
 
 import cairo
 
@@ -69,6 +70,8 @@ def draw_handle(
     more than `max_across` px across, stroke included (callers pass shell.handle.band_room,
     so the shape keeps 2 px of the band empty on each side, 1 px on a band under 8 px). A
     weight above `max_across` is drawn `max_across` thick; a chevron gets flatter to fit."""
+    if shape not in SHAPES:
+        raise ValueError(f"unknown handle shape {shape!r}")
     if shape == "none" or rgba[3] <= 0 or max_across <= 0:
         return
     w = max(1.0, min(float(weight), float(max_across)))
@@ -81,11 +84,12 @@ def draw_handle(
     # stays inside max_across, clear of both band edges.
     across = math.ceil(round(abs(2 * tip) + w, 6))
     cr.save()
+    cr.new_path()  # a path the caller left open must not be filled
     cr.transform(handle_matrix(edge, *snap_centre(edge, cx, cy, w, across)))
     cr.set_source_rgba(*rgba)
     if shape == "dots":
         r = w / 2
-        reach = max(size / 2 - r, w)  # outer dot centres; the dots never overlap
+        reach = max(math.floor(size / 2 - r + 0.5), w)  # outer dot centres; the dots never overlap
         for u in (-reach, 0.0, reach):
             cr.new_sub_path()
             cr.arc(u, 0, r, 0, 2 * math.pi)
@@ -162,7 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sheet", required=True, help="output PNG path")
     p.add_argument("--thickness", type=int, default=10, help="frame thickness (default 10)")
     args = p.parse_args(argv)
-    w, h = render_sheet(args.sheet, args.thickness)
+    try:
+        w, h = render_sheet(args.sheet, args.thickness)
+    except (OSError, cairo.Error) as exc:  # cairo raises its own error types
+        print(f"handle_draw: cannot write {args.sheet}: {exc}", file=sys.stderr)
+        return 2
     print(f"wrote {args.sheet} ({w}x{h})")
     return 0
 

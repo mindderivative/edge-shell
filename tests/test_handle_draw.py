@@ -186,3 +186,33 @@ def test_the_review_sheet(tmp_path, capsys):
     assert hdraw.main(["--sheet", str(out)]) == 0
     assert out.stat().st_size > 0
     assert "handles.png (3360x4032)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("shape", ["star", "auto"])
+def test_unknown_or_undrawable_shapes_are_rejected(shape):
+    with pytest.raises(ValueError, match="unknown handle shape"):
+        render(shape, "bottom")
+
+
+def test_a_path_left_open_by_the_caller_is_not_filled():
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+    cr = cairo.Context(surface)
+    cr.rectangle(2, 2, 10, 10)  # left open, far from the handle at (40, 40)
+    hdraw.draw_handle(cr, "dots", 15, 3, WHITE, 0.0, "bottom", 40, 40, 6)
+    surface.flush()
+    assert alpha(surface, 6, 6) == 0
+
+
+def test_even_sized_dots_keep_the_outer_dots_on_whole_pixels():
+    s = render("dots", "top", size=16)
+    cx, cy = hdraw.snap_centre("top", 40, 40, 3, 3)
+    for u in (-7, 7):  # outer dot centres on pixel centres, so a 3 px dot covers whole pixels
+        assert alpha(s, cx + u, cy) == 255
+    assert alpha(s, cx + 7 + 2, cy) < EMPTY and alpha(s, cx - 7 - 2, cy) < EMPTY
+
+
+def test_the_sheet_reports_an_unwritable_path_cleanly(tmp_path, capsys):
+    assert hdraw.main(["--sheet", str(tmp_path / "missing-dir" / "x.png")]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1 and "x.png" in captured.err
