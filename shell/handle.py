@@ -122,7 +122,8 @@ def clamp_offset(offset: int, length: int, hit_along: int) -> int:
 
 
 def along_margins(offset: int) -> tuple[int, int]:
-    """(start, end) margins that move a centred widget by `offset` px along the edge."""
+    """(start, end) margins that move a centred widget by `offset` px along the edge. The
+    caller passes an offset already clamped (Task 6's _place_handle clamps first)."""
     return max(0, 2 * offset), max(0, -2 * offset)
 
 
@@ -159,6 +160,7 @@ def hit_rect(
     offset: int,
 ) -> Rect:
     """The hit target in panel-surface px (the input region needs it when hover is off)."""
+    # may be 1 px wider than the button when length - along is odd (conservative)
     along, across = length + 2 * radius, thickness + depth
     hit_along, hit_across = hit
     centre = radius + length / 2 + clamp_offset(offset, length, hit_along)

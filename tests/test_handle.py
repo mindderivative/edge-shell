@@ -164,6 +164,12 @@ def test_hit_rect_in_surface_px(edge, d, offset, rect):
     assert hd.hit_rect(edge, 560, 64, d, 10, 14, (44, 14), offset) == rect
 
 
+def test_thick_band_pinned_cases():
+    # T = 20: the 20 px hit target rides the inner edge of the extended body
+    assert hd.hit_rect("bottom", 560, 64, 64, 20, 14, (44, 20), 0) == (272, 0, 44, 20)
+    assert hd.shape_centre("bottom", 44, 20, 20, 0) == (22, 10)
+
+
 @pytest.mark.parametrize("edge", EDGES)
 @pytest.mark.parametrize("d", [0, 8, 16, 40, 64])
 def test_the_hover_input_region_contains_the_hit_target(edge, d):
