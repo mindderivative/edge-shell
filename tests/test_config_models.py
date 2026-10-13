@@ -145,3 +145,69 @@ def test_malformed_override_effect_color_names_key_path(make_config, bad, key):
 def test_valid_six_and_eight_digit_colors_still_pass(make_config, good):
     cfg = make_config(theme={"border": {"color": good}})
     assert cfg.theme.border.color == good.lower()
+
+
+@pytest.mark.parametrize("length", [60, 4000, "fill", "content", "1%", "50%", "12.5%", "100%"])
+def test_length_modes_accepted(length):
+    assert PanelConfig(widget="dock", length=length).length == length
+
+
+@pytest.mark.parametrize("length", [59, 4001, "0%", "101%", "half", "560", "50 %", True])
+def test_bad_length_names_the_key_path(make_config, length):
+    with pytest.raises(ValidationError) as exc:
+        make_config(monitors={"HDMI-A-1": {"panels": [{"widget": "dock", "length": length}]}})
+    (error,) = exc.value.errors()
+    assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0, "length")
+    assert '"fill", "content" or a percentage' in error["msg"]
+
+
+def test_align_offset_order_and_bounds():
+    p = PanelConfig(widget="dock", align="end", offset=12, order=3, min_length=100, max_length=900)
+    assert (p.align, p.offset, p.order, p.min_length, p.max_length) == ("end", 12, 3, 100, 900)
+    assert PanelConfig(widget="dock", offset=-40).offset == -40  # center may shift either way
+
+
+@pytest.mark.parametrize(
+    ("panel", "message"),
+    [
+        ({"pos": 10, "align": "end"}, "pos cannot be combined with align or offset"),
+        ({"pos": "center", "offset": 3}, 'pos = N is align = "start", offset = N - 38'),
+        ({"align": "end", "offset": -4}, 'a negative offset only works with align = "center"'),
+        ({"min_length": 300, "max_length": 200}, "min_length must not be larger than max_length"),
+    ],
+)
+def test_placement_conflicts_name_the_panel(make_config, panel, message):
+    with pytest.raises(ValidationError) as exc:
+        make_config(monitors={"HDMI-A-1": {"panels": [{"widget": "dock", **panel}]}})
+    (error,) = exc.value.errors()
+    assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0)
+    assert message in error["msg"]
+
+
+@pytest.mark.parametrize(
+    ("panel", "field", "kind"),
+    [
+        ({"widget": "dock", "align": "middle"}, "align", "literal_error"),
+        ({"widget": "dock", "order": -1}, "order", "greater_than_equal"),
+        ({"widget": "dock", "offset": 20001}, "offset", "less_than_equal"),
+        ({"widget": "dock", "min_length": 10}, "min_length", "greater_than_equal"),
+    ],
+)
+def test_new_panel_keys_report_key_path(make_config, panel, field, kind):
+    with pytest.raises(ValidationError) as exc:
+        make_config(monitors={"HDMI-A-1": {"shell": "edge", "panels": [panel]}})
+    (error,) = exc.value.errors()
+    assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0, field)
+    # the bound itself, not "extra_forbidden" (what every new key gives before this task)
+    assert error["type"] == kind
+
+
+def test_layout_gap_default_override_and_bounds(make_config):
+    cfg = make_config(monitors={"A": {"layout": {"gap": 20}}, "B": {}})
+    assert (cfg.layout.gap, cfg.layout_for("A").gap, cfg.layout_for("B").gap) == (8, 20, 8)
+    assert cfg.layout_for("not-configured").gap == 8
+    with pytest.raises(ValidationError, match=r"monitors\.A\.layout: gap"):
+        make_config(monitors={"A": {"layout": {"gap": -1}}})
+    with pytest.raises(ValidationError) as exc:
+        make_config(monitors={"A": {"layout": {"gapp": 1}}})
+    assert exc.value.errors()[0]["loc"] == ("monitors", "A", "layout", "gapp")
