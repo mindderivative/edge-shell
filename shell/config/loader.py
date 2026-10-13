@@ -8,20 +8,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from shell.config.models import Config, ConfigError
+from shell.config.models import Config, ConfigError, deep_merge
 
 DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config.default.toml"
 USER_PATH = Path.home() / ".config" / "edge-shell" / "config.toml"
-
-
-def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
-    out = dict(base)
-    for key, value in over.items():
-        if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_merge(out[key], value)
-        else:
-            out[key] = value  # scalars and lists (e.g. panels) are replaced wholesale
-    return out
 
 
 def format_validation_error(err: ValidationError) -> str:
@@ -61,5 +51,5 @@ def load_config(
     """
     data = _read_toml(default_path)
     if user_path is not None:
-        data = _deep_merge(data, _read_toml(user_path, missing_ok=not required))
+        data = deep_merge(data, _read_toml(user_path, missing_ok=not required))
     return parse_config(data)

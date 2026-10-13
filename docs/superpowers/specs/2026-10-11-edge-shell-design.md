@@ -45,6 +45,8 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 | Font | `["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]` | Ordered fallback list |
 | Icon buttons | 44×44 px, radius 10 px | 20 px glyphs |
 
+Colours accept `#rrggbb` or `#rrggbbaa` (the alpha form matters for the border and shadow).
+
 **Default surfaces** (one 1920×1080 monitor; depth measured past the frame)
 
 | Widget | Edge | Position | Length | Extended depth | Default state |
@@ -83,13 +85,13 @@ Three states per panel. Only **extended** shows content.
 
 ### 5.1 Surfaces per monitor
 
-Each enabled monitor gets: 4 `FrameEdge` strips, 4 `ScreenCorner`s, and one `EdgePanel` per configured panel.
+Each enabled monitor gets: one `ShapeCanvas`, 4 invisible `FrameEdge` strips, and one `EdgePanel` per configured panel (see section 18).
 
 | Window | Layer | Anchor | Exclusive zone | Input |
 | --- | --- | --- | --- | --- |
-| `FrameEdge` × 4 | top | 3 edges | `auto` = T px | Whole strip |
-| `ScreenCorner` × 4 | top | 2 edges, margin T | −1 | None (`pass_through=True`) |
-| `EdgePanel` × N | top | 1 edge (centered) or 2 (positioned) | −1 | Panel body only, updated each frame |
+| `ShapeCanvas` × 1 | top | 4 edges | −1 | None (`pass_through=True`) |
+| `FrameEdge` × 4 | bottom (invisible) | 3 edges | `auto` = T px (T + border width when the border is enabled) | None (`pass_through=True`) |
+| `EdgePanel` × N | top | 1 edge + margin (resolved `pos`) | −1 | Panel body (+ hover zone) only, updated each frame |
 
 Two Fabric details that change the design:
 
@@ -98,11 +100,11 @@ Two Fabric details that change the design:
 
 **Surface sizing.** Each panel's surface is allocated once at its fully extended size `(length + 2R) × (T + depth)`. Animation redraws and moves the input region only; KWin never resizes a layer surface mid-animation.
 
-**Fallback.** If KWin stacking or seams make this unworkable, the alternative is four invisible zone-reserving strips plus one click-through full-screen canvas per monitor that draws frame, corners and panels in one cairo path. `EdgePanel`'s drawing code carries over largely intact.
+**Implemented (2026-10-13):** the single-canvas design (section 18, option B) replaced per-window drawing. The strips only reserve space; panels are content, handle and input windows above the canvas. The startup re-raise of panels is still needed: with it off, the collapsed handle dots stayed hidden behind the canvas (Gate 1 item 7), so the delayed `raise_to_top` was kept (`EDGE_SHELL_RAISE_MS=0` is a debug switch).
 
 ### 5.2 Drawing
 
-Panels are drawn with cairo, not CSS boxes, so the body and both joins come from one path with one radius. Drawing happens in a canonical bottom-edge coordinate space; a cairo matrix rotates it onto the real edge, so the join maths exists once, in `shell/geometry.py`.
+The canvas draws one union outline of frame, corners and panels (`shell/canvas/outline.py`) in a canonical per-edge space rotated onto each edge, then the border and shadow (`shell/canvas/effects.py`). `shell/geometry.py` keeps the per-panel maths (join radius, input rects, anchors).
 
 ### 5.3 Monitors
 
@@ -130,9 +132,20 @@ thickness = 10
 radius = 14
 font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]
 
+[theme.border]                # opt-in border along the outline, outside the mass
+enabled = true
+width = 2                     # px, on the desktop side
+color = "#8fd3b6ff"           # #rrggbb or #rrggbbaa
+
+[theme.shadow]                # opt-in uniform shadow onto the desktop
+enabled = true
+elevation = 50                # 0-100 %; 100 % reaches 48 px
+color = "#00000080"           # the alpha is the strength
+
 [monitors.HDMI-A-1]
 shell = "edge"
 theme.accent = "#d3a68f"      # optional per-monitor override
+theme.shadow.elevation = 80   # nested tables merge key by key
 
 [[monitors.HDMI-A-1.panels]]
 widget = "clock"
@@ -160,9 +173,9 @@ shell = "plasma"
 
   | Change | Reaction |
   | --- | --- |
-  | Theme color | Regenerate CSS and cairo colors; redraw |
+  | Theme colour, border or shadow | Regenerate CSS; redraw the canvas (no rebuild) |
   | Panel `state` | Retarget the tween |
-  | Panel `edge`, `pos`, `length` or `depth` | Rebuild that panel's window |
+  | Panel `edge`, `pos`, `length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
   | Panel added or removed | Create or destroy that window |
   | Monitor `shell` mode | Create or destroy that monitor's windows |
   | Invalid config | Keep the old config; report the error |
@@ -198,7 +211,9 @@ edge-shell/
 │   ├── geometry.py           # PURE: matrices, join radius, input rects
 │   ├── anim.py               # Tween
 │   ├── theme.py              # theme -> CSS + cairo colors
-│   ├── frame.py              # FrameEdge, ScreenCorner
+│   ├── canvas/               # shape canvas: outline, effects, scene, painter, window
+│   ├── panel_layout.py       # PURE: resolved positions, minimum geometry rules
+│   ├── frame.py              # FrameEdge (invisible zone strips)
 │   ├── edge_panel.py         # EdgePanel base
 │   └── registry.py
 ├── widgets/                  # clock, dock, system_bar, workspaces, widget_panel
@@ -210,9 +225,11 @@ edge-shell/
 
 | Module | Owns | Must not |
 | --- | --- | --- |
-| `shell/geometry.py`, `shell/config/models.py` | Pure logic | Import GTK |
+| `shell/geometry.py`, `shell/config/models.py`, `shell/canvas/*` (except `canvas.py`), `shell/panel_layout.py` | Pure logic | Import GTK |
 | `shell/anim.py` | Easing, frame-clock ticks | Know about panels |
-| `shell/edge_panel.py` | Window setup, drawing, input region, states | Contain widget content |
+| `shell/edge_panel.py` | Window setup, content placement, handle, input region, states; reports its depth to the canvas | Draw the panel body; contain widget content |
+| `shell/canvas/*` (except `canvas.py`), `shell/panel_layout.py` | Pure logic: outline, border, shadow, scene, damage boxes, panel positions | Import GTK |
+| `shell/canvas/canvas.py` | The `ShapeCanvas` window: draws frame, corners, panel bodies, border, shadow | Take input; know widget content |
 | `widgets/*` | Defaults, `build_content()` | Call cairo or GtkLayerShell |
 | `services/*` | D-Bus and Fabric signals | Build widgets |
 
@@ -332,6 +349,7 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
    - A requested length larger than the free span is **shrunk to fit**, with a log warning (and a notification on config reload); content that no longer fits is clipped. It is never a load-time error, so smaller or hot-plugged monitors keep working.
    - Offsets that would push a panel past the free span are clamped inward.
    - **Minimum geometry rules (found by the shape-canvas spike):** the single-outline renderer self-intersects (fills overlap, about 20-30 wrong pixels) when two curves collide. Two cases: (a) a panel whose concave fillet lands inside a screen-corner arc, so the **corner clearance is `pos - r >= T + R`** where `r = min(R, depth/2)` is the current join radius; (b) neighbouring panels on one edge whose fillets overlap, so the **minimum gap between adjacent panels is `r1 + r2`** (up to `2R` = 28 px at full depth). The layout resolver enforces both (clamping, with a warning); a panel exactly at the clearance renders correctly.
+   - **Interim implementation (2026-10-13):** `shell/panel_layout.py` clamps `pos` into the free span (`T + R + r` from each end, `r` at full depth), shrinks over-long panels, and hides a later panel whose grown body box overlaps an earlier one (minimum gap `r1 + r2` on one edge), with a notification. The full resolver replaces it.
    - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), built later; they are the only panels that meet two edges.
 
 **Design implications (for the future plan)**
@@ -348,7 +366,7 @@ Raised by Phil after the core PR; requirements are Phil's, the architecture opti
 
 **Requirements**
 
-- **Inner border:** a stroke along the *inner* edge of the frame (the edge facing the desktop) that flows seamlessly around the rounded screen corners, down into each panel's joins, along the panel body, and back out, as one continuous line. Configurable `width` (px, user-specified) and `color` as **RGBA** (`#rrggbbaa`, so the border can be translucent).
+- **Border:** a stroke drawn *outside* the mass, on the desktop side of the frame's inner edge (changed after Gate 4: it adds its width to the 10 px frame band instead of eating into it; the shadow is measured from its outer edge and the invisible zone strips reserve thickness + border width), that flows seamlessly around the rounded screen corners, down into each panel's joins, along the panel body, and back out, as one continuous line. Configurable `width` (px, user-specified) and `color` as **RGBA** (`#rrggbbaa`, so the border can be translucent).
 - **Shadow:** a soft, **uniform** shadow cast by the frame and by the panels onto the desktop on every side (no offset, no top/bottom bias), as one smooth shape that flows into the panels' joins so the frame and widgets look like they float above the desktop. Only two controls: `elevation` and `color` as RGBA (its alpha is the shadow's strength). `elevation` is a **percentage from 0% to 100%** (0% = no shadow, 100% = the maximum reach), so users adjust it to taste without thinking in pixels. It must **move with the animation**: as a panel's depth changes, its border and shadow follow it every frame.
 - **Opt-in/opt-out:** border and shadow are independent toggles (`enabled`), off by default so today's look is unchanged; overridable per monitor via the theme, and per panel later.
 
@@ -366,6 +384,8 @@ Raised by Phil after the core PR; requirements are Phil's, the architecture opti
 - **Uniform only (decided with Phil):** no offset or directional light, no second contact layer; the only parameters are `elevation` and the RGBA `color`. A user wanting a stronger or weaker shadow changes the colour's alpha; on dark themes they raise the alpha or lighten nothing, since a shadow cannot darken a dark background.
 - Optional radial/linear gradients can smooth any visible banding but are not expected to be needed.
 - Cost: wide strokes over a long path are not free. Redraw is limited to the damaged region (the animating panel's bounding box plus the shadow extent). **Spike result:** a cached shadow mask was tried and rejected: the union shadow behaves like a per-pixel max of its parts while cairo composites with OVER, so combining a cached part with a freshly stroked part over-darkens the two concave fillets by up to 63/255 for only about 0.15 ms saved. The design redraws the damaged region every frame with no shadow cache (about 2 ms live at 50% elevation, about 4 ms at 100%; see `docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`).
+
+**Status (2026-10-13):** spike done (`docs/superpowers/findings/2026-10-12-shape-canvas-spike.md`); option B implemented by `docs/superpowers/plans/2026-10-13-shape-canvas-and-effects.md`. The frame band is click-through now (the old strips took input). The panel `raise_to_top` workaround was not removed after all: the delayed re-raise is still needed for the collapsed handle dots (section 5.1).
 
 **Spike required before choosing B (throwaway scripts, then a report):**
 1. Can one monitor-sized transparent layer surface redraw a panel's bounding box plus shadow at 60 fps on this machine (damage regions, cairo software rendering)?

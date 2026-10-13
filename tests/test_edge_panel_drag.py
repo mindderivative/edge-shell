@@ -62,3 +62,32 @@ def test_lost_release_in_motion_finishes_like_a_release(monkeypatch):
     assert s._extended is False
     assert s._dragging is False and s._press is None
     assert s.retargets == 1 and len(idle) == 1
+
+
+def test_apply_depth_moves_handle_and_region_then_reports_to_the_canvas():
+    calls = []
+    s = SimpleNamespace(
+        _place_handle=lambda d: calls.append(("handle", d)),
+        _update_input_region=lambda d: calls.append(("region", d)),
+        _on_depth=lambda d: calls.append(("canvas", d)),
+    )
+    ep.EdgePanel._apply_depth(s, 7.5)
+    assert s._d == 7.5
+    assert calls == [("handle", 7.5), ("region", 7.5), ("canvas", 7.5)]
+    s._on_depth = None
+    ep.EdgePanel._apply_depth(s, 1.0)  # no canvas callback: nothing breaks
+    assert s._d == 1.0
+
+
+def test_panels_no_longer_draw_their_own_body():
+    assert not hasattr(ep.EdgePanel, "_on_draw")
+
+
+def test_on_depth_is_stored_before_the_tweens_exist():
+    # __init__ creates the depth Tween and calls jump_to, which runs _apply_depth and needs
+    # self._on_depth. Building a real EdgePanel would map a window on Phil's screen, so this
+    # display-free test checks the statement order in the source instead.
+    import inspect
+
+    src = inspect.getsource(ep.EdgePanel.__init__)
+    assert src.index("self._on_depth = on_depth") < src.index("Tween(")

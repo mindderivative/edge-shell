@@ -1,4 +1,7 @@
-"""Cairo drawing for panels and screen corners. Pure cairo: renders to any context."""
+"""TEST-ONLY reference: the per-window renderers the core shell used before the shape canvas.
+
+Kept verbatim from shell/draw.py so tests/test_canvas_outline.py can prove the union outline
+draws the same shapes. Not imported by shell code."""
 
 from __future__ import annotations
 

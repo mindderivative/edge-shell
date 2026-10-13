@@ -1,4 +1,8 @@
-"""Union outline of the desktop region: one closed path for frame + corners + all panels."""
+"""Union outline of the desktop region: one closed path for frame + corners + all panels.
+
+Pure cairo. Migrated from the shape-canvas spike (spikes/canvas/outline.py at 872eff9).
+`tests/test_canvas_outline.py` pins it to the legacy per-window renderers (tests/legacy_draw.py).
+"""
 
 from __future__ import annotations
 

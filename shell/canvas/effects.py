@@ -1,41 +1,29 @@
-"""Final effects driven by the one union outline path: RGBA border and uniform shadow.
+"""Border and uniform shadow driven by the one union outline path (spec section 18). Pure cairo.
 
-Controls (the user's decision): border = (width px, RGBA); shadow = (elevation %, RGBA) where
-the colour's alpha is the strength. No offset, no top/bottom bias, no second layer.
+Controls: border = (width px, RGBA); shadow = (elevation %, RGBA) where the colour's alpha is
+the strength. No offset, no top/bottom bias, no second layer. Migrated from the shape-canvas
+spike (spikes/canvas/effects.py at 872eff9); the one behaviour change is that the border is
+drawn outside the mass (commit 514573f).
 """
 
 from __future__ import annotations
 
 import functools
 import math
-import re
 
 import cairo
 
-from spikes.canvas.outline import Panel, fill_mass, outline_path
+from shell.canvas.outline import Panel, fill_mass, outline_path
 
 RGBA = tuple[float, float, float, float]
 
-MAX_REACH_PX = 48  # shadow reach at elevation 100 % (logical px); placeholder, user to calibrate
+MAX_REACH_PX = 48  # shadow reach at elevation 100 % (logical px), calibrated with Phil
 
 
 def reach_px(elevation_pct: float) -> int:
     """Shadow reach in px for an elevation percentage; out-of-range values are clamped to 0..100."""
     pct = min(100.0, max(0.0, float(elevation_pct)))
     return round(MAX_REACH_PX * pct / 100)
-
-
-_HEX_RE = re.compile(r"#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?")
-
-
-def parse_rgba_hex(text: str) -> RGBA:
-    """'#rrggbbaa' or '#rrggbb' (alpha 1.0) -> (r, g, b, a) floats in 0..1. Else ValueError."""
-    m = _HEX_RE.fullmatch(text) if isinstance(text, str) else None
-    if m is None:
-        raise ValueError(f"invalid colour {text!r}: expected #rrggbb or #rrggbbaa")
-    digits = m.group(1) + (m.group(2) or "ff")
-    r, g, b, a = (int(digits[i : i + 2], 16) / 255 for i in range(0, 8, 2))
-    return r, g, b, a
 
 
 def _mul_un8(a: int, b: int) -> int:
@@ -86,16 +74,16 @@ def draw_border(
     width: float,
     rgba: RGBA,
 ) -> None:
-    """RGBA border `width` px thick on the mass side of the outline; nothing on the desktop side.
+    """RGBA border `width` px thick on the desktop side of the outline; nothing over the mass.
 
-    The outline is stroked at 2*width and clipped to the mass side (even-odd with the screen
-    rectangle), so a translucent colour blends once over the mass and never reaches the desktop.
+    The mass keeps its full size (frame thickness, panel depth); the border wraps around the
+    outside of the whole outline and adds `width` px to the visible footprint. The outline is
+    stroked at 2*width and clipped to the desktop region (the outline path itself), so a
+    translucent colour blends exactly once and never reaches the mass.
     """
     cr.save()
     cr.new_path()
-    cr.rectangle(0, 0, w, h)
     outline_path(cr, w, h, T, R, panels)
-    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
     cr.clip()
     cr.new_path()
     outline_path(cr, w, h, T, R, panels)
@@ -115,9 +103,10 @@ def draw_shadow_uniform(
     panels: list[Panel],
     elevation_pct: float,
     rgba: RGBA,
+    offset: float = 0,
 ) -> None:
-    """Uniform shadow of the mass: reach = reach_px(elevation_pct), strength = rgba alpha."""
-    draw_shadow_reach(cr, w, h, T, R, panels, reach_px(elevation_pct), rgba)
+    """Uniform shadow of the mass (+ border via `offset`): reach = reach_px(elevation_pct)."""
+    draw_shadow_reach(cr, w, h, T, R, panels, reach_px(elevation_pct), rgba, offset)
 
 
 def draw_shadow_reach(
@@ -129,8 +118,13 @@ def draw_shadow_reach(
     panels: list[Panel],
     reach: int,
     rgba: RGBA,
+    offset: float = 0,
 ) -> None:
     """Uniform shadow with an absolute `reach` in px (the primitive under draw_shadow_uniform).
+
+    `offset` shifts the whole profile outward (the border width): reach and alpha are measured
+    from `offset` px past the outline, i.e. from the outer edge of the border, and the band under
+    the border carries the edge strength.
 
     Drawn on the desktop side only: one 1 px-step stroke per layer of the outline, widest first,
     clipped to the desktop region (so nothing is drawn under the mass). The caller draws the
@@ -149,7 +143,7 @@ def draw_shadow_reach(
     for i in range(reach, 0, -1):
         cr.new_path()
         outline_path(cr, w, h, T, R, panels)
-        cr.set_line_width(2 * i)
+        cr.set_line_width(2 * (i + offset))
         cr.set_source_rgba(r, g, b, levels[i - 1])
         cr.stroke()
     cr.restore()
@@ -167,7 +161,7 @@ def draw_scene(
     shadow: tuple[float, RGBA] | None = None,
     clip: tuple[int, int, int, int] | None = None,
 ) -> None:
-    """Clear, then draw shadow (under), mass, border (over).
+    """Clear, then draw shadow (under), mass, border (over, on the desktop side of the outline).
 
     `border` = (width, rgba), `shadow` = (elevation_pct, rgba). With `clip` = (x, y, w, h) only that
     rectangle is cleared and redrawn (damaged-region redraw on a retained transparent surface);
@@ -180,7 +174,9 @@ def draw_scene(
     cr.clip()
     cr.push_group()
     if shadow is not None:
-        draw_shadow_uniform(cr, w, h, T, R, panels, shadow[0], shadow[1])
+        draw_shadow_uniform(
+            cr, w, h, T, R, panels, shadow[0], shadow[1], border[0] if border else 0
+        )
     fill_mass(cr, w, h, T, R, panels, mass_rgba)
     if border is not None:
         draw_border(cr, w, h, T, R, panels, border[0], border[1])

@@ -1,0 +1,21 @@
+# Gate 4: shape canvas border and shadow on HDMI-A-1 only (DP-1 is left alone).
+#   cp examples/effects-test.toml /tmp/edge-effects.toml
+#   scripts/py main.py --config /tmp/edge-effects.toml -v      (edit the copy while it runs)
+[theme.border]
+enabled = true
+
+[theme.shadow]
+enabled = true
+elevation = 50
+
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "system_bar"

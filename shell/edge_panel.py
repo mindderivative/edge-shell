@@ -1,8 +1,10 @@
-"""EdgePanel: a layer-shell window that grows out of the frame and fuses with it."""
+"""EdgePanel: the content, handle and input window of one panel. Its body is drawn by the
+monitor's shape canvas; the panel reports its animated depth through `on_depth`."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import cairo
 import gi
@@ -19,10 +21,8 @@ from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 from shell import geometry, panel_state
 from shell.anim import Tween
 from shell.config.models import Theme
-from shell.draw import draw_panel
 from shell.gdk_util import monitor_index
 from shell.panel_spec import PanelGeometry
-from shell.theme import hex_to_rgba
 
 HANDLE_DEPTH = 14  # handle size across the depth axis
 HANDLE_LENGTH = 44  # handle size along the edge
@@ -33,7 +33,17 @@ class EdgePanel(WaylandWindow):
 
     wants_keyboard = False
 
-    def __init__(self, spec: PanelGeometry, theme: Theme, monitor, index: int, scope: str):
+    def __init__(
+        self,
+        spec: PanelGeometry,
+        theme: Theme,
+        monitor,
+        index: int,
+        scope: str,
+        on_depth: Callable[[float], None] | None = None,
+    ):
+        """`spec.pos` must be resolved (shell.panel_layout); `on_depth(d)` is called on every
+        animation frame with the current depth (MonitorShell forwards it to the canvas)."""
         t, r = theme.thickness, theme.radius
         mon = monitor.get_geometry()
         extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
@@ -59,6 +69,7 @@ class EdgePanel(WaylandWindow):
 
         self.spec = spec
         self._theme = theme
+        self._on_depth = on_depth
         self._extended = spec.state == "extended"
         self._hovered = False
         self._d = 0.0
@@ -68,8 +79,6 @@ class EdgePanel(WaylandWindow):
         self._dragging = False
         self._suppress_click = False
 
-        self._canvas = Gtk.DrawingArea()
-        self._canvas.connect("draw", self._on_draw)
         # Centring container: the widget's own content is centred inside the body box
         # that _place_content sizes and positions (a Box packs children at the start).
         inner = self.build_content()
@@ -79,7 +88,8 @@ class EdgePanel(WaylandWindow):
         inner.set_valign(Gtk.Align.CENTER)
         self._content = Box(name="panel-content", children=[inner])
         self._handle = self._build_handle()
-        self.add(Overlay(child=self._canvas, overlays=[self._content, self._handle]))
+        # Transparent base: the body is painted by the shape canvas underneath this window.
+        self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
 
         # Allocated once at full size; animation never resizes the layer surface.
         w, h = geometry.surface_size(spec.edge, spec.length, spec.depth, t, r)
@@ -122,10 +132,11 @@ class EdgePanel(WaylandWindow):
             self._update_input_region(self._d)
 
     def raise_to_top(self) -> None:
-        """Re-map the window so the compositor stacks it above the frame strips.
+        """Re-map the window so the compositor stacks it above the shape canvas.
 
-        Same layer, so stacking follows map order; a panel's handle sits inside the
-        strip band when collapsed and is hidden if a strip lands above it. Hiding drops the
+        The frame strips are on the bottom layer; the canvas shares the panels' layer, so
+        stacking follows map order, and a collapsed handle is hidden if the canvas lands
+        above it. Hiding drops the
         pointer state, so hover is reset; a drag in progress is never interrupted.
         """
         if self._dragging:
@@ -137,9 +148,8 @@ class EdgePanel(WaylandWindow):
         self._update_input_region(self._d)
 
     def apply_theme(self, theme: Theme) -> None:
-        """Colors only; geometry changes rebuild the panel instead."""
+        """Colors only (CSS and the canvas repaint them); geometry changes rebuild the panel."""
         self._theme = theme
-        self._canvas.queue_draw()
 
     # ---- state -----------------------------------------------------------------
     def _on_enter(self, *_) -> None:
@@ -186,25 +196,8 @@ class EdgePanel(WaylandWindow):
         self._d = d
         self._place_handle(d)
         self._update_input_region(d)
-        self._canvas.queue_draw()
-
-    def _on_draw(self, _area, cr) -> bool:
-        cr.save()
-        cr.set_operator(cairo.OPERATOR_CLEAR)
-        cr.paint()
-        cr.restore()
-        t = self._theme
-        draw_panel(
-            cr,
-            self.spec.edge,
-            self.spec.length,
-            self.spec.depth,
-            self._d,
-            t.thickness,
-            t.radius,
-            hex_to_rgba(t.frame),
-        )
-        return False
+        if self._on_depth is not None:
+            self._on_depth(d)  # the canvas redraws the body's damaged box
 
     def _update_input_region(self, d: float) -> None:
         # Only the body (plus an invisible hover zone while collapsed) takes input.

@@ -101,3 +101,47 @@ def test_font_override_with_bad_name_fails_at_load(make_config):
 
 def test_ordinary_font_names_accepted(make_config):
     assert make_config(theme={"font": ["JetBrains Mono", "Hack Nerd Font Mono"]})
+
+
+def test_eight_digit_colour_accepted_and_lowercased(make_config):
+    assert make_config(theme={"frame": "#0B0C0D80"}).theme.frame == "#0b0c0d80"
+
+
+@pytest.mark.parametrize("bad", ["#0b0c0d8", "#0b0c0d800", "0b0c0d80", "#0b0c0g80"])
+def test_bad_alpha_colour_rejected_with_key_path(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"frame": bad})
+    assert exc.value.errors()[0]["loc"] == ("theme", "frame")
+    assert "#rrggbbaa" in str(exc.value)
+
+
+BAD_COLORS = ["#ffffff\n", "#ffffff80\n", " #ffffff", "#ffffff ", "#fff"]
+
+
+@pytest.mark.parametrize("bad", BAD_COLORS)
+@pytest.mark.parametrize(
+    ("make_theme", "path"),
+    [
+        (lambda c: {"frame": c}, ("theme", "frame")),
+        (lambda c: {"border": {"color": c}}, ("theme", "border", "color")),
+        (lambda c: {"shadow": {"color": c}}, ("theme", "shadow", "color")),
+    ],
+)
+def test_malformed_colors_rejected_in_theme(make_config, bad, make_theme, path):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme=make_theme(bad))
+    assert exc.value.errors()[0]["loc"] == path
+
+
+@pytest.mark.parametrize("bad", BAD_COLORS)
+@pytest.mark.parametrize("key", ["border", "shadow"])
+def test_malformed_override_effect_color_names_key_path(make_config, bad, key):
+    with pytest.raises(ValidationError) as exc:
+        make_config(monitors={"HDMI-A-1": {"theme": {key: {"color": bad}}}})
+    assert "monitors.HDMI-A-1.theme" in str(exc.value)
+
+
+@pytest.mark.parametrize("good", ["#ffffff", "#FFFFFF80"])
+def test_valid_six_and_eight_digit_colors_still_pass(make_config, good):
+    cfg = make_config(theme={"border": {"color": good}})
+    assert cfg.theme.border.color == good.lower()

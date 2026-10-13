@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -19,9 +19,9 @@ Edge = Literal["top", "bottom", "left", "right"]
 PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
 
-_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
-_COLOR_FIELDS = (
+COLOR_FIELDS = (
     "frame",
     "text",
     "text_secondary",
@@ -40,6 +40,50 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def check_hex(value: str) -> str:
+    if not _HEX.fullmatch(value):
+        raise ValueError("must be a #rrggbb or #rrggbbaa hex color")
+    return value.lower()
+
+
+def deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """`over` on top of `base`; nested tables merge key by key, scalars and lists replace."""
+    out = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+class Border(_Strict):
+    """Border along the outside of the frame and panel outline (spec 18). Opt-in. It adds `width`
+    px to the footprint; the frame thickness and panel depth are unchanged."""
+
+    enabled: bool = False
+    width: Annotated[int, Field(ge=1, le=16)] = 2
+    color: str = "#8fd3b6ff"
+
+    @field_validator("color")
+    @classmethod
+    def _hex(cls, value: str) -> str:
+        return check_hex(value)
+
+
+class Shadow(_Strict):
+    """Uniform shadow of the frame and panels (spec 18). Opt-in. `elevation` is 0-100 %."""
+
+    enabled: bool = False
+    elevation: Annotated[int, Field(ge=0, le=100)] = 50
+    color: str = "#00000080"
+
+    @field_validator("color")
+    @classmethod
+    def _hex(cls, value: str) -> str:
+        return check_hex(value)
+
+
 class Theme(_Strict):
     frame: str
     text: str
@@ -54,13 +98,13 @@ class Theme(_Strict):
     hover_zone: Annotated[int, Field(ge=1, le=64)]
     duration_ms: Annotated[int, Field(ge=0, le=5000)]
     font: Annotated[list[str], Field(min_length=1)]
+    border: Border = Field(default_factory=Border)
+    shadow: Shadow = Field(default_factory=Shadow)
 
-    @field_validator(*_COLOR_FIELDS)
+    @field_validator(*COLOR_FIELDS)
     @classmethod
     def _hex(cls, value: str) -> str:
-        if not _HEX.match(value):
-            raise ValueError("must be a #rrggbb hex color")
-        return value.lower()
+        return check_hex(value)
 
     @field_validator("font")
     @classmethod
@@ -73,11 +117,22 @@ class Theme(_Strict):
         return value
 
 
-# Same fields as Theme, all optional. Merged over the base theme and re-validated by Theme.
-ThemeOverride = create_model(
-    "ThemeOverride",
-    __base__=_Strict,
-    **{name: (field.annotation | None, None) for name, field in Theme.model_fields.items()},
+def _override_of(name: str, model: type[BaseModel], nested: dict[str, type] | None = None):
+    """Same fields as `model`, all optional (None = not set). Nested tables use the override
+    model given in `nested`, so a partial `[monitors.X.theme.shadow]` table stays partial."""
+    nested = nested or {}
+    fields = {
+        fname: (nested.get(fname, field.annotation) | None, None)
+        for fname, field in model.model_fields.items()
+    }
+    return create_model(name, __base__=_Strict, **fields)
+
+
+BorderOverride = _override_of("BorderOverride", Border)
+ShadowOverride = _override_of("ShadowOverride", Shadow)
+# Merged over the base theme (deep_merge) and re-validated by Theme.
+ThemeOverride = _override_of(
+    "ThemeOverride", Theme, {"border": BorderOverride, "shadow": ShadowOverride}
 )
 
 Length = Annotated[int, Field(ge=60, le=4000)]
@@ -109,7 +164,7 @@ class Config(_Strict):
 
     def theme_for(self, name: str) -> Theme:
         override = self.monitor(name).theme.model_dump(exclude_none=True)
-        return Theme.model_validate({**self.theme.model_dump(), **override})
+        return Theme.model_validate(deep_merge(self.theme.model_dump(), override))
 
     @model_validator(mode="after")
     def _check_overrides(self) -> Config:
