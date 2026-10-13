@@ -133,3 +133,34 @@ def test_all_off_paths_list_the_panels_only_state_opens(grip, make_config):
     )
     assert grip.all_off_paths(cfg) == ["monitors.HDMI-A-1.panels.1", "monitors.HDMI-A-1.panels.2"]
     assert grip.all_off_paths(make_config(monitors=mon({"widget": "dock"}))) == []
+
+
+@pytest.fixture
+def mute(fake_registry):
+    """A widget whose defaults turn every interaction off."""
+    fake_registry.register(
+        "mute",
+        PanelDefaults(
+            edge="left",
+            length=200,
+            depth=40,
+            label="mute",
+            interaction=Interaction(click=False, hover=False, drag=False),
+        ),
+    )(type("Mute", (), {}))
+    return fake_registry
+
+
+def test_all_off_paths_skip_an_entry_that_re_enables_a_flag(mute, make_config):
+    cfg = make_config(monitors=mon({"widget": "mute", "interaction": {"click": True}}))
+    assert mute.all_off_paths(cfg) == []
+
+
+def test_all_off_paths_list_a_widget_that_is_all_off_by_default(mute, make_config):
+    cfg = make_config(monitors=mon({"widget": "mute"}))
+    assert mute.all_off_paths(cfg) == ["monitors.HDMI-A-1.panels.0"]
+
+
+def test_all_off_paths_skip_an_unknown_widget(fake_registry, make_config):
+    cfg = make_config(monitors=mon({"widget": "nope"}))
+    assert fake_registry.all_off_paths(cfg) == []
