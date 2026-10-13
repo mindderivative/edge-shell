@@ -23,6 +23,7 @@ class FakeHandleWidget:
 
     def __init__(self, flags=Gtk.StateFlags.NORMAL):
         self.flags = flags
+        self.focused = False
         self.set = {}
         self.name = None
         accessible = SimpleNamespace(set_name=lambda n: setattr(self, "name", n))
@@ -35,6 +36,9 @@ class FakeHandleWidget:
 
     def get_state_flags(self):
         return self.flags
+
+    def has_focus(self):
+        return self.focused
 
 
 def stub(make_config, edge="bottom", interaction=ALL, handle=None, **extra):
@@ -264,6 +268,37 @@ def test_with_every_interaction_off_a_collapsed_panel_is_click_through(make_conf
     assert rects_of(s.regions[-1]) == [(14, 0, 560, 74)]  # the content still takes input
 
 
+@pytest.mark.parametrize(
+    "interaction", [ALL, Interaction(click=False, hover=False, drag=False)], ids=["all", "all-off"]
+)
+def test_the_input_region_is_reapplied_after_the_parent_allocate(
+    make_config, monkeypatch, interaction
+):
+    s = stub(make_config, interaction=interaction)
+    order = []
+
+    def parent(_self, _alloc):
+        order.append("parent")
+        s.regions.append(None)  # Fabric resets the shape to the whole surface
+
+    monkeypatch.setattr(ep.WaylandWindow, "do_size_allocate", parent)
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    ep.EdgePanel._update_input_region(s, 0.0)
+    primed = s._last_rect
+    assert primed is not None
+    s.regions.clear()
+    real = s.input_shape_combine_region
+    s.input_shape_combine_region = lambda region: (order.append("region"), real(region))
+    ep.EdgePanel.do_size_allocate(s, None)
+    assert order == ["parent", "region"]
+    expected = hd.input_rects(
+        "bottom", 560, 64, 0.0, s._theme.thickness, s._theme.radius, s._theme.hover_zone,
+        interaction, s._hit(), s._look.offset,
+    )  # fmt: skip
+    assert s.regions[0] is None and rects_of(s.regions[-1]) == [tuple(r) for r in expected]
+    assert s._last_rect == primed
+
+
 # ---- interaction flags --------------------------------------------------------------
 
 
@@ -357,3 +392,69 @@ def test_labels_and_keyboard_follow_click(make_config, interaction, tooltip, nam
     assert s._handle.name == name
     assert s._handle.set["can_focus"] == (focus,)
     assert s._handle_area.draws == 1
+
+
+def test_turning_drag_off_under_a_held_press_starts_no_drag(make_config):
+    s = stub(
+        make_config,
+        interaction=Interaction(drag=False),
+        _dragging=False,
+        _press=(100.0, 500.0),
+        _press_depth=0.0,
+    )
+    s._tween = SimpleNamespace(jump_to=lambda v: s.calls.append(("jump", v)))
+    event = SimpleNamespace(state=ep.Gdk.ModifierType.BUTTON1_MASK, x_root=100.0, y_root=300.0)
+    assert ep.EdgePanel._on_motion(s, None, event) is False  # far past the click threshold
+    assert s._press is None and s._dragging is False and s.calls == []
+
+
+def test_losing_click_drops_the_handle_focus(make_config):
+    s = stub(make_config)
+    s._restyle_handle = lambda: None
+    s.set_focus = lambda w: s.calls.append(("focus", w))
+    s._handle.focused = True
+    ep.EdgePanel.set_handle(s, HandleSpec(), ALL)  # click kept: focus untouched
+    assert s.calls == []
+    s._handle.focused = False
+    ep.EdgePanel.set_handle(s, HandleSpec(), Interaction(click=False))  # nothing to drop
+    assert s.calls == []
+    s._handle.focused = True
+    ep.EdgePanel.set_handle(s, HandleSpec(), Interaction(click=False))  # focused: dropped
+    assert s.calls == [("focus", None)]
+
+
+def test_leaving_with_hover_off_still_settles(make_config):
+    s = stub(make_config, interaction=Interaction(hover=False), _dragging=False, _hovered=True)
+    s._retarget = lambda: s.calls.append(("retarget", s._hovered))
+    ep.EdgePanel._on_leave(s, None, SimpleNamespace(detail=ep.Gdk.NotifyType.ANCESTOR))
+    assert s._hovered is False and s.calls == [("retarget", False)]
+
+
+def test_drag_off_and_click_on_one_press_toggles(make_config):
+    toggles = []
+    s = stub(
+        make_config,
+        interaction=Interaction(drag=False),
+        _press=None,
+        _dragging=False,
+        _suppress_click=False,
+    )
+    s.toggle = lambda: toggles.append(1)
+    press = SimpleNamespace(button=1, x_root=5.0, y_root=5.0)
+    assert ep.EdgePanel._on_press(s, None, press) is False
+    move = SimpleNamespace(state=ep.Gdk.ModifierType.BUTTON1_MASK, x_root=5.0, y_root=400.0)
+    assert ep.EdgePanel._on_motion(s, None, move) is False  # no press tracked: no drag
+    s._finish_drag = lambda: ep.EdgePanel._finish_drag(s)
+    assert ep.EdgePanel._on_release(s, None, SimpleNamespace(button=1)) is False
+    ep.EdgePanel._on_clicked(s)
+    assert toggles == [1] and s._dragging is False and s._suppress_click is False
+
+
+def test_set_state_on_an_all_off_panel_still_works(make_config):
+    s = stub(make_config, interaction=Interaction(click=False, hover=False, drag=False))
+    s._dragging = False
+    s._retarget = lambda: s.calls.append(("retarget", s._extended))
+    ep.EdgePanel.set_state(s, "extended")
+    assert s.calls == [("retarget", True)]
+    ep.EdgePanel.set_state(s, "collapsed")
+    assert s.calls[-1] == ("retarget", False)

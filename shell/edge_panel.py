@@ -220,6 +220,8 @@ class EdgePanel(WaylandWindow):
         """A reload changed this panel's handle or interactions: update in place, no rebuild."""
         self._handle_spec, self._interaction = handle, interaction
         self._restyle_handle()
+        if not interaction.click and self._handle.has_focus():
+            self.set_focus(None)  # keyboard follows click: drop focus so the lit state clears
         if self._hovered and not interaction.hover:
             self._hovered = False
             self._retarget()  # drop a peek that hover no longer allows
@@ -393,6 +395,9 @@ class EdgePanel(WaylandWindow):
         dx = event.x_root - self._press[0]
         dy = event.y_root - self._press[1]
         if not self._dragging:
+            if not self._interaction.drag:  # turned off while the press was held
+                self._press = None
+                return False
             if panel_state.is_click(math.hypot(dx, dy)):
                 return False
             self._dragging = True
