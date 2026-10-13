@@ -2,7 +2,8 @@
 
 Controls: border = (width px, RGBA); shadow = (elevation %, RGBA) where the colour's alpha is
 the strength. No offset, no top/bottom bias, no second layer. Migrated from the shape-canvas
-spike (spikes/canvas/effects.py at 872eff9) without behaviour changes.
+spike (spikes/canvas/effects.py at 872eff9); the one behaviour change is that the border is
+drawn outside the mass (commit 514573f).
 """
 
 from __future__ import annotations

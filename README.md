@@ -117,7 +117,7 @@ that need `gi` or Fabric skip themselves there.
   behind the canvas. `EDGE_SHELL_RAISE_MS=0` turns it off for debugging.
 - Changing a connected monitor's resolution or scale does not reflow panels: neither those
   with an explicit `pos` nor, since the shape canvas, centred ones (every position is
-  resolved once, when the panel is built). Restart the shell or save the config. Planned fix.
+  resolved once, when the panel is built). Restart the shell or save a change to the config. Planned fix.
 - The frame band is click-through: clicks on the frame reach the desktop.
 - HiDPI / fractional scaling: the canvas assumes scale 1 (it logs a warning otherwise).
 - `--stats` mixes scene keys across monitors when two or more monitors are configured.

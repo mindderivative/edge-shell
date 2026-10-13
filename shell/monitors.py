@@ -30,16 +30,17 @@ log = logging.getLogger(__name__)
 
 # Timing workaround, not an event-driven fix (core build): KWin restacks same-layer surfaces
 # when it first configures them, which put the old frame strips above the panels. The strips
-# now live on the bottom layer, but the canvas shares the panels' layer, so the re-map stays
-# until Gates 1-2 show it is not needed. Empirical: 50 ms was too early, 500 ms reliable; the
+# now live on the bottom layer, but the canvas shares the panels' layer, so the re-map stays:
+# Gate 1 item 7 showed it is still needed (collapsed handle dots are hidden without it).
+# Empirical: 50 ms was too early, 500 ms reliable; the
 # second raise is a safety net for a slow compositor; both are no-ops after close().
 RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
-    """Re-raise delays. EDGE_SHELL_RAISE_MS=0 turns the re-raise off, so Gates 1-2 can test
-    whether the canvas design still needs it (temporary switch, removed with the raise)."""
+    """Re-raise delays. EDGE_SHELL_RAISE_MS=0 turns the re-raise off. It is a debug switch for
+    checking the stacking without the delayed re-raise, not a supported setting."""
     if env.get("EDGE_SHELL_RAISE_MS", "").strip() == "0":
         return ()
     return (RAISE_DELAY_MS, RAISE_FALLBACK_MS)
@@ -115,7 +116,15 @@ class MonitorShell:
         self._resolved: list[PanelGeometry | None] = []
         self.layout_warnings: list[str] = []
         self._keys = itertools.count()  # scene keys for the canvas
-        theme = config.theme_for(name)
+        try:
+            self._build(config)
+        except BaseException:
+            self.close()  # never leave a half-built monitor's windows on screen
+            raise
+
+    def _build(self, config: Config) -> None:
+        theme = config.theme_for(self.name)
+        monitor = self.monitor
         # The canvas first: it draws the frame and corners and must stay below every panel.
         self.canvas = ShapeCanvas(monitor, theme, self._scope)
         self._track(self.canvas)

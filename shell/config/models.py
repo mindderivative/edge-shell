@@ -19,7 +19,7 @@ Edge = Literal["top", "bottom", "left", "right"]
 PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
 
-_HEX = re.compile(r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$")  # #rrggbb or #rrggbbaa
+_HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
 COLOR_FIELDS = (
     "frame",
@@ -41,7 +41,7 @@ class _Strict(BaseModel):
 
 
 def check_hex(value: str) -> str:
-    if not _HEX.match(value):
+    if not _HEX.fullmatch(value):
         raise ValueError("must be a #rrggbb or #rrggbbaa hex color")
     return value.lower()
 

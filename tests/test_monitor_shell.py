@@ -302,6 +302,24 @@ def test_failed_panel_construction_leaves_no_scene_shape(build, make_config, mon
     assert shell.canvas.shapes == {}
 
 
+def test_failed_construction_closes_everything_already_built(make_config, monkeypatch):
+    def explode(*a, **k):
+        raise RuntimeError("panel broke")
+
+    monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeCanvas)
+    monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
+    monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
+    registered, unregistered = [], []
+    cfg = make_config(monitors=edge({"widget": "dock"}))
+    with pytest.raises(RuntimeError, match="panel broke"):
+        mon_mod.MonitorShell("HDMI-A-1", MONITOR, cfg, registered.append, unregistered.append)
+    assert len(registered) == 5  # canvas + 4 strips were on screen
+    assert unregistered == registered
+    assert all(w.destroyed for w in registered)
+
+
 # ---- EdgePanel.raise_to_top (plain function called on a stand-in) --------------------
 
 

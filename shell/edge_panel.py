@@ -132,10 +132,11 @@ class EdgePanel(WaylandWindow):
             self._update_input_region(self._d)
 
     def raise_to_top(self) -> None:
-        """Re-map the window so the compositor stacks it above the frame strips.
+        """Re-map the window so the compositor stacks it above the shape canvas.
 
-        Same layer, so stacking follows map order; a panel's handle sits inside the
-        strip band when collapsed and is hidden if a strip lands above it. Hiding drops the
+        The frame strips are on the bottom layer; the canvas shares the panels' layer, so
+        stacking follows map order, and a collapsed handle is hidden if the canvas lands
+        above it. Hiding drops the
         pointer state, so hover is reset; a drag in progress is never interrupted.
         """
         if self._dragging:
