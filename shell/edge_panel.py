@@ -125,6 +125,7 @@ class EdgePanel(WaylandWindow):
         self._hovered = False
         self._d = 0.0
         self._last_rect: tuple[int, int, int, int] | None = None
+        self._draw_failed = False  # a draw error is logged once per look
         self._press: tuple[float, float] | None = None  # drag state
         self._press_depth = 0.0
         self._dragging = False
@@ -252,6 +253,7 @@ class EdgePanel(WaylandWindow):
 
     def _restyle_handle(self) -> None:
         self._look = hd.resolve_handle(self._handle_spec, self._interaction, self._theme)
+        self._draw_failed = False
         self._size_handle()
         self._sync_handle()
         self._place_handle(self._d)
@@ -294,6 +296,7 @@ class EdgePanel(WaylandWindow):
         """The hit target: a Button (click, keyboard, accessible name) whose child draws the
         shape with cairo. Sized by _size_handle."""
         area = Gtk.DrawingArea()
+        area.set_has_window(False)  # draws into the Button's window: no GdkWindow of its own
         area.connect("draw", self._on_handle_draw)
         self._handle_area = area
         handle = Button(name="handle", child=area, on_clicked=self._on_clicked)
@@ -346,7 +349,9 @@ class EdgePanel(WaylandWindow):
                 hd.band_room(t.thickness),  # 2 px of the band stay clear (decision 12)
             )
         except Exception:  # never let a draw error escape into GTK's main loop
-            log.exception("drawing the handle of %s failed", self.spec.label)
+            if not self._draw_failed:
+                self._draw_failed = True
+                log.exception("drawing the handle of %s failed", self.spec.label)
         return False
 
     # ---- drag ------------------------------------------------------------------

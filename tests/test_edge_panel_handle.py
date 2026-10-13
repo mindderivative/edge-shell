@@ -12,8 +12,8 @@ from gi.repository import Gtk  # noqa: E402
 
 import shell.edge_panel as ep  # noqa: E402
 from shell import handle as hd  # noqa: E402
+from shell.handle_draw import draw_handle  # noqa: E402
 from shell.panel_spec import HandleSpec, Interaction  # noqa: E402
-from shell.theme import to_css  # noqa: E402
 
 ALL = Interaction()
 
@@ -50,6 +50,7 @@ def stub(make_config, edge="bottom", interaction=ALL, handle=None, **extra):
         _hovered=False,
         _extended=False,
         _last_rect=None,
+        _draw_failed=False,
         _handle=FakeHandleWidget(),
         _handle_area=SimpleNamespace(draws=0),
         _content=SimpleNamespace(set_sensitive=lambda v: None),
@@ -161,6 +162,48 @@ def test_a_draw_error_is_logged_not_raised(make_config, caplog):
     assert "drawing the handle of dock failed" in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("edge", "d", "w", "h"), [("left", 32.0, 14, 44), ("bottom", 64.0, 44, 14)]
+)
+def test_the_draw_call_is_pinned(make_config, edge, d, w, h):
+    """_on_handle_draw must pass exactly the look, morph, centre and band room to draw_handle."""
+    handle = HandleSpec(shape="chevron")
+    s = stub(make_config, edge=edge, handle=handle, _d=d)
+    got = draw(s, w, h)
+    t, look = s._theme, s._look
+    want = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+    draw_handle(
+        cairo.Context(want),
+        look.shape,
+        look.size,
+        look.weight,
+        look.rgba,
+        hd.morph(d, 64),
+        edge,
+        *hd.shape_centre(edge, w, h, t.thickness, d),
+        hd.band_room(t.thickness),
+    )
+    want.flush()
+    assert bytes(got.get_data()) == bytes(want.get_data())
+    assert any(bytes(want.get_data()))  # something was drawn
+
+
+def test_a_draw_error_is_logged_once_per_look(make_config, caplog):
+    s = stub(make_config)
+    s._look = None
+    draw(s)
+    draw(s)
+    assert caplog.text.count("drawing the handle of dock failed") == 1
+    s._restyle_handle = lambda: None
+    s._size_handle = s._sync_handle = lambda: None
+    s._place_handle = s._update_input_region = lambda d: None
+    ep.EdgePanel._restyle_handle(s)  # a new look: errors are reported again
+    assert s._draw_failed is False
+    s._look = None
+    draw(s)
+    assert caplog.text.count("drawing the handle of dock failed") == 2
+
+
 def test_the_handle_is_a_button_drawing_with_cairo(make_config):
     if not Gtk.init_check()[0]:
         pytest.skip("no display")
@@ -171,12 +214,13 @@ def test_the_handle_is_a_button_drawing_with_cairo(make_config):
     assert isinstance(button, Gtk.Button) and button.get_name() == "handle"
     assert isinstance(button.get_child(), Gtk.DrawingArea)
     assert s._handle_area is button.get_child()
-
-
-def test_css_no_longer_styles_handle_dots(make_config):
-    css = to_css(make_config().theme, "mon-x")
-    assert "handle-dot" not in css
-    assert ".mon-x #handle { min-width: 0; min-height: 0; padding: 0; }" in css
+    area = button.get_child()
+    assert not area.get_has_window()  # no GdkWindow of its own
+    area.set_size_request(44, 14)  # sizing still works for a windowless area
+    area.show()  # preferred size is 0 for an invisible widget
+    assert area.get_preferred_width()[0] == 44
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 44, 14)
+    assert area.emit("draw", cairo.Context(surface)) is False  # the panel's draw handler runs
 
 
 def test_a_bad_look_fails_before_the_window_exists(make_config):

@@ -78,3 +78,9 @@ def test_every_css_colour_parses_in_gtk3(make_config):
     assert len(values) >= 5  # the handle colours are drawn with cairo, not CSS
     for value in (v for v in values if v != "transparent"):
         assert Gdk.RGBA().parse(value), value
+
+
+def test_css_no_longer_styles_handle_dots(make_config):
+    css = to_css(make_config().theme, "mon-x")
+    assert "handle-dot" not in css
+    assert ".mon-x #handle { min-width: 0; min-height: 0; padding: 0; }" in css
