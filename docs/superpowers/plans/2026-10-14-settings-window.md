@@ -2,122 +2,139 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A normal settings window that edits the user config (`~/.config/edge-shell/config.toml`, or the file given with `--config`) through a form generated from the Pydantic JSON schema and the widget registry: theme colours, fonts, thickness, radius, border, shadow and handle style; the per-monitor shell mode (`edge | plasma | both | none`) and per-monitor theme and layout overrides; each monitor's panel list (add, remove, reorder, widget choice, edge, align, offset, order, length, depth, state, handle, interactions); with every change validated by the shell's own rules before it is written, so the running shell reloads it live.
+**Goal:** A normal settings window that edits the user config (`~/.config/edge-shell/config.toml`, or the file given with `--config`) through a form generated from the Pydantic JSON schema and the widget registry: theme colours, fonts, thickness, radius, border, shadow and handle style; the per-monitor shell mode (`edge | plasma | both | none`) and per-monitor theme and layout overrides; each monitor's panel list (add, remove, reorder, widget choice; for edge panels edge, align, offset, order, length, depth; for corner panels corner, edge, width, height; for both state, handle, interactions); with every change validated by the shell's own rules before it is written, so the running shell reloads it live.
 
-**Architecture:** The window runs in its own process (`main.py --settings`, a single-instance `Gtk.Application`), never inside the shell: the only channel between the two is the config file, which the shell already watches and hot-reloads (spec 6). A pure core is built and tested headlessly first: `settings/files.py` (atomic, symlink-safe writes; one backup per session; restore), `settings/document.py` (round-trip TOML editing with tomlkit that keeps comments, and refuses any edit whose re-parsed result differs from the intended plain-data edit), `settings/session.py` (apply = edit, check with the shell's loader and widget registry, write; undo, revert, hand-edit detection), `settings/form.py` (the form description from `Config.model_json_schema()`: field kinds, bounds, enums, colours) and `settings/values.py` (the value each field shows and where it is inherited from, plus a layout-warning preview from the shell's own resolver). A thin GTK layer renders it: `settings/fields.py` (one row per field), `settings/panels.py` (the panel list editor), `settings/view.py` (pages, banner, undo/revert, a plain `Gtk.Box` so it is tested without a window), `settings/window.py` and `settings/app.py` (the toplevel and the process). The shell gains one entry point: a right-click on any panel handle starts the window on the shell's config file.
+**Written against the code as it will be after the corner panel plan** (`docs/superpowers/plans/2026-10-14-corner-panel.md`, Plan 5, on `feat/corner-panel-plan`): that plan runs and merges first (Prerequisites). Phil asked for it in that order: "plan the corner panel before the settings panel as the settings panel should include it". This plan uses only Plan 5's public contract (its decision 6): `registry.widget_kind(name)`, `registry.defaults(name)`, `shell.config.models.SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS` / `CORNERS`, the corner's two edges as `corner.split("-")`, `panel_spec.default_edge(corner)` / `corner_has_edge`, `CornerRequest` / `CornerDefaults`, and the `corner_registry` test fixture (a corner widget `"box"`, bottom-left, 300 x 390).
 
-**Tech Stack:** Python 3.14 (>=3.12), PyGObject 3.50.0 (`<3.52`), GTK 3, Fabric 0.0.2 (shell side only), Pydantic 2, **tomlkit >= 0.13 (new, pure Python)**, pytest, ruff 0.17.0.
+**Architecture:** The window runs in its own process (`main.py --settings`, a `Gtk.Application` with one instance per config file), never inside the shell: the only channel between the two is the config file, which the shell already watches and hot-reloads (spec 6). A pure core is built and tested headlessly first: `settings/files.py` (atomic writes that keep a symlinked config's link, the shell's watcher also watching the file it points to; one backup per session; restore), `settings/document.py` (round-trip TOML editing with tomlkit that keeps comments, refuses any edit whose re-parsed result differs from the intended plain-data edit, and refuses one that would lose a comment above a table: the comment census), `settings/session.py` (apply = edit, check with the shell's loader and widget registry, write; undo, revert, hand-edit detection; file errors become messages), `settings/form.py` (the form description from `Config.model_json_schema()`: field kinds, bounds, enums, colours; one panel section per kind, edge and corner) and `settings/values.py` (the value each field shows and where it is inherited from, the compound edits that keep a panel entry valid when its widget kind or corner changes, and a layout-warning preview from the shell's own resolver). A thin GTK layer renders it: `settings/fields.py` (one row per field; the mouse wheel never edits), `settings/panels.py` (the panel list editor, edge and corner panels in one list), `settings/view.py` (pages, banner, undo/revert, a plain `Gtk.Box` so it is tested without a window), `settings/window.py` and `settings/app.py` (the toplevel and the process). The shell gains one entry point, a right-click on any panel handle (edge or corner) that starts the window on the shell's config file, and loses one: Fabric's unauthenticated D-Bus client is switched off (Task 12).
+
+**Tech Stack:** Python 3.14 (>=3.12), PyGObject 3.50.0 (`<3.52`), GTK 3, Fabric 0.0.2 (shell side only), Pydantic 2, **tomlkit >= 0.15 (new, pure Python; only 0.15.1 is verified)**, pytest, ruff 0.17.0.
 
 **Spec:** `docs/superpowers/specs/2026-10-11-edge-shell-design.md`: section 13 (this plan), 6 (config, user file over defaults, validation with key paths, live reload table), 5.3 (monitor modes), 7 (Plasma integration: why the Plasma toggle is deferred), 14 (forms vs drag-and-drop), 15-17 (handle, interaction and layout keys the form exposes; "the settings window exposes slot, order and gap, and shows the overlap warning"). Previous plans for style and gates: `docs/superpowers/plans/2026-10-13-handle-customization.md`, `docs/superpowers/plans/2026-10-13-layout-anchoring.md`.
 
 **Phil's requirements (verbatim):** "eventually, I want a settings panel for this project, where we can hide or show the plasma shell and hide or show the edge shell. I want this settings panel to basically allow me to change colors, turn the shell on or off, change the location of the edge bars and panels, pick what widgets I want, etc... Basically fully customizable Edge Shell". "We should have the ability to apply edge shell to one monitor and plasma shell to another." Earlier decisions: config first, then the settings window (a normal window); monitor modes `edge|plasma|both|none`; the window writes the user config file only; the form is generated from the Pydantic JSON schema and the widget registry; opened from a key binding, tray icon or frame handle (spec 13).
 
-**Scope (Plan 4).** In: everything in the config models except the deprecated `pos` (shown, removable, not editable): `[theme]` with `border`, `shadow`, `handle_style`; `[layout]`; per monitor `shell`, `theme` override, `layout` override and the panel list; undo, revert, per-field reset; layout-warning preview; live apply; the backup and `--restore-config`; opening by CLI, by a right-click on a panel handle, and by a KDE custom shortcut (documented; Phil sets it). Out (decision 1): hiding or showing Plasma's panels, workspaces and tray widgets, a tray icon, drag-and-drop layout editing, HiDPI, editing `config.default.toml`.
+**Scope (Plan 4).** In: everything in the config models except the deprecated `pos` (shown, removable, not editable): `[theme]` with `border`, `shadow`, `handle_style`; `[layout]`; per monitor `shell`, `theme` override, `layout` override and the panel list, edge and corner panels (Plan 5's `corner`, `edge`, `width`, `height`); undo, revert, per-field reset; layout-warning preview (corner warnings included); live apply; the backup and `--restore-config`; opening by CLI, by a right-click on a panel handle, and by a KDE custom shortcut (documented; Phil sets it); switching off Fabric's D-Bus client (Task 12). Out (decision 1): hiding or showing Plasma's panels, workspaces and tray widgets, a tray icon, drag-and-drop layout editing, HiDPI, editing `config.default.toml`, adding a panel to an inline `panels = [{...}]` array (refused: edit by hand).
 
 **Date:** 2026-10-14 (the plan's execution date, as in the file name).
 
-**Size:** 14 tasks. 11 carry code and tests (1-11), Task 12 is the gate example and the docs, 2 human gates (Gate A = Task 13, the window and live reload; Gate B = Task 14, safety and entry points, then the results are recorded). Riskiest: Task 3 (tomlkit can silently move keys: found while prototyping, a table added inside a dotted-key table is written as a top-level header; the edit-then-verify design catches it and a test pins it), Task 9 (every edit path: valid, invalid, structural, hand edit, invalid file), Task 11 (the only change to the running shell; Gate B item 6 checks the right-click live).
+**Size:** 15 tasks. 12 carry code and tests (1-12; Task 12 is the small D-Bus change, its own commit), Task 13 is the gate example and the docs, 2 human gates (Gate A = Task 14, the window and live reload; Gate B = Task 15, safety and entry points, then the results are recorded). Riskiest: Task 3 (tomlkit can silently move keys: found while prototyping, a table added inside a dotted-key table is written as a top-level header; the edit-then-verify design catches it and a test pins it; tomlkit also keeps the comments above a header in the table before it, which the comment census guards), Task 9 (every edit path: valid, invalid, structural, compound panel edits, hand edit, invalid file, file errors), Task 11 (the only change to the running shell's panels; Gate B item 6 checks the right-click live).
 
 ## Decisions (each marked *default pending Phil*, with the cost if Phil disagrees)
 
-1. **v1 scope: the whole config model; the Plasma panel toggle is deferred to its own plan.** *Default pending Phil.* The window edits every key the models have (theme incl. border, shadow, handle style; layout gap; per monitor: mode, theme and layout overrides, panels with every key including handle and interaction). Deferred, and why: (a) **hiding or showing Plasma's panel** needs `services/plasma.py` (`org.kde.PlasmaShell.evaluateScript`, whose hide/restore behaviour is still unverified: spec 11 spike 2) and the restore file `~/.local/state/edge-shell/plasma-restore.json` with `--restore-plasma` (spec 7); it touches the live Plasma panel on DP-1, so it needs its own spike gate on a temporary panel on HDMI-A-1 first and Phil's go-ahead before DP-1 is touched; (b) workspaces and tray widgets do not exist yet (milestone 7); (c) a tray icon needs the tray host (milestone 7); (d) drag-and-drop layout editing (spec 14) waits for v1 feedback; (e) HiDPI is unsupported by the shell. **How `plasma` and `both` appear:** as the existing mode choices, each with a one-line explanation under the mode row (`settings/form.py` `MODE_HINTS`): `plasma` = "no Edge Shell here; Plasma's panels stay as they are", `both` = "Edge Shell frame and panels next to Plasma's panel: keep Edge Shell panels off the edge Plasma's panel uses", `none` = "no Edge Shell here (the same as plasma until the Plasma panel toggle exists)". So "Edge Shell on one monitor, Plasma on the other" works today (HDMI-A-1 `edge`, DP-1 `plasma`), and "hide or show the edge shell" per monitor is the mode switch. *Cost if Phil wants the Plasma toggle in v1:* about 5 more tasks (a pure restore-file module with a fake script runner, the D-Bus service, a spike gate on a temporary HDMI-A-1 panel, the window's "Plasma panel" switch per monitor, `--restore-plasma`) and one more live gate that touches DP-1 only after Phil confirms.
-2. **Edits are written into the one user file with tomlkit (round-trip), and verified.** *Default pending Phil.* Every edit re-reads the file's current text, applies one key-path operation (`set`, `unset`, `add_panel`, `remove_panel`, `move_panel`) with tomlkit, and then re-parses the result with `tomllib` and compares it with the same operation applied to plain dicts: any difference (tomlkit misplacing a table) is refused with "edit the file by hand" and nothing is written. Comments, blank lines, key order and dotted-key style are kept (an unedited document is byte-identical); new nested keys inside an existing table are written as dotted keys (`handle.shape = "bar"`), new top-level and monitor tables as headers (`[monitors.eDP-1]`); a table left empty by a reset is removed. Rejected: (a) rewriting the file from the model loses every comment Phil writes; (c) a separate `settings.toml` overlay merged by the loader keeps the hand file untouched, but a key set in the overlay silently shadows the same key edited by hand ("I changed config.toml and nothing happened"), lists replace wholesale (an overlay panel list hides the hand-written one for that monitor), the shell would have to watch and merge two files, and it breaks "writes the user config file only". *Cost:* a new dependency. tomlkit is pure Python (MIT), **not installed in the venv today** (`scripts/py -c 'import tomlkit'` fails; version 0.15.1 is in the local uv cache). Changes: `pyproject.toml` `dependencies` gains `"tomlkit>=0.13"`; `.github/workflows/ci.yml` installs `"tomlkit>=0.13"` next to pydantic; Phil installs it once into the shared venv (`scripts/py -m pip install 'tomlkit>=0.13'`, Prerequisites). Tests that need it start with `pytest.importorskip("tomlkit")`, so a venv without it still passes (those files skip); `main.py --settings` without it prints the install command and exits 2; the shell itself never imports it. *Cost if Phil prefers the overlay (c):* replace `settings/document.py` with an overlay writer (plain `tomllib` + a tiny TOML emitter), make the loader merge three layers and the watcher watch two files (about 2 tasks), and show "set in settings.toml / config.toml" per row.
-3. **The window is its own process; the config file is the only link to the shell.** *Default pending Phil.* `main.py --settings [--config PATH]` runs `settings/app.py`: a `Gtk.Application` with id `org.edgeshell.Settings`, so a second launch brings the open window forward instead of opening another (GApplication's single-instance activation over D-Bus; no Fabric involved). It opens with or without a running shell, and even when the config is invalid (read-only, with the error), which makes it its own escape hatch. Entry points: the CLI; **a right-click on any panel handle** (Task 11: `EdgePanel` calls `EdgeShellApp.open_settings`, which starts `sys.executable main.py --settings --config <the shell's config path>` in a new session, so Ctrl+C on the shell leaves the window open); **a KDE custom shortcut** that runs the same command (Phil adds it in System Settings, documented in the README; the plan never changes system settings); a tray icon later (decision 1). The window is a plain `Gtk.ApplicationWindow` (an xdg toplevel, never a layer surface: nothing in `settings/` imports GtkLayerShell or Fabric windows); on Wayland a client cannot choose its position, so KWin places it (normally on the monitor with the pointer); it has no link to DP-1's Plasma panel. Why not inside the shell process: a bug in the window could take the shell down; the shell's scoped stylesheet and its single-instance `Application` would have to share a main loop with a form; and the window could not open when the shell cannot start. Fabric's D-Bus `InvokeAction`/`Execute` API is not used. *Cost if Phil wants it in-process:* about 1 task (the shell opens `SettingsWindow` itself and shares `ConfigStore`), losing the escape hatch.
-4. **The form is a pure description generated from the JSON schema; rows show the value in effect and where it comes from; "inherit" = the key is absent.** *Default pending Phil.* `settings/form.py` turns `Config.model_json_schema()` into `SectionSpec`/`FieldSpec` trees: integers become spin buttons with the schema's `minimum`/`maximum`, `Literal` enums (`HANDLE_SHAPES`, edges, align, state, shell modes) become combo boxes, booleans switches, the font list a comma-separated entry, `length` a mode combo (px, fill, content, percent) plus a number, `widget` a combo of `registry.widget_names()`, and colours a `Gtk.ColorButton` with alpha (written as `#rrggbb`, or `#rrggbbaa` only when not opaque). Colours are recognised by key name (`COLOR_FIELDS` + `color`, `hover_color`) because the models check them with a validator the schema does not show; a test fails if a new plain string key appears that the form does not classify. **Finding:** the per-monitor override models (`ThemeOverride`, `LayoutOverride`, built with `create_model` from bare annotations) lose their bounds in the schema (`thickness` has no minimum/maximum there), so the override sections are generated from the base models (`Theme`, `LayoutSettings`). Every row shows the value in effect and its source (`your config`, `default`, `global theme`, `global layout`, `widget default`, `theme`, or `not set` for `min_length`/`max_length`/`pos`), plus a reset button that removes the key from the user file (the value is then inherited again). No separate "inherit" checkbox: unset means the key is absent, which is exactly what TOML and the loader already mean. A rejected edit shows the loader's message (it names the key path) under the row that caused it; a rejected structural edit (add, remove, move) shows it in a banner. *Cost:* an explicit inherit toggle per row is a small change in `FieldRow`.
-5. **Live apply, no Apply button; Undo, Revert all and per-field reset.** *Default pending Phil.* A switch, combo or colour applies at once; a spin button applies 400 ms after the last change (one write and one reload per pause, not per arrow click: a `thickness` change rebuilds the monitor); a text entry applies on Enter or focus-out. Each applied change is one undo step (`Undo` button and Ctrl+Z restore the file's previous text); `Revert all` (with a confirmation) restores the file as it was when the window opened. The window watches the file (the shell's own `ConfigWatcher`): a hand edit while it is open is re-read, announced in a banner, and clears the undo history; an edit made against a stale read is refused, never written over the hand edit. Per-section reset is not in v1. *Cost:* an Apply/Cancel bar = buffer the operations in the session and write once (about half a task); per-section reset = one button per frame calling `unset` on the table (small).
-6. **Safety: never write what the shell would reject; atomic writes; a backup and a restore command; no confirm-revert countdown in v1.** *Default pending Phil.* An edit is checked with `load_config_text` (the loader's own merge and validation) plus `registry.validate_widgets` before writing; the write goes to a temporary file next to the target and is renamed over it (the shell's watcher already reacts to renames; a symlinked config, e.g. from a dotfiles repo, keeps its link and the file it points to is replaced; the file mode is kept). Before the first write of a session the file is copied to `config.toml.bak`; `main.py --restore-config` puts it back and keeps the replaced file as `config.toml.before-restore`. The escape hatches when the shell looks wrong: Undo/Ctrl+Z, Revert all, `--restore-config`, and the window itself, which opens even if the shell is not running or the file is invalid. No KDE-style "keep these settings? (15 s)" countdown: the window is a separate normal window the shell cannot take away, and a config that is valid but ugly (transparent frame, every panel removed, every monitor `none`) is undone in one step. The one way the shell can get in the window's way is a huge extended panel on top of it (panels are layer-shell `top` surfaces above normal windows); Ctrl+Z still reaches the focused window (panels never take the keyboard), which Gate B item 9 checks. The shell's "Config not applied" notification stays as the backstop for hand edits. *Cost if Phil wants the countdown:* about 1 task (a pure `risky_change(old, new)` predicate plus a dialog that reverts after 15 s).
+1. **v1 scope: the whole config model; the Plasma panel toggle is deferred to its own plan.** *Default pending Phil.* The window edits every key the models have (theme incl. border, shadow, handle style; layout gap; per monitor: mode, theme and layout overrides, panels with every key including handle and interaction). Deferred, and why: (a) **hiding or showing Plasma's panel** needs `services/plasma.py` (`org.kde.PlasmaShell.evaluateScript`, whose hide/restore behaviour is still unverified: spec 11 spike 2) and the restore file `~/.local/state/edge-shell/plasma-restore.json` with `--restore-plasma` (spec 7); it touches the live Plasma panel on DP-1, so it needs its own spike gate on a temporary panel on HDMI-A-1 first and Phil's go-ahead before DP-1 is touched; (b) workspaces and tray widgets do not exist yet (milestone 7); (c) a tray icon needs the tray host (milestone 7); (d) drag-and-drop layout editing (spec 14) waits for v1 feedback; (e) HiDPI is unsupported by the shell. **How `plasma` and `both` appear:** as the existing mode choices, each with a one-line explanation under the mode row (`settings/form.py` `MODE_HINTS`): `plasma` = "no Edge Shell here; Plasma's panels stay as they are", `both` = "Edge Shell frame and panels next to Plasma's panel: keep Edge Shell panels off the edge Plasma's panel uses", `none` = "no Edge Shell here (the same as plasma until the Plasma panel toggle exists)". So "Edge Shell on one monitor, Plasma on the other" works today (HDMI-A-1 `edge`, DP-1 `plasma`), and "hide or show the edge shell" per monitor is the mode switch. *Cost if Phil wants the Plasma toggle in v1:* about 5 more tasks (a pure restore-file module with a fake script runner, the D-Bus service, a spike gate on a temporary HDMI-A-1 panel, the window's "Plasma panel" switch per monitor, `--restore-plasma`) and one more live gate that touches DP-1 only after Phil confirms. *Answer recorded as the default pending Phil:* the Plasma panel toggle is deferred to its own plan, which starts with a spike on a temporary HDMI-A-1 panel.
+2. **Edits are written into the one user file with tomlkit (round-trip), and verified.** *Default pending Phil.* Every edit re-reads the file's current text, applies one key-path operation (`set`, `unset`, `add_panel`, `remove_panel`, `move_panel`) with tomlkit, and then re-parses the result with `tomllib` and compares it with the same operation applied to plain dicts: any difference (tomlkit misplacing a table) is refused with "edit the file by hand" and nothing is written. Comments, blank lines, key order and dotted-key style are kept (an unedited document is byte-identical); new nested keys inside an existing table are written as dotted keys (`handle.shape = "bar"`), new top-level and monitor tables as headers (`[monitors.eDP-1]`); a table left empty by a reset is removed. **Comments above a table header (the comment census).** tomlkit keeps the whole-line comments above a header inside the table BEFORE it (found by the independent review). So removing the last panel deletes a `# DP-1 holds the Plasma panel` line above `[monitors.DP-1]`, and pruning an emptied `[layout]` deletes the comment above the next table. `UserDocument` counts those comments before and after every edit and refuses an edit that would lose one ("cannot edit the config in place without losing the comment '…' above a table; edit the file by hand"); comments inside a removed entry or a pruned table's body may go with it. It is a few lines (`_header_comments`, `_comments`), so the census was chosen over wording alone. What it does not catch, documented and pinned by `test_a_comment_above_a_table_can_move_but_stays`: a comment can MOVE. A new key, an added panel or a moved panel at the end of the table before a commented header lands between the comment and that header. The comment is kept, only its place changes; refusing those edits would block ordinary changes in any commented file. **Inline panel arrays** (`panels = [{ widget = "dock" }]`) are refused for `add_panel` ("add the panel by hand"; tomlkit would write invalid TOML there). Rejected: (a) rewriting the file from the model loses every comment Phil writes; (c) a separate `settings.toml` overlay merged by the loader keeps the hand file untouched, but a key set in the overlay silently shadows the same key edited by hand ("I changed config.toml and nothing happened"), lists replace wholesale (an overlay panel list hides the hand-written one for that monitor), the shell would have to watch and merge two files, and it breaks "writes the user config file only". *Cost:* a new dependency. tomlkit is pure Python (MIT), **not installed in the venv today** (`scripts/py -c 'import tomlkit'` fails; version 0.15.1 is in the local uv cache and is the only version this plan was verified with, hence the `>=0.15` bound). Changes: `pyproject.toml` `dependencies` gains `"tomlkit>=0.15"`; `.github/workflows/ci.yml` installs `"tomlkit>=0.15"` next to pydantic; Phil installs it once into the shared venv himself (`scripts/py -m pip install 'tomlkit>=0.15'`, Prerequisites). *Answer recorded as the default pending Phil:* tomlkit yes, installed by Phil. Tests that need it start with `pytest.importorskip("tomlkit")`, so a venv without it still passes (those files skip); `main.py --settings` without it prints the install command and exits 2; the shell itself never imports it. *Cost if Phil prefers the overlay (c):* replace `settings/document.py` with an overlay writer (plain `tomllib` + a tiny TOML emitter), make the loader merge three layers and the watcher watch two files (about 2 tasks), and show "set in settings.toml / config.toml" per row.
+3. **The window is its own process; the config file is the only link to the shell.** *Default pending Phil.* `main.py --settings [--config PATH]` runs `settings/app.py`: a `Gtk.Application` whose id is `org.edgeshell.Settings.c<12 hex digits of sha1(resolved config path)>` (decision 14), so a second launch on the same file brings the open window forward instead of opening another (GApplication's single-instance activation over D-Bus; no Fabric involved), and a launch on another file opens its own window. The application registers first and imports the widgets (Fabric) only when it is the first instance, so a second launch returns at once. It opens with or without a running shell, and even when the config is invalid (read-only, with the error), which makes it its own escape hatch. Entry points: the CLI; **a right-click on any panel handle**, edge or corner (Task 11: `EdgePanel` calls `EdgeShellApp.open_settings`, which starts `sys.executable main.py --settings --config <the shell's config path>` in a new session, so Ctrl+C on the shell leaves the window open, and reaps it with a GLib child watch when it exits; `CornerPanel` inherits the handler); **a KDE custom shortcut** that runs the same command (Phil adds it in System Settings, documented in the README; the plan never changes system settings); a tray icon later (decision 1). *Answers recorded as the defaults pending Phil:* the right-click on a handle is the open gesture; the suggested shortcut key is Meta+Alt+E, Phil's choice. The window is a plain `Gtk.ApplicationWindow` (an xdg toplevel, never a layer surface: nothing in `settings/` imports GtkLayerShell or Fabric windows); on Wayland a client cannot choose its position, so KWin places it (normally on the monitor with the pointer); it has no link to DP-1's Plasma panel. Why not inside the shell process: a bug in the window could take the shell down; the shell's scoped stylesheet and its single-instance `Application` would have to share a main loop with a form; and the window could not open when the shell cannot start. Fabric's D-Bus `Execute`/`Evaluate` API is not used, and Task 12 switches it off (decision 15). *Cost if Phil wants it in-process:* about 1 task (the shell opens `SettingsWindow` itself and shares `ConfigStore`), losing the escape hatch.
+4. **The form is a pure description generated from the JSON schema; rows show the value in effect and where it comes from; "inherit" = the key is absent.** *Default pending Phil.* `settings/form.py` turns `Config.model_json_schema()` into `SectionSpec`/`FieldSpec` trees: integers become spin buttons with the schema's `minimum`/`maximum`, `Literal` enums (`HANDLE_SHAPES`, edges, align, state, shell modes, `CORNERS`) become combo boxes, booleans switches, the font list a comma-separated entry, `length` a mode combo (px, fill, content, percent) plus a number, `widget` a combo of `registry.widget_names()` (edge widgets first, then corner widgets labelled "NAME (corner panel)"), and colours a `Gtk.ColorButton` with alpha (written as `#rrggbb`, or `#rrggbbaa` only when not opaque). Row labels are readable ("Duration", "Secondary text"; pydantic's titles read "Duration Ms"); the unit hint next to a row is looked up by (model, key) (`HINTS`), because one key means different things in different tables (`width` is the border's px in `[theme.border]` and a corner panel's size in a panel entry). Colours are recognised by key name (`COLOR_FIELDS` + `color`, `hover_color`) because the models check them with a validator the schema does not show; a test fails if a new plain string key appears that the form does not classify. **Finding:** the per-monitor override models (`ThemeOverride`, `LayoutOverride`, built with `create_model` from bare annotations) lose their bounds in the schema (`thickness` has no minimum/maximum there), so the override sections are generated from the base models (`Theme`, `LayoutSettings`). Every row shows the value in effect and its source (`your config`, `default`, `global theme`, `global layout`, `widget default`, `theme`, `not set` for `min_length`/`max_length`, `placement default (align/offset set)` for the placement keys an entry leaves out once it sets any of `pos`/`align`/`offset`: placement is taken as a whole, so setting `align` on `system_bar` drops its default `offset` 142 and the row says so; `corner default` for a corner panel's edge when the widget's own edge is not an edge of its corner), plus a reset button that removes the key from the user file (the value is then inherited again). No separate "inherit" checkbox: unset means the key is absent, which is exactly what TOML and the loader already mean. A rejected edit shows the loader's message (it names the key path) under the row that caused it; a rejected structural edit (add, remove, move) shows it in a banner. *Cost:* an explicit inherit toggle per row is a small change in `FieldRow`.
+5. **Live apply, no Apply button; Undo, Revert all and per-field reset.** *Default pending Phil.* A switch, combo or colour applies at once; a spin button applies 400 ms after the last change (one write and one reload per pause, not per arrow click: a `thickness` change rebuilds the monitor); a text entry applies on Enter or focus-out; closing the window applies what is still pending (a spin inside its pause, a typed font list: `SettingsView.flush` on `delete-event`). The mouse wheel never edits a value (decision 13). Each applied change is one undo step (`Undo` button and Ctrl+Z restore the file's previous text); `Revert all` (with a confirmation) restores the file as it was when the window opened, or as it was after the last hand edit. The window watches the file (the shell's own `ConfigWatcher`): a hand edit while it is open is re-read, announced in a banner, clears the undo history and becomes the new starting point (`SettingsSession.rebase`); an edit, an undo or a Revert all made against a stale read is refused, never written over the hand edit. *Answer recorded as the default pending Phil:* live apply with Undo and Revert all, no countdown. Per-section reset is not in v1. *Cost:* an Apply/Cancel bar = buffer the operations in the session and write once (about half a task); per-section reset = one button per frame calling `unset` on the table (small).
+6. **Safety: never write what the shell would reject; atomic writes; a backup and a restore command; no confirm-revert countdown in v1.** *Default pending Phil.* An edit is checked with `load_config_text` (the loader's own merge and validation) plus `registry.validate_widgets` before writing; the write goes to a temporary file next to the target and is renamed over it (the shell's watcher already reacts to renames; the file mode is kept). **A symlinked config** (e.g. from a dotfiles repo) keeps its link and the file it points to is replaced; that write changes nothing at the link itself, so on its own the shell would never reload it (the independent review proved `ConfigWatcher` on the link misses both this and an editor's in-place save of the target). Task 2 therefore makes `ConfigWatcher` also watch `path.resolve()` when `path.is_symlink()`, pinned by `test_a_write_through_a_symlink_fires`. A file-system error (a read-only folder, a full disk) is a message in the window, never an exception in a GTK callback: the session turns `OSError` into `ConfigError("cannot write …")`, and Undo, Revert all and the file watcher's re-read show it in the banner. Before the first write of a session the file is copied to `config.toml.bak` (with the file's own mode: a private config gets no world-readable copy); `main.py --restore-config` puts it back and keeps the replaced file as `config.toml.before-restore` (`.before-restore.2`, `.3`, … when an earlier restore left one: never overwritten). The escape hatches when the shell looks wrong: Undo/Ctrl+Z, Revert all, `--restore-config`, and the window itself, which opens even if the shell is not running or the file is invalid. No KDE-style "keep these settings? (15 s)" countdown: the window is a separate normal window the shell cannot take away, and a config that is valid but ugly (transparent frame, every panel removed, every monitor `none`) is undone in one step. The one way the shell can get in the window's way is a huge extended panel on top of it (panels are layer-shell `top` surfaces above normal windows); Ctrl+Z still reaches the focused window (panels never take the keyboard), which Gate B item 9 checks. The shell's "Config not applied" notification stays as the backstop for hand edits. *Cost if Phil wants the countdown:* about 1 task (a pure `risky_change(old, new)` predicate plus a dialog that reverts after 15 s).
 7. **Testing.** Pure tests for everything below the GTK line (form, values, files, document, session, and an integration test that a written change reloads in the shell's real `ConfigStore` as the expected `diff_configs` kind: restyle, panel-state, panel-handle, panel-rebuild, relayout, rebuild-monitor, panel-add). GTK tests build widgets only (never a window), after `Gtk.init_check()`, and skip without a display; the view is a `Gtk.Box` for that reason and the toplevel (`settings/window.py`) is a few lines checked at the gates. `Gtk.Application.run` is never called in tests (it would register on the session bus). Two human gates on HDMI-A-1. *Cost:* none.
 8. **CLI.** `--list-outputs`, `--settings` and `--restore-config` are mutually exclusive; `--stats` with `--settings` or `--restore-config` is an error (`--list-outputs --stats` keeps today's behaviour). `--config PATH` with `--settings` may name a file that does not exist yet (the first change creates it). *Cost:* none.
-9. **A panel's expander title** shows `N. widget: edge, align`; changing the widget, edge or align rebuilds the page so the title follows, and keeps that panel open. Adding a panel opens the new one, moving opens the moved one. *Cost:* none.
+9. **A panel's expander title** shows `N. widget: edge, align`, or for a corner panel `N. widget: corner, from edge, WIDTHxHEIGHT`; changing the widget, edge, align, corner, width or height (`TITLE_KEYS`) rebuilds the page so the title (and, for widget and corner, the rows) follows, and keeps that panel open. Adding a panel opens the new one, moving opens the moved one. *Cost:* none.
 10. **The right-click needs the handle to take input**: a panel with click, hover and drag all off takes no input while collapsed (spec 15), so its handle cannot open the window; any other handle, the CLI or the shortcut can. The frame band stays click-through (no frame click). *Cost:* none.
+11. **Corner panels in the settings window: the corner plan's contract, nothing private.** *Default pending Phil.* Each panel entry shows the rows of its widget's kind: `form.panel_for(registry.widget_kind(req.widget), corner)`. The edge section is `PanelConfig` without `CORNER_ONLY_KEYS`; the corner section is `PanelConfig` without `EDGE_ONLY_KEYS`, in the order widget, corner, edge, width, height, state; `SHARED_KEYS` and the handle and interaction tables are in both. A corner panel's edge row offers only the corner's two edges (`corner.split("-")`). Placeholders and defaults come from `registry.defaults(name)` (a `CornerDefaults` branch in `settings/values.py`), never `registry._DEFAULTS`. A new corner entry is just `{"widget": "widget_panel"}`. *Cost if Phil wants corner panels on their own page:* a second list editor per monitor (about half a task), against Plan 5's one panel list.
+12. **Changing a panel's widget kind or its corner is ONE compound edit.** *Default pending Phil.* `settings.values.panel_ops` turns one row change into steps applied to the same document and written once (one reload). A widget of the other kind also unsets the keys only the old kind takes (a dock turned into `widget_panel` loses `align`, `length`, …; the shell would otherwise reject the entry). A corner (or a corner widget landing in a corner) that does not contain the entry's `edge` also unsets that edge, so the panel opens from the widget's edge or the corner's default edge (`default_edge`). *Cost if Phil prefers to set the new edge explicitly:* one line in `panel_ops` (`("set", "edge", default_edge(corner))`) and two expected values.
+13. **The mouse wheel scrolls the page; it never edits a value.** *Default pending Phil.* Found by the independent review: with live apply, a wheel over DP-1's mode row set it to `edge` (an Edge Shell frame over the Plasma panel, against "never touch DP-1"), and over thickness it rebuilt the monitor. Every combo box and spin button gets `wheel_scrolls_the_page` (`settings/fields.py`), a `scroll-event` handler that stops the widget's own handling (`GObject.signal_stop_emission_by_name`) and returns False, so the page's `ScrolledWindow` scrolls instead. *Cost if Phil wants wheel edits back:* wheel edits only on the focused widget (a focus check in `_pass_scroll`), small.
+14. **One settings window per config file.** *Default pending Phil.* The id carries a hash of the resolved path: a second launch with another `--config` (e.g. the gate's `/tmp/edge-settings.toml` while the real config is open) opens its own window instead of silently raising the first one, which edits a different file. *Cost:* none.
+15. **Fabric's unauthenticated D-Bus client is switched off** (Task 12, its own commit). *Default pending Phil.* `fabric.Application` registers `org.Fabric.fabric.edge-shell` with `Execute` and `Evaluate` methods that run any Python inside the shell for any session-bus client, with no caller check (`fabric/core/application.py`, `DBusClient`); nothing in this repository uses them. `Application(APP_NAME, *self._early, open_client=False)` keeps the bus name (the `Gtk.Application` owns it, so `_already_running` still works) and drops the client. *Cost if Phil wants it back* (e.g. for `fabric-cli`): revert the one-line commit.
 
 ## Prerequisites
 
-- Branch `feat/settings-window` from `main` at `ad58f61` (Plans 1-3 merged), in the worktree `/home/phil/Projects/pyDev/projects/myShell/.claude/worktrees/feat-edge-shell-core`.
-- Baseline before Task 1: `scripts/py -m pytest -q` prints `1192 passed` (2 GLib deprecation warnings are normal); `scripts/py -m ruff check .` prints `All checks passed!`.
-- **tomlkit in the venv (Phil, once, before Task 3):** the controller asks Phil to approve installing it, then Phil runs (or approves the controller running) `scripts/py -m pip install 'tomlkit>=0.13'`; check with `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. Subagent implementers never install packages. If it is not installed, the tomlkit test files skip and every expected total from Task 3 on is lower (the table under File Structure gives both).
+- **The corner panel plan must be merged first.** Plan 5 (`docs/superpowers/plans/2026-10-14-corner-panel.md`, drafted on `feat/corner-panel-plan`) is executed and merged into `main` before this plan's Task 1; this plan is written against the code as it is after that merge (its `PanelConfig.corner/width/height`, `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`, `CORNERS`, `registry.widget_kind` / `registry.defaults`, `CornerRequest` / `CornerDefaults`, `default_edge` / `corner_has_edge`, `layout_monitor` with corner warnings, `CornerPanel(EdgePanel)` and the `corner_registry` fixture). Check before Task 1: `scripts/py -c "from shell.registry import widget_kind, defaults; from shell.config.models import SHARED_KEYS, EDGE_ONLY_KEYS, CORNER_ONLY_KEYS, CORNERS; from shell.panel_spec import CornerRequest, CornerDefaults, default_edge, corner_has_edge; print('ok')"` prints `ok`. If it fails, STOP and report: this plan must not run before Plan 5.
+- Branch `feat/settings-window` from `main` after Plan 5's merge (its baseline `1424 passed`), in the worktree `/home/phil/Projects/pyDev/projects/myShell/.claude/worktrees/feat-edge-shell-core`. The plan file itself was committed on `feat/settings-window` at `42ff926` (before Plan 5); rebase or re-branch so the code tasks start from the merged `main`.
+- **Merge conflicts are avoided by order.** Plan 5's Tasks 9-10 and this plan's Task 11 (right-click on a handle) both change `shell/edge_panel.py` and `shell/monitors.py`. Running this plan second resolves it: Task 11's anchors (`interaction: Interaction = ALL_INTERACTIONS,`, `self._on_depth = on_depth`, the first line of `_on_press`, `on_error=None,` and its docstring in `MonitorShell.__init__`, the single `interaction=req.interaction,` in `_new_panel`, which builds corner panels too) were checked against Plan 5's code and apply unchanged.
+- Baseline before Task 1: `scripts/py -m pytest -q` prints `1424 passed` (2 GLib deprecation warnings are normal); `scripts/py -m ruff check .` prints `All checks passed!`.
+- **tomlkit in the venv is Phil's own action, once, before Task 3:** Phil runs `scripts/py -m pip install 'tomlkit>=0.15'` in the shared venv himself. Neither the controller nor any implementer installs packages. Check with `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. Tasks 3, 4, 8, 9, 10 and 13 start with this check and STOP and report if it fails: their tests would skip, and a skipped test must not read as green. (The table under File Structure also gives the totals without tomlkit, for CI and for a reader without it.)
 - Always stage files by name, never `git add -A` or `git add .`.
 
 ## Global Constraints
 
 - Python only through `scripts/py` (shared venv `/home/phil/Projects/pyDev/pyEnvs/global-base`). **PyGObject must stay `<3.52`** (Fabric 0.0.2 breaks on 3.52+).
 - **Monitor is an INT.** Fabric 0.0.2's `WaylandWindow.monitor` is an int property; a `Gdk.Monitor` is silently dropped; use `monitor=monitor_index(monitor)` (`shell/gdk_util.py`). This plan creates no layer-shell windows; the settings window is a plain `Gtk.ApplicationWindow` and must never import GtkLayerShell or a Fabric window class.
-- **Input shape after allocate.** Fabric's `Window.do_size_allocate` resets the input shape; `EdgePanel.do_size_allocate` re-applies it. Task 11 touches `EdgePanel.__init__` and `_on_press` only; keep that override and keep every attribute `_update_input_region` reads set before `_d`.
+- **Input shape after allocate.** Fabric's `Window.do_size_allocate` resets the input shape; `EdgePanel.do_size_allocate` re-applies it. Task 11 touches `EdgePanel.__init__` and `_on_press` only; keep that override, Plan 5's hooks (`surface_layout`, `_input_rects`) and every attribute `_update_input_region` reads set before `_d`.
 - **Keep the delayed `raise_to_top` workaround** (`RAISE_DELAY_MS` / `RAISE_FALLBACK_MS` in `shell/monitors.py`, the re-raise of rebuilt panels in `_new_panel`).
-- **Pure modules import no GTK / `gi`:** `settings/form.py`, `settings/values.py`, `settings/files.py`, `settings/document.py`, `settings/session.py`, and as before `shell/config/*` (except `watcher.py`), `shell/registry.py`, `shell/panel_spec.py`, `shell/panel_layout.py`, `shell/outputs.py`. `settings/files.py` is stdlib-only (no tomlkit), so `--restore-config` works without tomlkit.
+- **Pure modules import no GTK / `gi`:** `settings/form.py`, `settings/values.py`, `settings/files.py`, `settings/document.py`, `settings/session.py`, and as before `shell/config/*` (except `watcher.py`), `shell/registry.py`, `shell/panel_spec.py`, `shell/panel_layout.py`, `shell/corner.py`, `shell/outputs.py`. `settings/files.py` is stdlib-only (no tomlkit), so `--restore-config` works without tomlkit.
+- **The corner plan's contract only.** The settings code reads widget kinds and defaults through `registry.widget_kind` and `registry.defaults`, never `registry._DEFAULTS`; panel keys by kind through `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`.
 - **Colours** are `#rrggbb` or `#rrggbbaa` (`check_hex`, `hex_to_rgba`); the window writes `#rrggbbaa` only for a colour that is not opaque.
 - **The settings window writes only the user config** (the `--config` path or `~/.config/edge-shell/config.toml`), its `.bak` and, for `--restore-config`, `.before-restore` next to it; never `config.default.toml`, never a live window.
 - **Tests.** CI installs only pycairo, pydantic, pytest, ruff and (from Task 1) tomlkit: tests importing `gi` or `fabric` start with `pytest.importorskip("gi")` / `pytest.importorskip("fabric")`; tests needing tomlkit start with `pytest.importorskip("tomlkit")`. GTK tests call `gi.require_version("Gtk", "3.0")` and `gi.require_version("Gdk", "3.0")` before importing `gi.repository`, skip unless `Gtk.init_check()[0]`, and **never create a window** (that would draw on Phil's screen): plain widgets and the `SettingsView` box only. Never call `Gtk.Application.run` or `Gio.Application.register` in a test.
 - **Lint.** `ruff` 0.17.0, line length 100, rules E, F, I, UP, B; excludes `docs/` and `*.md`. Import blocks: stdlib, third-party (`gi`, `tomlkit`, `pydantic`), first-party (`settings`, `shell`, `widgets`); `ruff check --fix` sorts them.
 - **VERIFY** (before every commit): `scripts/py -m ruff format . && scripts/py -m ruff check --fix . && scripts/py -m pytest -q`. The suite must be green at the end of EVERY task (0 failed).
 - **Git.** Plain separate git commands run from the worktree (no `cd … && git`, no command substitution around git). Stage files by name. **Never push.** Every commit message ends with a second `-m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`.
-- **Live runs.** Phil is the only visual tester, on `HDMI-A-1` only. **Never touch `DP-1`** (it holds the Plasma panel; never set it to `edge` or `both`, in a file or in the window). Subagents executing tasks never launch the shell or the settings window (`main.py` without `--list-outputs`, including `--settings`); headless commands are fine (`pytest`, the `scripts/py -c` checks below, which import the widgets but create no window). Live probes run by the controller are capped at 10 s (`main.py --stats` refuses more); the gates are run by Phil.
+- **Live runs.** Phil is the only visual tester, on `HDMI-A-1` only. **Never touch `DP-1`** (it holds the Plasma panel; never set it to `edge` or `both`, in a file or in the window, and never by a stray mouse wheel: decision 13). Subagents executing tasks never launch the shell or the settings window (`main.py` without `--list-outputs`, including `--settings`); headless commands are fine (`pytest`, the `scripts/py -c` checks below, which import the widgets but create no window). Live probes run by the controller are capped at 10 s (`main.py --stats` refuses more); the gates are run by Phil.
 
 ## Review Focus
 
-The six input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
+The seven input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
 
-1. **Phil's comments and layout must survive, and an edit must never move a key to another table** (tomlkit writes a table added inside a dotted-key table as a top-level header: `[monitors.X] theme.accent = …` plus a new `theme.shadow.elevation` would land in the global `[theme.shadow]`). Expect comments, key order and style kept, dotted keys used inside existing tables, and a refused edit (nothing written) whenever the re-parsed file differs from the intended edit. Pinned by `test_an_unedited_document_is_byte_identical`, `test_replacing_a_value_keeps_its_comment`, `test_a_new_key_inside_a_dotted_table_stays_in_that_monitor`, `test_other_toml_layouts_are_edited_in_place` and `test_an_edit_that_would_change_other_keys_is_refused` (Task 3), `test_apply_writes_a_valid_change_keeping_comments` (Task 4), `test_the_settings_example_is_valid_and_keeps_its_comments` (Task 12); live by Gate A item 13.
-2. **Phil edits the file by hand while the window is open.** Expect the hand edit never to be overwritten: the window re-reads it, says so, and the next change applies on top of it. Pinned by `test_a_hand_edit_is_never_overwritten` and `test_undo_after_a_hand_edit_rereads_instead` (Task 4), `test_a_hand_edit_is_reloaded_and_announced`, `test_our_own_write_does_not_rebuild` and `test_an_edit_after_a_hand_edit_is_not_applied` (Task 9); live by Gate B items 1-2.
-3. **A value the shell would reject** (a cross-field rule such as `min_length > max_length` or `pos` with `align`, an unknown widget, a bound the spin button cannot stop) must never reach the file, and the reason must show where the change was made. Pinned by `test_an_invalid_change_is_not_written`, `test_an_unknown_widget_is_not_written` and `test_a_cross_field_rule_is_not_written` (Task 4), `test_an_invalid_edit_shows_its_error_under_the_row` and `test_a_rejected_panel_edit_shows_in_the_banner` (Task 9); live by Gate A item 10.
-4. **A config the shell cannot use** (invalid by hand, missing, a symlink into a dotfiles repo, a directory by mistake) must not lock Phil out: the window still opens (read-only with the error while invalid), writes keep the link, and `--restore-config` brings back the backup. Pinned by `test_write_atomic_follows_a_symlink`, `test_a_failed_write_leaves_the_old_file_and_no_temp_file` and the restore tests (Task 2), `test_a_missing_file_is_the_defaults` and `test_an_invalid_file_opens_with_its_error` (Task 4), `test_an_invalid_file_is_shown_read_only_with_its_error` (Task 9), `test_settings_opens_even_when_the_config_is_invalid` and `test_an_unreadable_config_fails_without_a_window` (Task 10); live by Gate B items 3, 4 and 7.
-5. **Spin-button chatter**: holding an arrow on `thickness` must not write the file (and rebuild the monitor) on every step. Expect one write 400 ms after the last change, and a pending write dropped when the file is re-read. Pinned by `test_int_row_takes_its_bounds_from_the_schema_and_is_debounced` and `test_a_new_value_cancels_a_pending_edit` (Task 7); live by Gate A item 4.
+1. **Phil's comments and layout must survive, and an edit must never move a key to another table** (tomlkit writes a table added inside a dotted-key table as a top-level header: `[monitors.X] theme.accent = …` plus a new `theme.shadow.elevation` would land in the global `[theme.shadow]`; and tomlkit keeps the comments above a header in the table before it, so removing the last panel or pruning `[layout]` would delete them). Expect comments, key order and style kept, dotted keys used inside existing tables, a refused edit (nothing written) whenever the re-parsed file differs from the intended edit or a comment above a table would be lost, and an inline panel array refused for adding. Pinned by `test_an_unedited_document_is_byte_identical`, `test_replacing_a_value_keeps_its_comment`, `test_a_new_key_inside_a_dotted_table_stays_in_that_monitor`, `test_other_toml_layouts_are_edited_in_place`, `test_an_edit_that_would_change_other_keys_is_refused`, `test_an_edit_that_would_lose_a_comment_above_a_table_is_refused`, `test_a_comment_above_a_table_can_move_but_stays` and `test_adding_to_an_inline_panel_array_is_refused` (Task 3), `test_apply_writes_a_valid_change_keeping_comments` (Task 4), `test_the_settings_example_is_valid_and_keeps_its_comments` (Task 13); live by Gate A item 3.
+2. **Phil edits the file by hand while the window is open.** Expect the hand edit never to be overwritten, by an edit, an Undo or a Revert all: the window re-reads it, says so, takes it as the new starting point, and the next change applies on top of it. Pinned by `test_a_hand_edit_is_never_overwritten`, `test_undo_after_a_hand_edit_rereads_instead` and `test_revert_after_a_hand_edit_keeps_the_hand_edit` (Task 4), `test_a_hand_edit_is_reloaded_and_announced`, `test_our_own_write_does_not_rebuild` and `test_an_edit_after_a_hand_edit_is_not_applied` (Task 9); live by Gate B items 1-2.
+3. **A value the shell would reject** (a cross-field rule such as `min_length > max_length` or `pos` with `align`, an unknown widget, a bound the spin button cannot stop, an edge-only key left on an entry whose widget became a corner widget) must never reach the file, and the reason must show where the change was made. Pinned by `test_an_invalid_change_is_not_written`, `test_an_unknown_widget_is_not_written` and `test_a_cross_field_rule_is_not_written` (Task 4), `test_panel_ops_keep_the_entry_valid` (Task 6), `test_an_invalid_edit_shows_its_error_under_the_row`, `test_a_rejected_panel_edit_shows_in_the_banner` and `test_a_dock_turned_into_a_corner_widget_is_one_edit` (Task 9); live by Gate A items 10 and 12.
+4. **A config the shell cannot use, or a file system that will not write** (invalid by hand, missing, a symlink into a dotfiles repo, a directory by mistake, a read-only folder, a second window on another file) must not lock Phil out or crash a callback: the window still opens (read-only with the error while invalid), writes keep the link and the shell still reloads through it, file errors show in the banner, `--restore-config` brings back the backup without overwriting an earlier restore's file, and each config file gets its own window. Pinned by `test_write_atomic_follows_a_symlink`, `test_a_write_through_a_symlink_fires`, `test_a_failed_write_leaves_the_old_file_and_no_temp_file`, `test_backup_keeps_the_files_mode`, `test_a_second_restore_keeps_the_first_replaced_file` and the other restore tests (Task 2), `test_a_missing_file_is_the_defaults`, `test_an_invalid_file_opens_with_its_error` and `test_an_unwritable_folder_is_an_error_not_a_crash` (Task 4), `test_an_invalid_file_is_shown_read_only_with_its_error` and `test_an_unwritable_folder_shows_in_the_banner` (Task 9), `test_settings_opens_even_when_the_config_is_invalid`, `test_an_unreadable_config_fails_without_a_window` and `test_app_id_depends_on_the_config_path` (Task 10); live by Gate B items 3, 4, 5, 7 and 11.
+5. **Spin-button chatter and the mouse wheel**: holding an arrow on `thickness` must not write the file (and rebuild the monitor) on every step, a wheel over a row must never edit it (with live apply, a wheel over DP-1's mode row would set it to `edge`), switching a length back to px must not write the 60 px minimum, and closing the window must not drop a pending value. Expect one write 400 ms after the last change, a pending write dropped when the file is re-read and sent when the window closes, and the wheel scrolling the page. Pinned by `test_int_row_takes_its_bounds_from_the_schema_and_is_debounced`, `test_a_new_value_cancels_a_pending_edit`, `test_the_mouse_wheel_never_edits_a_row`, `test_a_fill_length_switched_to_px_takes_the_widget_default_not_the_minimum` and `test_flush_sends_a_pending_spin_value_and_typed_fonts` (Task 7), `test_close_flushes_a_pending_spin_value` (Task 9); live by Gate A items 1, 4 and 7.
 6. **Adding, removing or reordering panels** must never leave rows pointing at an entry that is gone (an IndexError on the next refresh) and must keep the user's place. Pinned by `test_add_remove_and_move_are_document_edits` (Task 8), `test_adding_and_removing_panels_rebuilds_the_rows`, `test_changing_a_panel_edge_retitles_it_and_keeps_it_open` and `test_the_visible_page_survives_a_rebuild` (Task 9), `test_move_panel` and `test_removing_the_last_panel_removes_the_list` (Task 3); live by Gate A item 6.
+7. **Corner panel entries (Plan 5)** must show the rows of their kind and never crash a refresh: corner, edge (only the corner's two edges), width, height and state, never align or length; a value and a source for every row of either kind on every entry (the first draft raised `KeyError` for `corner` on open, even with no corner panel configured); a title naming the corner, the edge and the size; a widget-kind or corner change written as one valid edit; the shell's corner warnings in the preview. Pinned by `test_corner_panel_fields`, `test_the_panel_sections_split_the_panel_keys_by_kind` and `test_the_edge_of_a_corner_panel_offers_only_its_corners_edges` (Task 5), `test_every_panel_form_field_has_a_value`, `test_corner_panel_values`, `test_panel_ops_keep_the_entry_valid` and `test_layout_preview_reports_corner_panels` (Task 6), `test_corner_panels_get_their_own_rows_title_and_edges` (Task 8), `test_a_dock_turned_into_a_corner_widget_is_one_edit` and `test_a_new_corner_drops_an_edge_it_does_not_have` (Task 9), `test_a_corner_panel_gets_the_settings_opener` and `test_a_corner_panel_handle_opens_the_settings_too` (Task 11); live by Gate A items 8 and 12 and Gate B item 10.
 
 ## File Structure
 
 ```
-pyproject.toml, .github/workflows/ci.yml   # + tomlkit>=0.13 (Task 1)
+pyproject.toml, .github/workflows/ci.yml   # + tomlkit>=0.15 (Task 1)
 shell/config/loader.py        # + load_config_text(user_text, default_path) (Task 1)
+shell/config/watcher.py       # also watches a symlinked config's target (Task 2)
 settings/__init__.py          # NEW package (Task 2)
 settings/files.py             # NEW, PURE stdlib: read_text, write_atomic, backup_path, write_backup,
                               #   restore_backup (Task 2)
 settings/document.py          # NEW, PURE + tomlkit: UserDocument (set, unset, add_panel, remove_panel,
-                              #   move_panel, text, data), DocumentError (Task 3)
+                              #   move_panel, text, data), DocumentError, the comment census (Task 3)
 settings/session.py           # NEW, PURE: check_text, SettingsSession (apply, undo, revert, reload,
-                              #   changed_outside), ChangedOutside (Task 4)
-settings/form.py              # NEW, PURE: FieldSpec, SectionSpec, ConfigForm, config_form, section_for,
-                              #   MODE_HINTS, HINTS, rgba_to_hex, split_length, join_length,
+                              #   rebase, changed_outside), ChangedOutside (Task 4)
+settings/form.py              # NEW, PURE: FieldSpec, SectionSpec, ConfigForm (edge_panel, corner_panel,
+                              #   panel_for), config_form, section_for, widget_choices, label_for,
+                              #   MODE_HINTS, HINTS, LABELS, rgba_to_hex, split_length, join_length,
                               #   parse_fonts, format_fonts (Task 5)
-settings/values.py            # NEW, PURE: FieldValue, lookup, field_value, monitor_names,
+settings/values.py            # NEW, PURE: FieldValue, lookup, field_value, panel_ops, monitor_names,
                               #   layout_preview (Task 6)
-settings/fields.py            # NEW, GTK: editors per kind, FieldRow (Task 7)
-settings/panels.py            # NEW, GTK: PanelEditor, panel_title (Task 8)
-settings/view.py             # NEW, GTK: SettingsView (Task 9)
+settings/fields.py            # NEW, GTK: editors per kind, wheel_scrolls_the_page, FieldRow (Task 7)
+settings/panels.py            # NEW, GTK: PanelEditor, panel_title, panel_section (Task 8)
+settings/view.py              # NEW, GTK: SettingsView (Task 9)
 settings/window.py            # NEW, GTK: SettingsWindow (Task 10)
-settings/app.py               # NEW, GTK: SettingsApp, run_settings, connected_outputs (Task 10)
+settings/app.py               # NEW, GTK: SettingsApp, app_id, run_settings, connected_outputs (Task 10)
 main.py                       # --settings, --restore-config (Task 10)
 shell/edge_panel.py           # on_settings kwarg; right-click in _on_press (Task 11)
-shell/monitors.py             # on_settings kwarg passed to every panel (Task 11)
-shell/app.py                  # settings_command, MAIN_PATH, EdgeShellApp.open_settings (Task 11)
-examples/settings-test.toml   # NEW, the gates' config (Task 12)
-README.md, docs/superpowers/specs/2026-10-11-edge-shell-design.md   # Tasks 12, 14
+shell/monitors.py             # on_settings kwarg passed to every panel, edge and corner (Task 11)
+shell/app.py                  # settings_command, MAIN_PATH, EdgeShellApp.open_settings (Task 11);
+                              #   Application(..., open_client=False) (Task 12)
+examples/settings-test.toml   # NEW, the gates' config (Task 13)
+README.md, docs/superpowers/specs/2026-10-11-edge-shell-design.md   # Tasks 13, 15
 tests/test_config_loader_text.py, tests/test_settings_files.py, tests/test_settings_document.py,
 tests/test_settings_session.py, tests/test_settings_form.py, tests/test_settings_values.py,
 tests/test_settings_fields.py, tests/test_settings_panels.py, tests/test_settings_view.py,
 tests/test_settings_app.py, tests/test_main_settings.py, tests/test_open_settings.py,
 tests/test_settings_example.py                                     # NEW
-tests/test_app_sync.py, tests/test_monitor_shell.py                 # FakeShell / build fixture (Task 11)
+tests/test_config_watcher.py                                       # symlink test (Task 2)
+tests/test_app_sync.py, tests/test_monitor_shell.py                 # FakeShell / build fixture (Task 11);
+                                                                   #   the D-Bus test (Task 12)
 ```
 
 | Task | Deliverable | Expected `pytest -q` (tomlkit installed) | Without tomlkit | Keeps the suite green because |
 | --- | --- | --- | --- | --- |
-| 1 | tomlkit dependency, `load_config_text` | 1196 (+4) | 1196 | new function |
-| 2 | `settings/files.py` | 1207 (+11) | 1207 | new module, stdlib only |
-| 3 | `settings/document.py` | 1237 (+30) | 1207, 1 skipped | new module |
-| 4 | `settings/session.py` | 1260 (+23) | 1207, 2 skipped | new module |
-| 5 | `settings/form.py` | 1283 (+23) | 1230, 2 skipped | new module |
-| 6 | `settings/values.py` | 1292 (+9) | 1239, 2 skipped | new module |
-| 7 | `settings/fields.py` | 1306 (+14) | 1253, 2 skipped | new module |
-| 8 | `settings/panels.py` | 1310 (+4) | 1253, 3 skipped | new module |
-| 9 | `settings/view.py` | 1325 (+15) | 1253, 4 skipped | new module |
-| 10 | window, app, `main.py` flags | 1338 (+13) | 1265, 5 skipped | new flags are opt-in |
-| 11 | right-click on a handle opens the window | 1346 (+8) | 1273, 5 skipped | new kwargs default to None |
-| 12 | gate example, README, spec | 1347 (+1) | 1273, 6 skipped | docs + one example test |
-| 13 | Gate A (Phil, live) | 1347 | | no code |
-| 14 | Gate B (Phil, live) + results recorded | 1347 | | docs only |
+| 1 | tomlkit dependency, `load_config_text` | 1428 (+4) | 1428 | new function |
+| 2 | `settings/files.py`, symlink-aware watcher | 1443 (+15) | 1443 | new module, stdlib only; the watcher adds a monitor |
+| 3 | `settings/document.py` | 1480 (+37) | 1443, 1 skipped | new module |
+| 4 | `settings/session.py` | 1505 (+25) | 1443, 2 skipped | new module |
+| 5 | `settings/form.py` | 1535 (+30) | 1473, 2 skipped | new module |
+| 6 | `settings/values.py` | 1554 (+19) | 1492, 2 skipped | new module |
+| 7 | `settings/fields.py` | 1572 (+18) | 1510, 2 skipped | new module |
+| 8 | `settings/panels.py` | 1577 (+5) | 1510, 3 skipped | new module |
+| 9 | `settings/view.py` | 1596 (+19) | 1510, 4 skipped | new module |
+| 10 | window, app, `main.py` flags | 1611 (+15) | 1523, 6 skipped | new flags are opt-in |
+| 11 | right-click on a handle opens the window | 1621 (+10) | 1533, 6 skipped | new kwargs default to None |
+| 12 | Fabric's D-Bus client off | 1622 (+1) | 1534, 6 skipped | the bus name is kept |
+| 13 | gate example, README, spec | 1623 (+1) | 1534, 7 skipped | docs + one example test |
+| 14 | Gate A (Phil, live) | 1623 | | no code |
+| 15 | Gate B (Phil, live) + results recorded | 1623 | | docs only |
 
-Without a display the GTK files (`test_settings_fields.py`, `test_settings_panels.py`, `test_settings_view.py`) skip as whole modules (one "skipped" each; 33 fewer passed). CI has neither `gi` nor a display, so it skips them and every `gi`/`fabric` test as before.
+The baseline is Plan 5's `1424 passed`. Without tomlkit the module-level skips are the document, session, panels, view and example test files (one "skipped" each); `test_an_unreadable_config_fails_without_a_window` and `test_a_second_launch_does_not_import_the_widgets` (Task 10) skip on their own. Without a display the GTK files (`test_settings_fields.py`, `test_settings_panels.py`, `test_settings_view.py`) skip as whole modules (one "skipped" each; 42 fewer passed). CI has neither `gi` nor a display, so it skips them and every `gi`/`fabric` test as before.
 
 ---
 
@@ -195,7 +212,7 @@ dependencies = ["pydantic>=2.6", "PyGObject<3.52", "pycairo"]
 with
 
 ```toml
-dependencies = ["pydantic>=2.6", "PyGObject<3.52", "pycairo", "tomlkit>=0.13"]
+dependencies = ["pydantic>=2.6", "PyGObject<3.52", "pycairo", "tomlkit>=0.15"]
 ```
 
 In `.github/workflows/ci.yml` replace
@@ -207,7 +224,7 @@ In `.github/workflows/ci.yml` replace
 with
 
 ```yaml
-        run: pip install "pydantic>=2.6" pycairo "tomlkit>=0.13" pytest "ruff==0.17.0"
+        run: pip install "pydantic>=2.6" pycairo "tomlkit>=0.15" pytest "ruff==0.17.0"
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -217,7 +234,7 @@ Expected: `4 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1196 passed`, `All checks passed!`.
+Run VERIFY. Expected: `1428 passed`, `All checks passed!`.
 
 ```bash
 git add pyproject.toml .github/workflows/ci.yml shell/config/loader.py tests/test_config_loader_text.py
@@ -226,20 +243,22 @@ git commit -m "feat(config): load_config_text for the settings window; tomlkit d
 
 ---
 
-### Task 2: Safe writes: `settings/files.py`
+### Task 2: Safe writes: `settings/files.py`; the watcher follows a symlinked config
 
 **Files:**
 - Create: `settings/__init__.py`, `settings/files.py`
-- Test: `tests/test_settings_files.py`
+- Modify: `shell/config/watcher.py` (`ConfigWatcher.__init__`, a new `_watch`)
+- Test: `tests/test_settings_files.py` (new), `tests/test_config_watcher.py` (one test appended)
 
 **Interfaces:**
-- Consumes: `ConfigError` (`shell/config/models.py`).
+- Consumes: `ConfigError` (`shell/config/models.py`); `ConfigWatcher` (`shell/config/watcher.py`).
 - Produces (stdlib only):
   - `read_text(path: Path) -> str` ("" when the file does not exist; `ConfigError` naming the path for other OS or decode errors)
-  - `write_atomic(path: Path, text: str) -> None` (temp file next to the resolved target, fsync, keep mode, `os.replace`; a symlink keeps its link)
+  - `write_atomic(path: Path, text: str) -> None` (temp file next to the resolved target, fsync, keep mode, `os.replace`; a symlink keeps its link; `OSError` is raised as is: settings.session turns it into a message)
   - `backup_path(path: Path) -> Path` (`config.toml.bak` next to the resolved target)
-  - `write_backup(path: Path) -> Path | None`
-  - `restore_backup(path: Path) -> str` (keeps the replaced file as `config.toml.before-restore`; `ConfigError("no backup to restore: …")`)
+  - `write_backup(path: Path) -> Path | None` (the backup gets the file's own mode, `shutil.copymode`)
+  - `restore_backup(path: Path) -> str` (keeps the replaced file as `config.toml.before-restore`, or `.before-restore.2`, `.3`, … when one exists: never overwritten; `ConfigError("no backup to restore: …")`)
+- Produces (`shell/config/watcher.py`): `ConfigWatcher(path, …)` also watches `path.resolve()` when `path.is_symlink()` (the settings window's atomic write and an editor's in-place save of the target both fire; the link itself stays watched).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -315,6 +334,14 @@ def test_backup_copies_the_current_file(tmp_path):
     assert (tmp_path / "config.toml.bak").read_text() == "a = 1\n"
 
 
+def test_backup_keeps_the_files_mode(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("a = 1\n")
+    os.chmod(path, 0o600)  # a private config never gets a world-readable copy
+    backup = files.write_backup(path)
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
 def test_backup_of_a_missing_file_is_none(tmp_path):
     assert files.write_backup(tmp_path / "config.toml") is None
     assert list(tmp_path.iterdir()) == []
@@ -330,6 +357,18 @@ def test_restore_puts_the_backup_back_and_keeps_the_replaced_file(tmp_path):
     assert "config.toml.bak" in message and "before-restore" in message
 
 
+def test_a_second_restore_keeps_the_first_replaced_file(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("broken\n")
+    (tmp_path / "config.toml.bak").write_text("good\n")
+    files.restore_backup(path)
+    path.write_text("edited again\n")
+    message = files.restore_backup(path)
+    assert (tmp_path / "config.toml.before-restore").read_text() == "broken\n"
+    assert (tmp_path / "config.toml.before-restore.2").read_text() == "edited again\n"
+    assert "before-restore.2" in message and path.read_text() == "good\n"
+
+
 def test_restore_without_a_current_file(tmp_path):
     (tmp_path / "config.toml.bak").write_text("good\n")
     files.restore_backup(tmp_path / "config.toml")
@@ -342,10 +381,43 @@ def test_restore_without_a_backup_is_an_error(tmp_path):
         files.restore_backup(tmp_path / "config.toml")
 ```
 
+Append to `tests/test_config_watcher.py` (after `test_atomic_replace_fires`):
+
+```python
+@pytest.mark.parametrize("how", ["atomic", "in place"])
+def test_a_write_through_a_symlink_fires(tmp_path, how):
+    """A config symlinked from a dotfiles repo: the settings window's atomic write (it replaces
+    the file the link points to) and an editor's in-place save both reload the shell."""
+    from settings import files
+
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text("a = 1\n")
+    link = tmp_path / "edge-shell" / "config.toml"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    control: list[int] = []
+    plain, _control = _make(tmp_path, control)  # a plain file: does Gio deliver events here?
+    calls: list[int] = []
+    _watcher = ConfigWatcher(link, lambda: calls.append(1), debounce_ms=50)
+
+    def write():
+        if how == "atomic":
+            files.write_atomic(link, "a = 2\n")
+        else:
+            real.write_text("a = 3\n")
+        plain.write_text("a = 2\n")
+
+    _run_loop(1000, (100, write))
+    if not control:
+        pytest.skip("no file-change events delivered in this environment")
+    assert calls and link.is_symlink()
+```
+
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `scripts/py -m pytest tests/test_settings_files.py -q`
-Expected: collection error, `ModuleNotFoundError: No module named 'settings'`.
+Run: `scripts/py -m pytest tests/test_settings_files.py tests/test_config_watcher.py -q`
+Expected: a collection error for `test_settings_files.py`, `ModuleNotFoundError: No module named 'settings'`; the new watcher test fails the same way (it imports `settings.files`). Once Step 3's `settings/files.py` exists and before the watcher change, the `atomic` and `in place` cases fail with `assert []`: the review's finding (a write through a symlink is never seen).
 
 - [ ] **Step 3: Implement**
 
@@ -360,11 +432,14 @@ Create `settings/files.py`:
 
 ```python
 """Safe writes of the user config: atomic replace, one backup per settings session, restore.
-Pure: stdlib only (no GTK, no tomlkit), so `main.py --restore-config` works without either."""
+Pure: stdlib only (no GTK, no tomlkit), so `main.py --restore-config` works without either.
+OS errors (a read-only folder, a full disk) are raised as OSError; settings.session turns
+them into ConfigError for the window."""
 
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -390,7 +465,8 @@ def read_text(path: Path) -> str:
 def write_atomic(path: Path, text: str) -> None:
     """Write `text` to a temporary file next to the target, then rename it over the target, so
     the shell's watcher never reads a half-written file. A symlinked config keeps its link:
-    the file it points to is replaced. The mode of an existing file is kept."""
+    the file it points to is replaced (the shell's ConfigWatcher also watches that file). The
+    mode of an existing file is kept."""
     target = path.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
@@ -410,52 +486,95 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def write_backup(path: Path) -> Path | None:
-    """Copy the current file to config.toml.bak (atomically); None when there is no file."""
+    """Copy the current file to config.toml.bak (atomically, with the file's own mode, so a
+    private config does not get a world-readable copy); None when there is no file."""
     target = path.resolve()
     if not target.exists():
         return None
     backup = backup_path(target)
     write_atomic(backup, read_text(target))
+    shutil.copymode(target, backup)
     return backup
 
 
+def _free_name(path: Path) -> Path:
+    """`path`, or path.2, path.3, ... when it exists (an earlier restore's file is kept)."""
+    n = 2
+    candidate = path
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.{n}")
+        n += 1
+    return candidate
+
+
 def restore_backup(path: Path) -> str:
-    """Put config.toml.bak back in place. The current file is kept as
-    config.toml.before-restore first, so a restore can itself be undone by hand. Returns a
+    """Put config.toml.bak back in place. The current file is kept first as
+    config.toml.before-restore (config.toml.before-restore.2, .3, ... when an earlier restore
+    left one: it is never overwritten), so a restore can itself be undone by hand. Returns a
     line for the user; raises ConfigError when there is no backup."""
     target = path.resolve()
     backup = backup_path(target)
     if not backup.exists():
         raise ConfigError(f"no backup to restore: {backup} does not exist")
     text = read_text(backup)
-    kept = target.with_name(target.name + ".before-restore")
+    kept = None
     if target.exists():
+        kept = _free_name(target.with_name(target.name + ".before-restore"))
         write_atomic(kept, read_text(target))
+        shutil.copymode(target, kept)
     write_atomic(target, text)
     return f"restored {target} from {backup}" + (
-        f" (the replaced file is {kept})" if kept.exists() else ""
+        f" (the replaced file is {kept})" if kept is not None else ""
     )
 ```
 
+In `shell/config/watcher.py`, `ConfigWatcher.__init__`, replace
+
+```python
+        gfile = Gio.File.new_for_path(str(path))
+        # WATCH_MOVES so editors that save by renaming a temp file over the config still trigger
+        self._monitor = gfile.monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        self._monitor.connect("changed", self._on_event)
+```
+
+with
+
+```python
+        self._monitor = self._watch(path)
+        # A symlinked config (a dotfiles repo): a write to the file it points to (an atomic
+        # replace by the settings window or an editor, or an in-place save) changes nothing at
+        # the link itself, so that file is watched too. The link stays watched (re-pointed).
+        self._target = self._watch(path.resolve()) if path.is_symlink() else None
+
+    def _watch(self, path: Path) -> Gio.FileMonitor:
+        gfile = Gio.File.new_for_path(str(path))
+        # WATCH_MOVES so editors that save by renaming a temp file over the config still trigger
+        monitor = gfile.monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        monitor.connect("changed", self._on_event)
+        return monitor
+```
+
+(the module docstring, `_TRIGGERS`, `_on_event` and `_fire` are unchanged; existing tests read `_monitor`, which stays the link's monitor).
+
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `scripts/py -m pytest tests/test_settings_files.py -q`
-Expected: `11 passed`.
+Run: `scripts/py -m pytest tests/test_settings_files.py tests/test_config_watcher.py -q`
+Expected: `17 passed` (13 new in `test_settings_files.py`; in `test_config_watcher.py` the 2 existing tests and the new one, parametrized twice).
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1207 passed`.
+Run VERIFY. Expected: `1443 passed`.
 
 ```bash
-git add settings/__init__.py settings/files.py tests/test_settings_files.py
-git commit -m "feat(settings): atomic, symlink-safe writes, session backup and restore" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git add settings/__init__.py settings/files.py tests/test_settings_files.py shell/config/watcher.py tests/test_config_watcher.py
+git commit -m "feat(settings): atomic writes, session backup and restore; the watcher follows a symlinked config" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
 ### Task 3: In-place TOML edits: `settings/document.py`
 
-Before this task: tomlkit must be installed (Prerequisites). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, stop and report to the controller (do not install it yourself).
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
 
 **Files:**
 - Create: `settings/document.py`
@@ -466,7 +585,8 @@ Before this task: tomlkit must be installed (Prerequisites). Check: `scripts/py 
 - Produces:
   - `Path_ = tuple[str | int, ...]` (a key path from the top of the file; an int indexes `panels`)
   - `class DocumentError(ConfigError)`
-  - `class UserDocument(text: str = "")` (bad TOML: `ConfigError("TOML syntax error: …")`) with `.text -> str`, `.data -> dict` (a deep copy), `.set(path, value)`, `.unset(path)` (prunes tables it leaves empty, never a panel entry; a missing key raises `DocumentError` "no such key"), `.add_panel(monitor, widget) -> int` (the new index), `.remove_panel(monitor, index)` (the last one removes `panels`), `.move_panel(monitor, index, to)`. Every edit is applied to a copy and verified against the plain-data edit; on any mismatch `DocumentError` ("… edit the file by hand") and the document is unchanged.
+  - `class UserDocument(text: str = "")` (bad TOML: `ConfigError("TOML syntax error: …")`) with `.text -> str`, `.data -> dict` (a deep copy), `.set(path, value)`, `.unset(path)` (prunes tables it leaves empty, never a panel entry; a missing key raises `DocumentError` "no such key"), `.add_panel(monitor, widget) -> int` (the new index), `.remove_panel(monitor, index)` (the last one removes `panels`), `.move_panel(monitor, index, to)`. Every edit is applied to a copy and verified against the plain-data edit; on any mismatch `DocumentError` ("… edit the file by hand") and the document is unchanged. `add_panel` on an inline `panels = [{...}]` array raises `DocumentError` ("… add the panel by hand").
+  - the comment census (`_header_comments`, `_comments`): an edit that would lose a whole-line comment sitting above a table header (blank lines allowed in between) raises `DocumentError` ("cannot edit the config in place without losing the comment '…' above a table; edit the file by hand"); comments inside a removed entry or a pruned table's body may go; a comment that only moves is allowed (decision 2).
 - Placement rule for new keys (`_container_kind`): a missing top-level table, `monitors` or a monitor's table is created as a table header (`monitors` as an implicit super table, so no empty `[monitors]` header); anything deeper is added as a dotted key inside the existing table.
 
 - [ ] **Step 1: Write the failing test**
@@ -746,6 +866,79 @@ def test_data_is_a_copy():
     doc = UserDocument(USER)
     doc.data["theme"]["accent"] = "#000000"
     assert doc.data["theme"]["accent"] == "#8fd3b6"
+
+
+def test_adding_to_an_inline_panel_array_is_refused():
+    text = '[monitors.X]\npanels = [{ widget = "dock" }]\n'
+    doc = UserDocument(text)
+    with pytest.raises(DocumentError, match="inline array.*by hand"):
+        doc.add_panel("X", "clock")
+    assert doc.text == text
+
+
+COMMENTED = """\
+[theme]
+accent = "#8fd3b6"
+
+# wide gaps on purpose
+[layout]
+gap = 4
+
+# the test monitor
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+
+# DP-1 holds the Plasma panel
+[monitors.DP-1]
+shell = "plasma"
+"""
+
+
+@pytest.mark.parametrize(
+    "edit, comment",
+    [
+        (lambda d: d.remove_panel("HDMI-A-1", 1), "# DP-1 holds the Plasma panel"),
+        (lambda d: d.unset(("layout", "gap")), "# the test monitor"),
+    ],
+)
+def test_an_edit_that_would_lose_a_comment_above_a_table_is_refused(edit, comment):
+    """tomlkit keeps the comment lines above a header in the table before it: removing the
+    last panel, or pruning [layout], would delete them with it (the comment census)."""
+    doc = UserDocument(COMMENTED)
+    with pytest.raises(DocumentError, match=f"losing the comment '{comment}'.*by hand"):
+        edit(doc)
+    assert doc.text == COMMENTED
+
+
+def test_comments_inside_a_removed_entry_may_go():
+    text = '[[monitors.X.panels]]\n# the dock\nwidget = "dock"\n'
+    doc = UserDocument(text + '[[monitors.X.panels]]\nwidget = "clock"\n')
+    doc.remove_panel("X", 0)
+    assert "# the dock" not in doc.text
+
+
+@pytest.mark.parametrize(
+    "edit, before",
+    [
+        (lambda d: d.set(("theme", "thickness"), 12), "thickness = 12"),
+        (lambda d: d.add_panel("HDMI-A-1", "bar"), "[[monitors.HDMI-A-1.panels]]"),
+        (lambda d: d.move_panel("HDMI-A-1", 1, 0), "[[monitors.HDMI-A-1.panels]]"),
+    ],
+)
+def test_a_comment_above_a_table_can_move_but_stays(edit, before):
+    """Pinned as it is today (decision 2): a key or panel added at the end of the table before a
+    commented header lands below the comment; the comment is kept, the edit is allowed."""
+    doc = UserDocument(COMMENTED)
+    edit(doc)
+    comment = "# wide gaps on purpose" if "thickness" in before else "# DP-1 holds the Plasma panel"
+    lines = doc.text.splitlines()
+    assert lines[lines.index(comment) + 1] == before
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -773,11 +966,13 @@ from __future__ import annotations
 
 import copy
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
+from tomlkit.items import AoT
 
 from shell.config.models import ConfigError
 
@@ -862,7 +1057,40 @@ class UserDocument:
             raise DocumentError(
                 "cannot edit the config in place without changing other keys; edit the file by hand"
             )
+        lost = _header_comments(self.text) - _comments(tomlkit.dumps(doc))
+        if lost:
+            raise DocumentError(
+                f"cannot edit the config in place without losing the comment {min(lost)!r} "
+                "above a table; edit the file by hand"
+            )
         self._doc, self._data = doc, expected
+
+
+# ---- comment census ----------------------------------------------------------------------
+# tomlkit keeps the comment lines above a table header inside the table BEFORE it, so removing
+# or pruning that table would silently drop them. Whole-line comments above a header (blank
+# lines allowed in between) must survive an edit; other comments may go with the key or entry
+# they sat in. A comment can still MOVE (a key or panel added at the end of the table before
+# it lands below the comment): see decision 2.
+
+
+def _comments(text: str) -> Counter[str]:
+    return Counter(s for s in (line.strip() for line in text.splitlines()) if s.startswith("#"))
+
+
+def _header_comments(text: str) -> Counter[str]:
+    found: Counter[str] = Counter()
+    block: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            block.append(s)
+        elif s.startswith("["):
+            found.update(block)
+            block = []
+        elif s:
+            block = []
+    return found
 
 
 # ---- tomlkit side ------------------------------------------------------------------------
@@ -912,6 +1140,10 @@ def _add_panel(doc, monitor: str, widget: str) -> None:
     entry["widget"] = widget
     if "panels" not in table:
         table["panels"] = tomlkit.aot()
+    elif not isinstance(table["panels"], AoT):  # panels = [{ ... }]: tomlkit writes bad TOML
+        raise DocumentError(
+            f"monitors.{monitor}.panels is an inline array in your config; add the panel by hand"
+        )
     table["panels"].append(entry)
 
 
@@ -969,11 +1201,11 @@ def _plain_remove_panel(data: dict, monitor: str, index: int) -> None:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_document.py -q`
-Expected: `30 passed`.
+Expected: `37 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1237 passed`.
+Run VERIFY. Expected: `1480 passed`.
 
 ```bash
 git add settings/document.py tests/test_settings_document.py
@@ -984,6 +1216,8 @@ git commit -m "feat(settings): verified in-place TOML edits that keep comments" 
 
 ### Task 4: The edit session: `settings/session.py`
 
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
+
 **Files:**
 - Create: `settings/session.py`
 - Test: `tests/test_settings_session.py`
@@ -993,7 +1227,7 @@ git commit -m "feat(settings): verified in-place TOML edits that keep comments" 
 - Produces:
   - `check_text(text: str, default_path: Path = DEFAULT_PATH) -> Config` (the shell's rules, including unknown widgets)
   - `class ChangedOutside(ConfigError)`
-  - `class SettingsSession(path: Path, default_path: Path = DEFAULT_PATH)` with attributes `path`, `default_path`, `text`, `start_text`, `user` (plain dict of the file), `config: Config | None` (None while the file is invalid), `error: str | None`, `history: list[str]`, `backed_up: bool`; methods `reload()`, `changed_outside() -> bool`, `apply(edit: Callable[[UserDocument], Any]) -> Config` (raises `ChangedOutside` after re-reading, or `ConfigError` with nothing written), `undo() -> bool`, `revert()`.
+  - `class SettingsSession(path: Path, default_path: Path = DEFAULT_PATH)` with attributes `path`, `default_path`, `text`, `start_text`, `user` (plain dict of the file), `config: Config | None` (None while the file is invalid), `error: str | None`, `history: list[str]`, `backed_up: bool`; methods `reload()`, `changed_outside() -> bool`, `rebase()` (re-read after a hand edit: clears the history and makes the hand edit the new `start_text`), `apply(edit: Callable[[UserDocument], Any]) -> Config` (raises `ChangedOutside` after rebasing, or `ConfigError` with nothing written), `undo() -> bool` (`ChangedOutside` after rebasing), `revert()` (refused with `ChangedOutside` after rebasing when the file changed by hand; else back to `start_text`). Every write goes through `_write_file`: an `OSError` becomes `ConfigError("cannot write PATH: …")`, nothing half-done (the history and `text` change only after the write).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1001,6 +1235,8 @@ Create `tests/test_settings_session.py`:
 
 ```python
 """settings.session: validate, write atomically, back up, undo, revert, hand edits (pure)."""
+
+import os
 
 import pytest
 
@@ -1137,6 +1373,34 @@ def test_undo_after_a_hand_edit_rereads_instead(path):
     assert s.history == [] and s.text == USER
 
 
+def test_revert_after_a_hand_edit_keeps_the_hand_edit(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    hand = USER + '\n[theme]\naccent = "#112233"\n'
+    path.write_text(hand)  # edited by hand while the window is open
+    with pytest.raises(ChangedOutside, match="keeps that change"):
+        s.revert()
+    assert path.read_text() == hand
+    s.apply(lambda d: d.set(SHELL, "both"))
+    s.revert()  # back to the hand edit (the new start), never to the file before it
+    assert path.read_text() == hand
+
+
+def test_an_unwritable_folder_is_an_error_not_a_crash(path):
+    if os.geteuid() == 0:
+        pytest.skip("root can write into a read-only folder")
+    s = SettingsSession(path)
+    os.chmod(path.parent, 0o500)
+    try:
+        with pytest.raises(ConfigError, match="cannot write"):
+            s.apply(lambda d: d.set(DEPTH, 80))
+        with pytest.raises(ConfigError, match="cannot write"):
+            s.revert()
+    finally:
+        os.chmod(path.parent, 0o700)
+    assert path.read_text() == USER and s.history == [] and s.text == USER
+
+
 def test_an_edit_can_fix_an_invalid_file(path):
     path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')
     s = SettingsSession(path)
@@ -1254,12 +1518,19 @@ class SettingsSession:
     def changed_outside(self) -> bool:
         return files.read_text(self.path) != self.text
 
+    def rebase(self) -> None:
+        """Re-read a file that was changed outside the window (a hand edit): the hand edit
+        becomes the new starting point (Revert all goes back to it, never past it) and the
+        undo history, which led to a file that no longer exists, is cleared."""
+        self.reload()
+        self.history.clear()
+        self.start_text = self.text
+
     def apply(self, edit: Edit) -> Config:
         """Apply one change and write it; returns the new config. Raises ChangedOutside (the
-        session re-read the file, undo history cleared) or ConfigError (nothing written)."""
+        session re-read the file: a new baseline) or ConfigError (nothing written)."""
         if self.changed_outside():
-            self.reload()
-            self.history.clear()
+            self.rebase()
             raise ChangedOutside(
                 f"{self.path} was changed outside the settings window; it has been re-read "
                 "and the last change was not applied"
@@ -1267,7 +1538,12 @@ class SettingsSession:
         doc = UserDocument(self.text)
         edit(doc)
         config = check_text(doc.text, self.default_path)
-        self._write(doc.text)
+        if not self.backed_up:
+            self._write_file(lambda: files.write_backup(self.path))
+            self.backed_up = True
+        self._write_file(lambda: files.write_atomic(self.path, doc.text))
+        self.history.append(self.text)
+        self.text, self.user = doc.text, tomllib.loads(doc.text)
         self.config, self.error = config, None
         return config
 
@@ -1276,39 +1552,44 @@ class SettingsSession:
         if not self.history:
             return False
         if self.changed_outside():
-            self.reload()
-            self.history.clear()
+            self.rebase()
             raise ChangedOutside(f"{self.path} was changed outside the settings window")
-        previous = self.history.pop()
-        files.write_atomic(self.path, previous)
+        self._write_file(lambda: files.write_atomic(self.path, self.history[-1]))
+        self.history.pop()
         self.reload()
         return True
 
     def revert(self) -> None:
-        """Back to the file as it was when the session started (no validation: it was the
-        file on disk); also when it was changed by hand since."""
-        files.write_atomic(self.path, self.start_text)
+        """Back to the file as it was when the session started, or when it was last changed
+        by hand (no validation: it was the file on disk). Refused, with ChangedOutside, when
+        the file was changed by hand since the last read: that hand edit becomes the start."""
+        if self.changed_outside():
+            self.rebase()
+            raise ChangedOutside(
+                f"{self.path} was changed outside the settings window; Revert all keeps that "
+                "change (it is the new starting point)"
+            )
+        self._write_file(lambda: files.write_atomic(self.path, self.start_text))
         self.history.clear()
         self.reload()
 
-    def _write(self, text: str) -> None:
-        if not self.backed_up:
-            files.write_backup(self.path)
-            self.backed_up = True
-        files.write_atomic(self.path, text)
-        self.history.append(self.text)
-        self.text = text
-        self.user = tomllib.loads(text)
+    def _write_file(self, write: Callable[[], Any]) -> None:
+        """Run one file write; an OSError (read-only folder, disk full) is a ConfigError the
+        window shows, never an exception inside a GTK callback."""
+        try:
+            write()
+        except OSError as exc:
+            raise ConfigError(f"cannot write {self.path}: {exc}") from None
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_session.py -q`
-Expected: `23 passed`.
+Expected: `25 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1260 passed`.
+Run VERIFY. Expected: `1505 passed`.
 
 ```bash
 git add settings/session.py tests/test_settings_session.py
@@ -1324,13 +1605,16 @@ git commit -m "feat(settings): edit session: check by the shell's rules, write, 
 - Test: `tests/test_settings_form.py`
 
 **Interfaces:**
-- Consumes: `Config`, `COLOR_FIELDS`, `HANDLE_SHAPES` (`shell/config/models.py`).
+- Consumes: `Config`, `COLOR_FIELDS`, `HANDLE_SHAPES` (`shell/config/models.py`); from Plan 5: `EDGE_ONLY_KEYS`, `CORNER_ONLY_KEYS` (the section split), and in the tests `SHARED_KEYS`, `CORNERS`, `PanelConfig`.
 - Produces:
   - `FieldKind = Literal["color", "int", "bool", "enum", "fonts", "length", "widget", "deprecated"]`
-  - `FieldSpec(key, label, kind, choices=(), minimum=None, maximum=None, hint="")` (frozen)
+  - `FieldSpec(key, label, kind, choices=(), minimum=None, maximum=None, hint="", labels=())` (frozen; `labels`: what each choice shows, empty = the choices)
   - `SectionSpec(key, label, fields, sections=())` with `.field(key)`, `.section(key)`
-  - `ConfigForm(theme, layout, monitor, panel)`; `config_form(widgets: tuple[str, ...]) -> ConfigForm`; `section_for(schema, name, key="", label="", widgets=(), skip=()) -> SectionSpec` (raises `ValueError` for an unknown kind)
-  - `COLOR_KEYS`, `HINTS`, `MODE_HINTS`, `LENGTH_PX = (60, 4000)`, `LENGTH_PERCENT = (1, 100)`, `LENGTH_MODES = ("px", "fill", "content", "percent")`
+  - `ConfigForm(theme, layout, monitor, edge_panel, corner_panel)` with `.panel_for(kind, corner=None) -> SectionSpec` (`kind` from `registry.widget_kind`: `"edge"` or `"corner"`, else `ValueError`; given the corner in effect, the corner section's `edge` choices are `tuple(corner.split("-"))`)
+  - `config_form(widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()) -> ConfigForm`: the edge section is `PanelConfig` minus `CORNER_ONLY_KEYS`, the corner section `PanelConfig` minus `EDGE_ONLY_KEYS`, rows in `CORNER_ROWS` order (widget, corner, edge, width, height, state)
+  - `section_for(schema, name, key="", label="", widgets=(), skip=(), corner_widgets=()) -> SectionSpec` (raises `ValueError` for an unknown kind)
+  - `widget_choices(widgets, corner_widgets=()) -> (choices, labels)` (edge widgets first, then corner widgets labelled `"NAME (corner panel)"`), `label_for(key) -> str`
+  - `COLOR_KEYS`, `HINTS` (keyed by `(model, key)`, e.g. `("Border", "width")` vs `("PanelConfig", "width")`), `LABELS`, `MODE_HINTS`, `CORNER_ROWS`, `LENGTH_PX = (60, 4000)`, `LENGTH_PERCENT = (1, 100)`, `LENGTH_MODES = ("px", "fill", "content", "percent")`
   - `rgba_to_hex(r, g, b, a) -> str`, `split_length(value) -> (mode, number | None)`, `join_length(mode, number) -> int | str`, `parse_fonts(text) -> list[str]`, `format_fonts(fonts) -> str`
 
 - [ ] **Step 1: Write the failing test**
@@ -1353,7 +1637,16 @@ from settings.form import (
     section_for,
     split_length,
 )
-from shell.config.models import COLOR_FIELDS, HANDLE_SHAPES, Config
+from shell.config.models import (
+    COLOR_FIELDS,
+    CORNER_ONLY_KEYS,
+    CORNERS,
+    EDGE_ONLY_KEYS,
+    HANDLE_SHAPES,
+    SHARED_KEYS,
+    Config,
+    PanelConfig,
+)
 
 WIDGETS = ("clock", "dock", "system_bar")
 
@@ -1391,7 +1684,8 @@ def test_nested_theme_tables_are_sub_sections(form):
 def test_handle_shapes_come_from_the_model(form):
     shape = form.theme.section("handle_style").field("shape")
     assert shape.kind == "enum" and shape.choices == HANDLE_SHAPES
-    assert form.panel.section("handle").field("shape").choices == HANDLE_SHAPES
+    for kind in ("edge", "corner"):
+        assert form.panel_for(kind).section("handle").field("shape").choices == HANDLE_SHAPES
 
 
 def test_layout_gap(form):
@@ -1407,7 +1701,8 @@ def test_monitor_section_is_the_shell_mode_only(form):
 
 
 def test_panel_fields(form):
-    p = form.panel
+    p = form.panel_for("edge")
+    assert p is form.edge_panel and not {"corner", "width", "height"} & {f.key for f in p.fields}
     assert p.field("widget").kind == "widget" and p.field("widget").choices == WIDGETS
     assert p.field("edge").choices == ("top", "bottom", "left", "right")
     assert p.field("align").choices == ("start", "center", "end")
@@ -1421,6 +1716,62 @@ def test_panel_fields(form):
     handle = p.section("handle")
     assert (handle.field("size").minimum, handle.field("size").maximum) == (4, 40)
     assert handle.field("hover_color").kind == "color"
+    assert handle.field("offset").hint == "px from the middle of the panel"
+    assert p.field("offset").hint == "px from the aligned end"
+
+
+def test_corner_panel_fields(form):
+    """A corner widget's entry (spec 19): SHARED_KEYS plus CORNER_ONLY_KEYS."""
+    p = form.panel_for("corner")
+    assert [f.key for f in p.fields] == ["widget", "corner", "edge", "width", "height", "state"]
+    assert p.field("corner").choices == CORNERS
+    width = p.field("width")
+    assert (width.kind, width.minimum, width.maximum) == ("int", 60, 4000)
+    assert width.hint == "px from the screen corner, frame included"
+    assert [s.key for s in p.sections] == ["handle", "interaction"]
+
+
+def test_the_panel_sections_split_the_panel_keys_by_kind(form):
+    edge = {f.key for f in form.edge_panel.fields} | {s.key for s in form.edge_panel.sections}
+    corner = {f.key for f in form.corner_panel.fields} | {s.key for s in form.corner_panel.sections}
+    assert edge & corner == set(SHARED_KEYS)
+    assert edge | corner == set(PanelConfig.model_fields)
+    assert edge - corner == set(EDGE_ONLY_KEYS) and corner - edge == set(CORNER_ONLY_KEYS)
+
+
+@pytest.mark.parametrize(
+    "corner, edges",
+    [("bottom-left", ("bottom", "left")), ("top-right", ("top", "right"))],
+)
+def test_the_edge_of_a_corner_panel_offers_only_its_corners_edges(form, corner, edges):
+    assert form.panel_for("corner", corner).field("edge").choices == edges
+    assert form.panel_for("corner").field("edge").choices == ("top", "bottom", "left", "right")
+    with pytest.raises(ValueError):
+        form.panel_for("middle")
+
+
+def test_corner_widgets_are_listed_after_edge_widgets_and_labelled():
+    form = config_form(("bar", "box", "clock"), corner_widgets=("box",))
+    widget = form.edge_panel.field("widget")
+    assert widget.choices == ("bar", "clock", "box")
+    assert widget.labels == ("bar", "clock", "box (corner panel)")
+    assert form.corner_panel.field("widget").choices == widget.choices
+
+
+def test_hints_belong_to_their_table(form):
+    """'width' is the border's px in [theme.border] and a corner panel's size in a panel."""
+    assert form.theme.section("border").field("width").hint == "px"
+    assert form.panel_for("corner").field("width").hint.startswith("px from the screen corner")
+
+
+def test_labels_are_readable(form):
+    assert form.theme.field("duration_ms").label == "Duration"
+    assert form.theme.field("text_secondary").label == "Secondary text"
+    assert form.theme.field("hover_zone").label == "Hover zone"
+    assert form.edge_panel.field("min_length").label == "Minimum length"
+    for section in (form.theme, form.layout, form.edge_panel, form.corner_panel):
+        for spec in section.fields:
+            assert "_" not in spec.label and spec.label[0].isupper(), spec.key
 
 
 def test_every_string_field_is_known_to_the_form():
@@ -1510,10 +1861,10 @@ in the rows come from settings.values.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
-from shell.config.models import COLOR_FIELDS, Config
+from shell.config.models import COLOR_FIELDS, CORNER_ONLY_KEYS, EDGE_ONLY_KEYS, Config
 
 FieldKind = Literal["color", "int", "bool", "enum", "fonts", "length", "widget", "deprecated"]
 
@@ -1523,22 +1874,41 @@ COLOR_KEYS = frozenset(COLOR_FIELDS) | {"color", "hover_color"}
 LENGTH_PX = (60, 4000)  # shell.config.models.check_length
 LENGTH_PERCENT = (1, 100)
 LENGTH_MODES = ("px", "fill", "content", "percent")
+# The unit or meaning shown next to a row, by (model, key): one key can mean different things
+# in different tables ("width" of the border vs the width of a corner panel).
 HINTS = {
-    "thickness": "px",
-    "radius": "px",
-    "peek": "px",
-    "hover_zone": "px",
-    "duration_ms": "ms",
-    "width": "px",
-    "elevation": "% (100 % = 48 px)",
-    "size": "px along the edge",
-    "weight": "px",
-    "gap": "px between neighbouring panels",
-    "offset": "px from the aligned end",
-    "depth": "px past the frame",
-    "min_length": "px",
-    "max_length": "px",
-    "pos": "deprecated: reset it and use align and offset",
+    ("Theme", "thickness"): "px",
+    ("Theme", "radius"): "px",
+    ("Theme", "peek"): "px",
+    ("Theme", "hover_zone"): "px",
+    ("Theme", "duration_ms"): "ms",
+    ("Border", "width"): "px",
+    ("Shadow", "elevation"): "% (100 % = 48 px)",
+    ("HandleStyle", "size"): "px along the edge",
+    ("HandleStyle", "weight"): "px",
+    ("HandleConfig", "size"): "px along the edge",
+    ("HandleConfig", "weight"): "px",
+    ("HandleConfig", "offset"): "px from the middle of the panel",
+    ("LayoutSettings", "gap"): "px between neighbouring panels",
+    ("PanelConfig", "offset"): "px from the aligned end",
+    ("PanelConfig", "depth"): "px past the frame",
+    ("PanelConfig", "min_length"): "px",
+    ("PanelConfig", "max_length"): "px",
+    ("PanelConfig", "pos"): "deprecated: reset it and use align and offset",
+    ("PanelConfig", "width"): "px from the screen corner, frame included",
+    ("PanelConfig", "height"): "px from the screen corner, frame included",
+}
+# Row labels; any other key reads "Some key" (pydantic's own titles read "Duration Ms").
+LABELS = {
+    "duration_ms": "Duration",
+    "text_secondary": "Secondary text",
+    "surface_hover": "Surface (hover)",
+    "handle_hover": "Handle (hover)",
+    "hover_color": "Hover colour",
+    "color": "Colour",
+    "min_length": "Minimum length",
+    "max_length": "Maximum length",
+    "pos": "Position (deprecated)",
 }
 MODE_HINTS = {
     "edge": "Edge Shell frame and panels",
@@ -1547,6 +1917,7 @@ MODE_HINTS = {
     "the edge Plasma's panel uses",
     "none": "no Edge Shell here (the same as plasma until the Plasma panel toggle exists)",
 }
+CORNER_ROWS = ("widget", "corner", "edge", "width", "height", "state")  # a corner panel's rows
 
 
 @dataclass(frozen=True)
@@ -1558,6 +1929,7 @@ class FieldSpec:
     minimum: int | None = None
     maximum: int | None = None
     hint: str = ""
+    labels: tuple[str, ...] = ()  # what the choices show (empty: the choices themselves)
 
 
 @dataclass(frozen=True)
@@ -1579,11 +1951,28 @@ def _options(prop: dict) -> list[dict]:
     return [o for o in prop.get("anyOf", [prop]) if o.get("type") != "null"]
 
 
-def _field(key: str, prop: dict, widgets: tuple[str, ...]) -> FieldSpec:
+def label_for(key: str) -> str:
+    return LABELS.get(key, key.replace("_", " ").capitalize())
+
+
+def widget_choices(
+    widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(choices, labels) of a widget combo: edge widgets first, then the corner widgets,
+    labelled as such (a new corner entry is just {"widget": NAME}; spec 19)."""
+    edge = tuple(w for w in widgets if w not in corner_widgets)
+    corner = tuple(w for w in widgets if w in corner_widgets)
+    return edge + corner, edge + tuple(f"{w} (corner panel)" for w in corner)
+
+
+def _field(
+    model: str, key: str, prop: dict, widgets: tuple[str, ...], corner_widgets: tuple[str, ...]
+) -> FieldSpec:
     first = _options(prop)[0]
-    common = {"key": key, "label": prop.get("title", key), "hint": HINTS.get(key, "")}
+    common = {"key": key, "label": label_for(key), "hint": HINTS.get((model, key), "")}
     if key == "widget":
-        return FieldSpec(kind="widget", choices=widgets, **common)
+        choices, labels = widget_choices(widgets, corner_widgets)
+        return FieldSpec(kind="widget", choices=choices, labels=labels, **common)
     if key == "pos":
         return FieldSpec(kind="deprecated", **common)
     if key == "length":
@@ -1610,9 +1999,11 @@ def section_for(
     label: str = "",
     widgets: tuple[str, ...] = (),
     skip: tuple[str, ...] = (),
+    corner_widgets: tuple[str, ...] = (),
 ) -> SectionSpec:
     """The section for the model `name` in `schema["$defs"]`. Nested models become
-    sub-sections; keys in `skip` are left out (the panel list has its own editor)."""
+    sub-sections; keys in `skip` are left out (the panel list has its own editor; a panel
+    section leaves out the other kind's keys)."""
     model = schema["$defs"][name]
     fields: list[FieldSpec] = []
     sections: list[SectionSpec] = []
@@ -1625,7 +2016,7 @@ def section_for(
             title = fkey.replace("_", " ").capitalize()
             sections.append(section_for(schema, sub, fkey, title, widgets))
         else:
-            fields.append(_field(fkey, prop, widgets))
+            fields.append(_field(name, fkey, prop, widgets, corner_widgets))
     return SectionSpec(key, label or name, tuple(fields), tuple(sections))
 
 
@@ -1634,23 +2025,50 @@ class ConfigForm:
     theme: SectionSpec  # [theme], also the per-monitor [monitors.NAME.theme] override
     layout: SectionSpec  # [layout], also [monitors.NAME.layout]
     monitor: SectionSpec  # [monitors.NAME] keys other than its tables: the shell mode
-    panel: SectionSpec  # one [[monitors.NAME.panels]] entry
+    edge_panel: SectionSpec  # a [[monitors.NAME.panels]] entry of an edge widget
+    corner_panel: SectionSpec  # ... of a corner widget (spec 19)
+
+    def panel_for(self, kind: str, corner: str | None = None) -> SectionSpec:
+        """The section of a panel entry whose widget is of `kind` (registry.widget_kind:
+        "edge" or "corner"). Given the `corner` in effect, a corner panel's edge row offers
+        only that corner's two edges (corner.split("-"))."""
+        if kind == "edge":
+            return self.edge_panel
+        if kind != "corner":
+            raise ValueError(f"unknown panel kind {kind!r}")
+        if corner is None:
+            return self.corner_panel
+        edges = tuple(corner.split("-"))
+        fields = tuple(
+            replace(f, choices=edges) if f.key == "edge" else f for f in self.corner_panel.fields
+        )
+        return replace(self.corner_panel, fields=fields)
 
 
-def config_form(widgets: tuple[str, ...]) -> ConfigForm:
-    """Every section the settings window shows; `widgets` is registry.widget_names().
+def config_form(widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()) -> ConfigForm:
+    """Every section the settings window shows; `widgets` is registry.widget_names() and
+    `corner_widgets` those whose registry.widget_kind is "corner".
 
     Per-monitor overrides use the base models (Theme, LayoutSettings), not ThemeOverride /
     LayoutOverride: those are built with create_model from the bare annotations and lose the
-    bounds (their schema has no minimum / maximum)."""
+    bounds (their schema has no minimum / maximum). The two panel sections split PanelConfig
+    by the models' own key sets: an edge panel skips CORNER_ONLY_KEYS, a corner panel skips
+    EDGE_ONLY_KEYS (SHARED_KEYS are in both)."""
     schema = Config.model_json_schema()
+
+    def panel(skip: tuple[str, ...]) -> SectionSpec:
+        return section_for(schema, "PanelConfig", "", "Panel", widgets, skip, corner_widgets)
+
+    corner = panel(EDGE_ONLY_KEYS)
+    rows = tuple(sorted(corner.fields, key=lambda f: CORNER_ROWS.index(f.key)))
     return ConfigForm(
         theme=section_for(schema, "Theme", "theme", "Theme"),
         layout=section_for(schema, "LayoutSettings", "layout", "Layout"),
         monitor=section_for(
             schema, "MonitorConfig", "", "Monitor", skip=("theme", "layout", "panels")
         ),
-        panel=section_for(schema, "PanelConfig", "", "Panel", widgets=widgets),
+        edge_panel=panel(CORNER_ONLY_KEYS),
+        corner_panel=replace(corner, fields=rows),
     )
 
 
@@ -1700,11 +2118,11 @@ def format_fonts(fonts: list[str]) -> str:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_form.py -q`
-Expected: `23 passed`.
+Expected: `30 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1283 passed`.
+Run VERIFY. Expected: `1535 passed`.
 
 ```bash
 git add settings/form.py tests/test_settings_form.py
@@ -1720,13 +2138,14 @@ git commit -m "feat(settings): form description generated from the JSON schema" 
 - Test: `tests/test_settings_values.py`
 
 **Interfaces:**
-- Consumes: `Config` (`shell/config/models.py`), `request_for`, `requests_for` (`shell/registry.py`), `layout_monitor` (`shell/panel_layout.py`), `Output` (`shell/outputs.py`).
+- Consumes: `Config` (`shell/config/models.py`), `request_for`, `requests_for` (`shell/registry.py`), `layout_monitor` (`shell/panel_layout.py`), `Output` (`shell/outputs.py`); from Plan 5: `CORNER_ONLY_KEYS`, `EDGE_ONLY_KEYS`, `registry.defaults`, `registry.widget_kind`, `CornerRequest`, `CornerDefaults`, `corner_has_edge`, `default_edge`, and in the tests the `corner_registry` fixture; `config_form` (Task 5) in the tests.
 - Produces:
-  - `FieldValue(value, is_set: bool, source: str)` (frozen)
+  - `FieldValue(value, is_set: bool, source: str, default=None)` (frozen; `default`, the value when the key is unset, is not compared: the length row uses it)
   - `lookup(data: dict, path: tuple) -> (found: bool, value)`
-  - `field_value(config: Config, user: dict, path: tuple) -> FieldValue` (paths under `theme`, `layout`, `monitors.NAME.shell|theme|layout|panels.I.…`; `KeyError` otherwise). Sources: `your config`, `default`, `global theme`, `global layout`, `widget default`, `theme`, `not set`.
+  - `field_value(config: Config, user: dict, path: tuple) -> FieldValue` (paths under `theme`, `layout`, `monitors.NAME.shell|theme|layout|panels.I.…`; `KeyError` otherwise). Sources: `your config`, `default`, `global theme`, `global layout`, `widget default`, `theme`, `not set`, `placement default (align/offset set)` (`PLACEMENT_DEFAULT`), `corner default`, and for a key of the other kind `not used by edge panels` / `not used by corner panels` (value None). A `CornerRequest` entry reads `CORNER_REQUEST_KEYS` (widget, corner, edge, width, height, state) from the request and its defaults from `registry.defaults(name)` (`CornerDefaults`); an edge entry reads `PANEL_REQUEST_KEYS` (now with `pos`) and `PANEL_OWN_KEYS` (`min_length`, `max_length`).
+  - `panel_ops(entry: dict, key, value) -> list[tuple[str, str, Any]]`: the steps (`("set" | "unset", key, value)`) of one panel-key change, applied as one edit (decision 12)
   - `monitor_names(config, outputs: list[Output]) -> list[tuple[str, bool]]` (connected first in kscreen order, then configured but disconnected ones by name)
-  - `layout_preview(config, name, width, height) -> list[str]` (the shell's layout warnings)
+  - `layout_preview(config, name, width, height) -> list[str]` (the shell's layout warnings, corner ones included: "the bottom-left corner already holds …", "width N px does not fit the bottom edge; shrunk to M", "… has no room for it; not shown")
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1737,7 +2156,16 @@ Create `tests/test_settings_values.py`:
 
 import pytest
 
-from settings.values import FieldValue, field_value, layout_preview, lookup, monitor_names
+from settings.form import config_form
+from settings.values import (
+    PLACEMENT_DEFAULT,
+    FieldValue,
+    field_value,
+    layout_preview,
+    lookup,
+    monitor_names,
+    panel_ops,
+)
 from shell.outputs import Output
 
 USER = {
@@ -1803,11 +2231,124 @@ def test_panel_keys_fall_back_to_the_widget_defaults(config):
     p1 = ("monitors", "HDMI-A-1", "panels", 1)
     assert field_value(config, USER, (*p0, "depth")) == FieldValue(80, True, "your config")
     assert field_value(config, USER, (*p0, "edge")) == FieldValue("bottom", False, "widget default")
-    assert field_value(config, USER, (*p0, "length")).value == 560
+    length = field_value(config, USER, (*p0, "length"))
+    assert (length.value, length.default) == (560, 560)
     assert field_value(config, USER, (*p1, "state")).value == "collapsed"
-    assert field_value(config, USER, (*p1, "pos")) == FieldValue(None, False, "not set")
+    assert field_value(config, USER, (*p1, "pos")) == FieldValue(600, False, "widget default")
     assert field_value(config, USER, (*p0, "min_length")) == FieldValue(None, False, "not set")
     assert field_value(config, USER, (*p0, "widget")) == FieldValue("dock", True, "your config")
+
+
+def test_placement_defaults_once_align_or_offset_is_set(make_config, fake_registry):
+    """Placement is taken as a whole: setting align on the bar drops its default pos 600 (as
+    setting align on system_bar drops its offset 142); the rows say why."""
+    user = {"monitors": {"M": {"panels": [{"widget": "bar", "align": "end"}]}}}
+    config = make_config(monitors=user["monitors"])
+    p = ("monitors", "M", "panels", 0)
+    assert field_value(config, user, (*p, "align")) == FieldValue("end", True, "your config")
+    assert field_value(config, user, (*p, "offset")) == FieldValue(0, False, PLACEMENT_DEFAULT)
+    assert field_value(config, user, (*p, "pos")) == FieldValue(None, False, PLACEMENT_DEFAULT)
+    assert PLACEMENT_DEFAULT == "placement default (align/offset set)"
+
+
+CORNERS_USER = {
+    "monitors": {
+        "M": {
+            "panels": [
+                {"widget": "box"},
+                {"widget": "box", "corner": "top-right", "width": 200, "handle": {"size": 9}},
+                {"widget": "dock"},
+            ]
+        }
+    }
+}
+
+
+@pytest.fixture
+def corners(make_config, corner_registry):
+    return make_config(monitors=CORNERS_USER["monitors"])
+
+
+def test_corner_panel_values(corners):
+    p0, p1 = ("monitors", "M", "panels", 0), ("monitors", "M", "panels", 1)
+    u = CORNERS_USER
+    assert field_value(corners, u, (*p0, "corner")) == FieldValue(
+        "bottom-left", False, "widget default"
+    )
+    assert field_value(corners, u, (*p0, "edge")) == FieldValue("bottom", False, "corner default")
+    assert field_value(corners, u, (*p0, "height")) == FieldValue(390, False, "widget default")
+    assert field_value(corners, u, (*p0, "state")).value == "extended"
+    assert field_value(corners, u, (*p1, "corner")) == FieldValue("top-right", True, "your config")
+    assert field_value(corners, u, (*p1, "edge")) == FieldValue("top", False, "corner default")
+    assert field_value(corners, u, (*p1, "width")) == FieldValue(200, True, "your config")
+    assert field_value(corners, u, (*p1, "handle", "size")) == FieldValue(9, True, "your config")
+    assert field_value(corners, u, (*p0, "align")) == FieldValue(
+        None, False, "not used by corner panels"
+    )
+    assert field_value(corners, u, ("monitors", "M", "panels", 2, "width")) == FieldValue(
+        None, False, "not used by edge panels"
+    )
+
+
+def test_every_panel_form_field_has_a_value(corners):
+    """Every row of both panel sections, on every entry of either kind: a value, no KeyError
+    (the view refreshes every row it built)."""
+    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+
+    def paths(section, prefix):
+        for spec in section.fields:
+            yield (*prefix, spec.key)
+        for sub in section.sections:
+            yield from paths(sub, (*prefix, sub.key))
+
+    for index in range(3):
+        for kind in ("edge", "corner"):
+            for path in paths(form.panel_for(kind), ("monitors", "M", "panels", index)):
+                assert isinstance(field_value(corners, CORNERS_USER, path), FieldValue), path
+
+
+@pytest.mark.parametrize(
+    "entry, key, value, ops",
+    [
+        ({"widget": "dock"}, "depth", 80, [("set", "depth", 80)]),
+        (  # an edge widget becomes a corner widget: its edge-only keys go in the same edit
+            {"widget": "dock", "align": "end", "length": 300, "edge": "left", "state": "collapsed"},
+            "widget",
+            "box",
+            [("set", "widget", "box"), ("unset", "align", None), ("unset", "length", None)],
+        ),
+        (  # ... and its edge too, when that is not an edge of the corner it lands in
+            {"widget": "dock", "edge": "top"},
+            "widget",
+            "box",
+            [("set", "widget", "box"), ("unset", "edge", None)],
+        ),
+        (  # a corner widget becomes an edge widget
+            {"widget": "box", "corner": "top-left", "width": 200, "edge": "left"},
+            "widget",
+            "dock",
+            [("set", "widget", "dock"), ("unset", "corner", None), ("unset", "width", None)],
+        ),
+        (  # a new corner without the entry's edge
+            {"widget": "box", "edge": "left"},
+            "corner",
+            "top-right",
+            [("set", "corner", "top-right"), ("unset", "edge", None)],
+        ),
+        ({"widget": "box", "edge": "left"}, "corner", "top-left", [("set", "corner", "top-left")]),
+    ],
+)
+def test_panel_ops_keep_the_entry_valid(corner_registry, entry, key, value, ops):
+    assert panel_ops(entry, key, value) == ops
+
+
+def test_layout_preview_reports_corner_panels(make_config, corner_registry):
+    two = make_config(monitors={"M": {"panels": [{"widget": "box"}, {"widget": "box"}]}})
+    (warning,) = layout_preview(two, "M", 1920, 1080)
+    assert "the bottom-left corner already holds monitors.M.panels.0" in warning
+    wide = make_config(monitors={"M": {"panels": [{"widget": "box", "width": 2000}]}})
+    (warning,) = layout_preview(wide, "M", 1920, 1080)
+    assert "width 2000 px does not fit the bottom edge; shrunk to" in warning
 
 
 def test_panel_handle_and_interaction(config):
@@ -1876,21 +2417,37 @@ Create `settings/values.py`:
 
 A field is addressed by its TOML key path (settings.document.Path_). `is_set` says the user
 file sets that key (the row's reset button removes it); `source` names where an unset value
-is inherited from.
+is inherited from. Panel entries are edge or corner panels (spec 19): the kind comes from the
+widget (registry.widget_kind) and decides which keys the entry takes.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from shell.config.models import Config
+from shell.config.models import CORNER_ONLY_KEYS, EDGE_ONLY_KEYS, Config
 from shell.outputs import Output
 from shell.panel_layout import layout_monitor
-from shell.registry import request_for, requests_for
+from shell.panel_spec import CornerDefaults, CornerRequest, corner_has_edge, default_edge
+from shell.registry import defaults, request_for, requests_for, widget_kind
 
-PANEL_REQUEST_KEYS = ("widget", "edge", "align", "offset", "order", "length", "depth", "state")
-PANEL_OWN_KEYS = ("pos", "min_length", "max_length")  # no widget default: None when unset
+# keys whose value in effect is the request's (the entry's, else the widget's default)
+PANEL_REQUEST_KEYS = (
+    "widget",
+    "edge",
+    "pos",
+    "align",
+    "offset",
+    "order",
+    "length",
+    "depth",
+    "state",
+)
+CORNER_REQUEST_KEYS = ("widget", "corner", "edge", "width", "height", "state")
+PANEL_OWN_KEYS = ("min_length", "max_length")  # no widget default: None when unset
+PLACEMENT_KEYS = ("pos", "align", "offset")  # taken as a whole (shell.registry.request_for)
+PLACEMENT_DEFAULT = "placement default (align/offset set)"
 
 
 @dataclass(frozen=True)
@@ -1898,6 +2455,9 @@ class FieldValue:
     value: Any  # in effect now (None: not set anywhere, e.g. min_length)
     is_set: bool  # the user file sets this key
     source: str  # "your config", or where the value is inherited from
+    # the value the key has when it is not set (the widget's default; the length row uses it
+    # when switching back to px from fill or content)
+    default: Any = field(default=None, compare=False)
 
 
 def lookup(data: dict, path: tuple) -> tuple[bool, Any]:
@@ -1948,11 +2508,8 @@ def _src(is_set: bool, inherited: str) -> str:
 def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: bool) -> FieldValue:
     entry = config.monitor(name).panels[index]
     req = request_for(entry)
+    d = defaults(entry.widget)  # public registry API: never registry._DEFAULTS
     key = keys[0]
-    if key in PANEL_REQUEST_KEYS:
-        return FieldValue(getattr(req, key), is_set, _src(is_set, "widget default"))
-    if key in PANEL_OWN_KEYS:
-        return FieldValue(getattr(entry, key), is_set, _src(is_set, "not set"))
     if key == "interaction":
         return FieldValue(getattr(req.interaction, keys[1]), is_set, _src(is_set, "default"))
     if key == "handle":
@@ -1966,7 +2523,57 @@ def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: boo
         if sub == "hover_color":
             return FieldValue(theme.handle_hover, is_set, "theme")
         return FieldValue(getattr(theme.handle_style, sub), is_set, "theme")
+    if isinstance(req, CornerRequest):
+        return _corner_value(req, d, key, is_set)
+    if key in PANEL_REQUEST_KEYS:
+        source = "widget default"
+        if key in PLACEMENT_KEYS and any(getattr(entry, k) is not None for k in PLACEMENT_KEYS):
+            source = PLACEMENT_DEFAULT  # the widget's own align / offset no longer apply
+        return FieldValue(getattr(req, key), is_set, _src(is_set, source), getattr(d, key, None))
+    if key in PANEL_OWN_KEYS:
+        return FieldValue(getattr(entry, key), is_set, _src(is_set, "not set"))
+    if key in CORNER_ONLY_KEYS:
+        return FieldValue(None, is_set, "not used by edge panels")
     raise KeyError(f"no settings field for panel key {keys}")
+
+
+def _corner_value(req: CornerRequest, d: CornerDefaults, key: str, is_set: bool) -> FieldValue:
+    """A corner panel's key (spec 19): corner, edge, width, height and state come from the
+    entry, else the widget's CornerDefaults; `edge` unset is the widget's edge when it is an
+    edge of the corner, else the corner's top or bottom edge (shell.panel_spec.default_edge)."""
+    if key in CORNER_REQUEST_KEYS:
+        source = "widget default"
+        default = getattr(d, key, None)
+        if key == "edge" and not (d.edge is not None and corner_has_edge(req.corner, d.edge)):
+            source, default = "corner default", default_edge(req.corner)
+        return FieldValue(getattr(req, key), is_set, _src(is_set, source), default)
+    if key in EDGE_ONLY_KEYS:
+        return FieldValue(None, is_set, "not used by corner panels")
+    raise KeyError(f"no settings field for panel key {key!r}")
+
+
+def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
+    """Setting one key of a panel entry (`entry`: its plain data in the user file), as steps
+    (("set" | "unset", key, value)) applied as ONE edit: one write, one reload.
+
+    - A widget of the other kind also unsets the keys only the old kind takes (a dock turned
+      into a corner widget loses its align, length, ...; spec 19), else the shell rejects it.
+    - A corner (or a corner widget whose corner) that does not contain the entry's edge also
+      unsets that edge: the panel then opens from the widget's edge or the corner's default."""
+    ops: list[tuple[str, str, Any]] = [("set", key, value)]
+    corner = None
+    if key == "widget":
+        kind = widget_kind(value)
+        stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
+        ops += [("unset", k, None) for k in stale if k in entry]
+        if kind == "corner":
+            corner = entry.get("corner", defaults(value).corner)
+    elif key == "corner":
+        corner = value
+    edge = entry.get("edge")
+    if corner is not None and edge is not None and not corner_has_edge(corner, edge):
+        ops.append(("unset", "edge", None))
+    return ops
 
 
 def monitor_names(config: Config, outputs: list[Output]) -> list[tuple[str, bool]]:
@@ -1979,8 +2586,9 @@ def monitor_names(config: Config, outputs: list[Output]) -> list[tuple[str, bool
 
 def layout_preview(config: Config, name: str, width: int, height: int) -> list[str]:
     """The layout warnings the shell would report for this monitor (panels shrunk, moved or
-    hidden), from the same resolver. "content" panels count at their widget's default length
-    (the shell measures them after building)."""
+    hidden; corner panels in a taken corner or shrunk to fit), from the same resolver.
+    "content" panels count at their widget's default length (the shell measures them after
+    building)."""
     theme = config.theme_for(name)
     return layout_monitor(
         requests_for(config, name),
@@ -1996,11 +2604,11 @@ def layout_preview(config: Config, name: str, width: int, height: int) -> list[s
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_values.py -q`
-Expected: `9 passed`.
+Expected: `19 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1292 passed`.
+Run VERIFY. Expected: `1554 passed`.
 
 ```bash
 git add settings/values.py tests/test_settings_values.py
@@ -2018,9 +2626,10 @@ git commit -m "feat(settings): the value each field shows and where it is inheri
 **Interfaces:**
 - Consumes: `FieldSpec`, `LENGTH_*`, `rgba_to_hex`, `split_length`, `join_length`, `parse_fonts`, `format_fonts` (Task 5); `FieldValue` (Task 6); `hex_to_rgba` (`shell/theme.py`).
 - Produces:
-  - `DEBOUNCE_MS = 400`, `DEBOUNCED = ("int", "length")`
-  - editors `ColorEditor`, `IntEditor`, `BoolEditor`, `ChoiceEditor`, `FontsEditor`, `LengthEditor` (attributes `mode`, `number`), `DeprecatedEditor`, each with `.widget` and `.set(value)` (never emits); `make_editor(spec, emit) -> editor` (`ValueError` for an unknown kind)
-  - `class FieldRow(Gtk.Box)(spec, path, on_change(path, value), on_reset(path))` with `.spec`, `.path`, `.editor`, `.source` (label), `.reset` (button), `.error` (label), `.show_value(FieldValue)` (never calls back; cancels a pending debounced edit; reset is sensitive when the key is set, never for `widget`), `.show_error(message | None)`.
+  - `DEBOUNCE_MS = 400`, `DEBOUNCED = ("int", "length")`, `FALLBACK_PX = 300`, `FALLBACK_PERCENT = 50.0`
+  - `wheel_scrolls_the_page(widget)`: a `scroll-event` handler that stops the widget's own handling (`GObject.signal_stop_emission_by_name(widget, "scroll-event")`) and returns False, so the event goes on to the page's `ScrolledWindow` (decision 13); applied to every combo box and spin button (`IntEditor`, `ChoiceEditor`, both parts of `LengthEditor`, and in Task 8 the add-panel combo)
+  - editors `ColorEditor`, `IntEditor`, `BoolEditor`, `ChoiceEditor(choices, emit, labels=())`, `FontsEditor`, `LengthEditor` (attributes `mode`, `number`, `fallback_px`; switching to px or percent uses that mode's last number, else `fallback_px` or `FALLBACK_PERCENT`, never the 60 px minimum), `DeprecatedEditor`, each with `.widget`, `.set(value)` (never emits) and `.commit()` (sends a typed value; only `FontsEditor` has one); `make_editor(spec, emit) -> editor` (`ValueError` for an unknown kind)
+  - `class FieldRow(Gtk.Box)(spec, path, on_change(path, value), on_reset(path))` with `.spec`, `.path`, `.editor`, `.source` (label), `.reset` (button), `.error` (label), `.show_value(FieldValue)` (never calls back; cancels a pending debounced edit; gives a length editor the widget's px default; reset is sensitive when the key is set, never for `widget`), `.show_error(message | None)`, `.flush()` (sends a pending debounced value and a typed font list: the window is closing).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2068,8 +2677,8 @@ def test_show_value_never_calls_back():
         (FORM.theme.section("border").field("enabled"), True),
         (FORM.theme.section("handle_style").field("shape"), "bar"),
         (FORM.theme.field("font"), ["A", "B"]),
-        (FORM.panel.field("length"), "50%"),
-        (FORM.panel.field("pos"), 600),
+        (FORM.edge_panel.field("length"), "50%"),
+        (FORM.edge_panel.field("pos"), 600),
     ]:
         _, changes, _ = row_for(spec, value)
         assert changes == [], spec.key
@@ -2112,7 +2721,7 @@ def test_a_new_value_cancels_a_pending_edit(monkeypatch):
 
 
 def test_unset_optional_int_shows_the_minimum():
-    row, _, _ = row_for(FORM.panel.field("min_length"), None)
+    row, _, _ = row_for(FORM.edge_panel.field("min_length"), None)
     assert row.editor.widget.get_value() == 60
 
 
@@ -2122,7 +2731,7 @@ def test_bool_enum_and_widget_rows():
     row, changes2, _ = row_for(FORM.theme.section("handle_style").field("shape"), "auto")
     assert row.editor.widget.get_active_id() == "auto"
     row.editor.widget.set_active_id("chevron")
-    row, changes3, _ = row_for(FORM.panel.field("widget"), "dock")
+    row, changes3, _ = row_for(FORM.edge_panel.field("widget"), "dock")
     row.editor.widget.set_active_id("clock")
     assert [c[1] for c in changes + changes2 + changes3] == [True, "chevron", "clock"]
 
@@ -2139,18 +2748,76 @@ def test_fonts_row_commits_on_enter_only_when_changed():
 
 
 def test_length_row_modes():
-    row, changes, _ = row_for(FORM.panel.field("length"), 300)
+    row, changes, _ = row_for(FORM.edge_panel.field("length"), 300)
     editor = row.editor
     assert editor.mode.get_active_id() == "px" and editor.number.get_value() == 300
     editor.mode.set_active_id("fill")
     assert not editor.number.get_sensitive()
     editor.mode.set_active_id("percent")
     editor.number.set_value(25)
-    assert [c[1] for c in changes] == ["fill", "100%", "25%"]  # px 300 clamps to 100 %
+    editor.mode.set_active_id("px")
+    assert [c[1] for c in changes] == ["fill", "50%", "25%", 300]  # each mode keeps its number
+
+
+def test_a_fill_length_switched_to_px_takes_the_widget_default_not_the_minimum():
+    changes = []
+    for shown, default, expected in (("fill", 560, 560), ("content", "fill", fields.FALLBACK_PX)):
+        row = fields.FieldRow(
+            FORM.edge_panel.field("length"), ("p",), lambda _p, v: changes.append(v), id
+        )
+        row.show_value(FieldValue(shown, True, "your config", default=default))
+        row.editor.mode.set_active_id("px")
+        assert changes[-1] == expected  # the widget's px default, else 300: never 60 px
+
+
+def test_the_mouse_wheel_never_edits_a_row():
+    """Live apply: a wheel over DP-1's mode row must scroll the page, not set it to edge."""
+    edits = []
+
+    def scroll(widget):
+        event = Gdk.Event.new(Gdk.EventType.SCROLL)
+        event.scroll.direction = Gdk.ScrollDirection.UP
+        return widget.emit("scroll-event", event)
+
+    mode = fields.FieldRow(
+        FORM.monitor.field("shell"), ("monitors", "DP-1", "shell"), lambda p, v: edits.append(v), id
+    )
+    mode.show_value(FieldValue("plasma", True, "your config"))
+    thickness, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    length, changes2, _ = row_for(FORM.edge_panel.field("length"), 300)
+    for widget in (mode.editor.widget, thickness.editor.widget, length.editor.mode):
+        assert scroll(widget) is False  # not handled: the page's ScrolledWindow scrolls
+    scroll(length.editor.number)
+    assert mode.editor.widget.get_active_id() == "plasma"
+    assert thickness.editor.widget.get_value() == 10 and length.editor.number.get_value() == 300
+    assert edits == changes == changes2 == []
+
+
+def test_flush_sends_a_pending_spin_value_and_typed_fonts(monkeypatch):
+    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 5)
+    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    spin, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    spin.editor.widget.set_value(14)
+    fonts, changes2, _ = row_for(FORM.theme.field("font"), ["A"])
+    fonts.editor.widget.set_text("B, monospace")  # typed, Enter not pressed
+    spin.flush()
+    fonts.flush()
+    assert changes == [(("theme", "x"), 14)]
+    assert changes2 == [(("theme", "x"), ["B", "monospace"])]
+    spin.flush()
+    assert len(changes) == 1  # nothing pending any more
+
+
+def test_choices_show_their_labels():
+    form = config_form(("box", "clock"), corner_widgets=("box",))
+    row, _, _ = row_for(form.edge_panel.field("widget"), "clock")
+    assert [r[0] for r in row.editor.widget.get_model()] == ["clock", "box (corner panel)"]
+    row.editor.widget.set_active_id("box")
+    assert row.editor.widget.get_active_text() == "box (corner panel)"
 
 
 def test_length_row_shows_percent_with_one_decimal():
-    row, _, _ = row_for(FORM.panel.field("length"), "12.5%")
+    row, _, _ = row_for(FORM.edge_panel.field("length"), "12.5%")
     assert row.editor.mode.get_active_id() == "percent"
     assert row.editor.number.get_value() == 12.5 and row.editor.number.get_digits() == 1
 
@@ -2165,7 +2832,7 @@ def test_reset_button_follows_is_set_and_calls_back():
 
 
 def test_the_widget_of_a_panel_cannot_be_reset():
-    row, _, _ = row_for(FORM.panel.field("widget"), "dock", is_set=True)
+    row, _, _ = row_for(FORM.edge_panel.field("widget"), "dock", is_set=True)
     assert not row.reset.get_sensitive()
 
 
@@ -2209,7 +2876,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, GLib, GObject, Gtk
 
 from settings.form import (
     LENGTH_MODES,
@@ -2228,8 +2895,22 @@ from shell.theme import hex_to_rgba
 DEBOUNCE_MS = 400  # spin buttons: one write per pause, not one per click of the arrows
 DEBOUNCED = ("int", "length")
 UNBOUNDED = (-100000, 100000)
+FALLBACK_PX = 300  # px when switching a length to px with no px value known (never the 60 min)
+FALLBACK_PERCENT = 50.0
 
 Emit = Callable[[Any], None]
+
+
+def wheel_scrolls_the_page(widget: Gtk.Widget) -> None:
+    """A mouse wheel over a combo box or spin button scrolls the page instead of changing the
+    value. Edits apply live: a stray scroll over DP-1's mode row would otherwise set it to
+    `edge` (an Edge Shell frame over the Plasma panel), over thickness rebuild the monitor."""
+    widget.connect("scroll-event", _pass_scroll)
+
+
+def _pass_scroll(widget: Gtk.Widget, _event: Gdk.Event) -> bool:
+    GObject.signal_stop_emission_by_name(widget, "scroll-event")  # skip the widget's handler
+    return False  # not handled: the event goes on to the page's ScrolledWindow
 
 
 class _Editor:
@@ -2239,6 +2920,9 @@ class _Editor:
 
     def set(self, value: Any) -> None:
         raise NotImplementedError
+
+    def commit(self) -> None:
+        """Send a typed but not yet applied value (the window is closing)."""
 
 
 class ColorEditor(_Editor):
@@ -2260,6 +2944,7 @@ class IntEditor(_Editor):
         high = UNBOUNDED[1] if spec.maximum is None else spec.maximum
         self.widget = Gtk.SpinButton.new_with_range(low, high, 1)
         self.widget.set_numeric(True)
+        wheel_scrolls_the_page(self.widget)
         self.widget.connect("value-changed", lambda s: emit(s.get_value_as_int()))
 
     def set(self, value: int | None) -> None:
@@ -2277,10 +2962,11 @@ class BoolEditor(_Editor):
 
 
 class ChoiceEditor(_Editor):
-    def __init__(self, choices: tuple[str, ...], emit: Emit):
+    def __init__(self, choices: tuple[str, ...], emit: Emit, labels: tuple[str, ...] = ()):
         self.widget = Gtk.ComboBoxText()
-        for choice in choices:
-            self.widget.append(choice, choice)
+        for choice, label in zip(choices, labels or choices, strict=True):
+            self.widget.append(choice, label)
+        wheel_scrolls_the_page(self.widget)
         self.widget.connect("changed", self._on_changed, emit)
 
     @staticmethod
@@ -2296,15 +2982,15 @@ class FontsEditor(_Editor):
     def __init__(self, emit: Emit):
         self.widget = Gtk.Entry(width_chars=40)
         self._shown: list[str] = []
+        self._emit = emit
+        self.widget.connect("activate", lambda *_a: self.commit())
+        self.widget.connect("focus-out-event", lambda *_a: self.commit() or False)
 
-        def commit(*_args) -> bool:
-            fonts = parse_fonts(self.widget.get_text())
-            if fonts != self._shown:
-                emit(fonts)
-            return False
-
-        self.widget.connect("activate", commit)
-        self.widget.connect("focus-out-event", commit)
+    def commit(self) -> None:
+        fonts = parse_fonts(self.widget.get_text())
+        if fonts != self._shown:
+            self._shown = fonts
+            self._emit(fonts)
 
     def set(self, value: list[str]) -> None:
         self._shown = list(value)
@@ -2312,7 +2998,9 @@ class FontsEditor(_Editor):
 
 
 class LengthEditor(_Editor):
-    """A mode (px, fill, content, percent) and a number for px and percent."""
+    """A mode (px, fill, content, percent) and a number for px and percent. Switching to px or
+    percent uses the last number that mode had (shown or typed), else `fallback_px` (the
+    widget's default length, set by FieldRow) or FALLBACK_PERCENT: never the spin's minimum."""
 
     def __init__(self, emit: Emit):
         self.widget = Gtk.Box(spacing=6)
@@ -2322,6 +3010,10 @@ class LengthEditor(_Editor):
         self.number = Gtk.SpinButton.new_with_range(*LENGTH_PX, 1)
         self.widget.pack_start(self.mode, False, False, 0)
         self.widget.pack_start(self.number, False, False, 0)
+        wheel_scrolls_the_page(self.mode)
+        wheel_scrolls_the_page(self.number)
+        self.fallback_px = FALLBACK_PX
+        self._numbers: dict[str, float] = {}  # the last px / percent number of this row
         self._emit = emit
         self._quiet = False
         self.mode.connect("changed", self._on_mode)
@@ -2337,14 +3029,22 @@ class LengthEditor(_Editor):
     def _on_mode(self, _combo) -> None:
         if self._quiet:
             return
+        mode = self.mode.get_active_id()
         self._quiet = True
-        self._range(self.mode.get_active_id())  # may clamp the number: no emit for that
+        self._range(mode)  # may clamp the number: no emit for that
+        if mode in ("px", "percent"):
+            fallback = self.fallback_px if mode == "px" else FALLBACK_PERCENT
+            self.number.set_value(self._numbers.get(mode, fallback))
         self._quiet = False
         self._send()
 
     def _send(self) -> None:
-        if not self._quiet:
-            self._emit(join_length(self.mode.get_active_id(), self.number.get_value()))
+        if self._quiet:
+            return
+        mode = self.mode.get_active_id()
+        if mode in ("px", "percent"):
+            self._numbers[mode] = self.number.get_value()
+        self._emit(join_length(mode, self.number.get_value()))
 
     def set(self, value: int | str) -> None:
         mode, number = split_length(value)
@@ -2353,6 +3053,7 @@ class LengthEditor(_Editor):
         self._range(mode)
         if number is not None:
             self.number.set_value(number)
+            self._numbers[mode] = number
         self._quiet = False
 
 
@@ -2374,7 +3075,7 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
     if spec.kind == "bool":
         return BoolEditor(emit)
     if spec.kind in ("enum", "widget"):
-        return ChoiceEditor(spec.choices, emit)
+        return ChoiceEditor(spec.choices, emit, spec.labels)
     if spec.kind == "fonts":
         return FontsEditor(emit)
     if spec.kind == "length":
@@ -2427,6 +3128,9 @@ class FieldRow(Gtk.Box):
         self._cancel()
         self._updating = True
         try:
+            if isinstance(self.editor, LengthEditor):
+                default = value.default
+                self.editor.fallback_px = default if isinstance(default, int) else FALLBACK_PX
             self.editor.set(value.value)
         finally:
             self._updating = False
@@ -2438,6 +3142,14 @@ class FieldRow(Gtk.Box):
     def show_error(self, message: str | None) -> None:
         self.error.set_text(message or "")
         self.error.set_visible(bool(message))
+
+    def flush(self) -> None:
+        """Send what the user changed but has not been applied yet: a debounced spin value
+        or a typed font list (the window is closing)."""
+        if self._timer:
+            self._cancel()
+            self._on_change(self.path, self._pending)
+        self.editor.commit()
 
     def _changed(self, value: Any) -> None:
         if self._updating:
@@ -2463,11 +3175,11 @@ class FieldRow(Gtk.Box):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_fields.py -q`
-Expected: `14 passed`.
+Expected: `18 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1306 passed`.
+Run VERIFY. Expected: `1572 passed`.
 
 ```bash
 git add settings/fields.py tests/test_settings_fields.py
@@ -2478,15 +3190,18 @@ git commit -m "feat(settings): GTK field rows with schema bounds, reset and debo
 
 ### Task 8: The panel list editor: `settings/panels.py`
 
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
+
 **Files:**
 - Create: `settings/panels.py`
 - Test: `tests/test_settings_panels.py`
 
 **Interfaces:**
-- Consumes: `UserDocument` (Task 3), `ConfigForm`, `SectionSpec` (Task 5), `PanelRequest` (`shell/panel_spec.py`); in tests `requests_for` and the `fake_registry` fixture.
+- Consumes: `UserDocument` (Task 3), `ConfigForm`, `SectionSpec` (Task 5), `wheel_scrolls_the_page` (Task 7), `PanelRequest` (`shell/panel_spec.py`); from Plan 5: `CornerRequest`, `registry.widget_kind`; in tests `requests_for`, `config_form` and the `fake_registry` / `corner_registry` fixtures.
 - Produces:
-  - `panel_title(index, req) -> str` (`"1. dock: bottom, center"`)
-  - `class PanelEditor(Gtk.Box)(form, monitor, requests, make_rows(section, prefix) -> Gtk.Widget, on_edit(edit, open_index), expand=None)` with `.expanders`, `.widget_choice`, `.add(widget | None)` (open index = the new entry), `.remove(index)` (None), `.move(index, to)` (`to`).
+  - `panel_title(index, req) -> str` (`"1. dock: bottom, center"`; a `CornerRequest`: `"2. widget_panel: bottom-left, from bottom, 300x390"`)
+  - `panel_section(form, req) -> SectionSpec`: `form.panel_for(registry.widget_kind(req.widget), req.corner if a corner panel else None)`
+  - `class PanelEditor(Gtk.Box)(form, monitor, requests, make_rows(section, prefix) -> Gtk.Widget, on_edit(edit, open_index), expand=None)` with `.expanders`, `.widget_choice` (the widget field's choices and labels: corner widgets last, labelled), `.add(widget | None)` (open index = the new entry; a corner widget's entry is `{"widget": NAME}`), `.remove(index)` (None), `.move(index, to)` (`to`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2582,6 +3297,43 @@ def test_first_cannot_move_up_and_last_cannot_move_down(editor):
     up1, down1, _ = buttons(1)
     assert (up0.get_sensitive(), down0.get_sensitive()) == (False, True)
     assert (up1.get_sensitive(), down1.get_sensitive()) == (True, False)
+
+
+def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_registry):
+    """Spec 19: a corner widget's entry shows corner, edge (only its corner's two), width and
+    height, never align or length; its title names the corner, the edge and the size."""
+    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    entries = [{"widget": "dock"}, {"widget": "box"}, {"widget": "box", "corner": "top-right"}]
+    config = make_config(monitors={"M": {"panels": entries}})
+    sections = []
+
+    def make_rows(section, _prefix):
+        sections.append(section)
+        return Gtk.Box()
+
+    ed = panels.PanelEditor(form, "M", requests_for(config, "M"), make_rows, lambda *_a: None)
+    assert [e.get_label() for e in ed.expanders] == [
+        "1. dock: bottom, center",
+        "2. box: bottom-left, from bottom, 300x390",
+        "3. box: top-right, from top, 300x390",
+    ]
+    dock, box, moved = sections
+    assert "align" in {f.key for f in dock.fields} and "corner" not in {f.key for f in dock.fields}
+    assert [f.key for f in box.fields] == ["widget", "corner", "edge", "width", "height", "state"]
+    assert box.field("edge").choices == ("bottom", "left")
+    assert moved.field("edge").choices == ("top", "right")
+    assert [row[0] for row in ed.widget_choice.get_model()] == [
+        "bar",
+        "clock",
+        "dock",
+        "box (corner panel)",
+    ]
+    edits = []
+    ed._on_edit = lambda edit, open_index: edits.append((edit, open_index))
+    ed.add("box")
+    doc = UserDocument("")
+    edits[0][0](doc)
+    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}} and edits[0][1] == 3
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -2595,8 +3347,9 @@ Create `settings/panels.py`:
 
 ```python
 """GTK editor for one monitor's panel list: an expander per [[panels]] entry with its fields,
-plus add, remove and reorder buttons. Structural edits go through `on_edit` (the window applies
-them with the session and rebuilds); field rows come from the window's `make_rows`."""
+plus add, remove and reorder buttons. Edge and corner panels (spec 19) share the list; each
+entry shows the rows of its widget's kind. Structural edits go through `on_edit` (the window
+applies them with the session and rebuilds); field rows come from the window's `make_rows`."""
 
 from __future__ import annotations
 
@@ -2609,15 +3362,28 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 from settings.document import UserDocument
+from settings.fields import wheel_scrolls_the_page
 from settings.form import ConfigForm, SectionSpec
-from shell.panel_spec import PanelRequest
+from shell.panel_spec import CornerRequest, PanelRequest
+from shell.registry import widget_kind
 
 Edit = Callable[[UserDocument], Any]
 
 
-def panel_title(index: int, req: PanelRequest) -> str:
-    """'1. dock: bottom, center' (1-based, as the list reads)."""
+def panel_title(index: int, req: PanelRequest | CornerRequest) -> str:
+    """'1. dock: bottom, center', or for a corner panel '2. widget_panel: bottom-left, from
+    bottom, 300x390' (1-based, as the list reads)."""
+    if isinstance(req, CornerRequest):
+        where = f"{req.corner}, from {req.edge}, {req.width}x{req.height}"
+        return f"{index + 1}. {req.widget}: {where}"
     return f"{index + 1}. {req.widget}: {req.edge}, {req.align}"
+
+
+def panel_section(form: ConfigForm, req: PanelRequest | CornerRequest) -> SectionSpec:
+    """The rows of one entry: its widget's kind; a corner panel's edge row offers only the two
+    edges of the corner it is in."""
+    corner = req.corner if isinstance(req, CornerRequest) else None
+    return form.panel_for(widget_kind(req.widget), corner)
 
 
 class PanelEditor(Gtk.Box):
@@ -2625,7 +3391,7 @@ class PanelEditor(Gtk.Box):
         self,
         form: ConfigForm,
         monitor: str,
-        requests: list[PanelRequest],
+        requests: list[PanelRequest | CornerRequest],
         make_rows: Callable[[SectionSpec, tuple], Gtk.Widget],
         on_edit: Callable[[Edit, int | None], None],
         expand: int | None = None,
@@ -2654,16 +3420,18 @@ class PanelEditor(Gtk.Box):
                 button.connect("clicked", action)
                 buttons.pack_start(button, False, False, 0)
             body.pack_start(buttons, False, False, 0)
-            rows = make_rows(form.panel, ("monitors", monitor, "panels", i))
+            rows = make_rows(panel_section(form, req), ("monitors", monitor, "panels", i))
             body.pack_start(rows, False, False, 0)
             expander.add(body)
             self.expanders.append(expander)
             self.pack_start(expander, False, False, 0)
         adder = Gtk.Box(spacing=6)
         self.widget_choice = Gtk.ComboBoxText()
-        for name in form.panel.field("widget").choices:
-            self.widget_choice.append(name, name)
+        widget = form.edge_panel.field("widget")
+        for name, label in zip(widget.choices, widget.labels or widget.choices, strict=True):
+            self.widget_choice.append(name, label)
         self.widget_choice.set_active(0)
+        wheel_scrolls_the_page(self.widget_choice)
         add = Gtk.Button(label="Add panel")
         add.connect("clicked", lambda _b: self.add(self.widget_choice.get_active_id()))
         adder.pack_start(self.widget_choice, False, False, 0)
@@ -2671,6 +3439,8 @@ class PanelEditor(Gtk.Box):
         self.pack_start(adder, False, False, 0)
 
     def add(self, widget: str | None) -> None:
+        """A new entry with only its widget, edge or corner kind alike (a corner widget's
+        entry is {"widget": "widget_panel"}: its corner and size are the widget's)."""
         if widget:
             self._on_edit(lambda d: d.add_panel(self.monitor, widget), self._count)
 
@@ -2684,11 +3454,11 @@ class PanelEditor(Gtk.Box):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_panels.py -q`
-Expected: `4 passed`.
+Expected: `5 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1310 passed`.
+Run VERIFY. Expected: `1577 passed`.
 
 ```bash
 git add settings/panels.py tests/test_settings_panels.py
@@ -2699,13 +3469,15 @@ git commit -m "feat(settings): panel list editor: add, remove, reorder" -m "Co-A
 
 ### Task 9: The settings view: `settings/view.py`
 
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
+
 **Files:**
 - Create: `settings/view.py`
 - Test: `tests/test_settings_view.py`
 
 **Interfaces:**
-- Consumes: `FieldRow` (Task 7), `PanelEditor` (Task 8), `SettingsSession`, `ChangedOutside`, `check_text` (Task 4), `config_form`, `MODE_HINTS`, `SectionSpec` (Task 5), `field_value`, `layout_preview`, `monitor_names` (Task 6), `requests_for`, `widget_names` (`shell/registry.py`), `Output` (`shell/outputs.py`).
-- Produces: `TITLE_KEYS = ("widget", "edge", "align")`; `class SettingsView(Gtk.Box)(session, outputs)` with `.session`, `.outputs` (name -> Output), `.form`, `.rows`, `.previews` (monitor -> label), `.stack` (pages `theme`, `monitor:NAME`), `.banner`, `.banner_label`, `.undo_button`; methods `rebuild()`, `refresh()`, `section_rows(section, prefix) -> Gtk.Widget`, `apply(edit, row=None, structural=False) -> bool`, `undo()`, `revert()`, `file_changed()`, `show_banner(text, kind)`, `hide_banner()`; the private `_on_change(path, value)` / `_on_reset(path)` are the rows' callbacks (the tests call them as a user edit would).
+- Consumes: `FieldRow` (Task 7), `PanelEditor` (Task 8), `SettingsSession`, `ChangedOutside`, `check_text` (Task 4), `config_form`, `MODE_HINTS`, `SectionSpec` (Task 5), `field_value`, `layout_preview`, `lookup`, `monitor_names`, `panel_ops` (Task 6), `requests_for`, `widget_names` (`shell/registry.py`), `registry.widget_kind` (Plan 5), `Output` (`shell/outputs.py`); in tests the `corner_registry` fixture.
+- Produces: `TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")`; `class SettingsView(Gtk.Box)(session, outputs)` with `.session`, `.outputs` (name -> Output), `.form`, `.rows`, `.previews` (monitor -> label), `.stack` (pages `theme`, `monitor:NAME`), `.banner`, `.banner_label`, `.undo_button`; methods `rebuild()`, `refresh()`, `section_rows(section, prefix) -> Gtk.Widget`, `apply(edit, row=None, structural=False) -> bool`, `undo()`, `revert()` (both: a hand edit, an unwritable folder or an unreadable file shows in the banner), `flush()` (every row's pending or typed value: the window is closing), `file_changed()` (a hand edit: `session.rebase()`, then rebuild; a `ConfigError` from reading shows in the banner), `show_banner(text, kind)`, `hide_banner()`; the private `_on_change(path, value)` / `_on_reset(path)` are the rows' callbacks (the tests call them as a user edit would). A panel's own key goes through `panel_ops` as one compound edit (`_panel_edit`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2714,6 +3486,8 @@ Create `tests/test_settings_view.py`:
 ```python
 """settings.view: pages, edits through the session, undo, revert, hand edits. The view is a
 plain Gtk.Box: no window is created."""
+
+import os
 
 import pytest
 
@@ -2901,6 +3675,65 @@ def test_layout_warnings_are_previewed_for_connected_monitors(make):
     assert not preview.get_visible()
     view._on_change(("monitors", "HDMI-A-1", "panels", 0, "length"), 3000)
     assert preview.get_visible() and "monitors.HDMI-A-1" in preview.get_text()
+
+
+P0 = ("monitors", "HDMI-A-1", "panels", 0)
+
+
+def test_a_dock_turned_into_a_corner_widget_is_one_edit(make, corner_registry):
+    """Spec 19: the widget and the keys only the old kind takes change in ONE write (one
+    reload); the entry then shows the corner rows, and its title follows."""
+    view, path = make()
+    view._on_change((*P0, "align"), "end")
+    view._on_change((*P0, "widget"), "box")
+    assert len(view.session.history) == 2  # align, then widget + unset align together
+    text = path.read_text()
+    assert 'widget = "box"' in text and "align" not in text and "# gate config" in text
+    assert row(view, (*P0, "corner")).editor.widget.get_active_id() == "bottom-left"
+    assert not any(r.path == (*P0, "align") for r in view.rows)
+    expander = panel_editor(view).expanders[0]
+    assert expander.get_label() == "1. box: bottom-left, from bottom, 300x390"
+    assert expander.get_expanded()
+
+
+def test_a_new_corner_drops_an_edge_it_does_not_have(make, corner_registry):
+    view, path = make()
+    view._on_change((*P0, "widget"), "box")
+    view._on_change((*P0, "edge"), "left")
+    view._on_change((*P0, "corner"), "top-right")
+    assert 'corner = "top-right"' in path.read_text() and "edge = " not in path.read_text()
+    edge = row(view, (*P0, "edge"))
+    assert [r[0] for r in edge.editor.widget.get_model()] == ["top", "right"]
+    assert edge.editor.widget.get_active_id() == "top" and edge.source.get_text() == (
+        "corner default"
+    )
+
+
+def test_an_unwritable_folder_shows_in_the_banner(make):
+    if os.geteuid() == 0:
+        pytest.skip("root can write into a read-only folder")
+    view, path = make()
+    view._on_change(DEPTH, 90)
+    os.chmod(path.parent, 0o500)
+    try:
+        view.undo()
+        view.revert()
+    finally:
+        os.chmod(path.parent, 0o700)
+    assert "cannot write" in view.banner_label.get_text() and view.banner.get_visible()
+    assert "depth = 90" in path.read_text()
+
+
+def test_close_flushes_a_pending_spin_value(make, monkeypatch):
+    import settings.fields as fields
+
+    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)  # inside the 400 ms pause
+    assert "depth" not in path.read_text()
+    view.flush()
+    assert "depth = 120" in path.read_text()
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -2936,13 +3769,15 @@ from settings.fields import FieldRow
 from settings.form import MODE_HINTS, SectionSpec, config_form
 from settings.panels import PanelEditor
 from settings.session import ChangedOutside, SettingsSession, check_text
-from settings.values import field_value, layout_preview, monitor_names
+from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
-from shell.registry import requests_for, widget_names
+from shell.registry import requests_for, widget_kind, widget_names
 
 Edit = Callable[[UserDocument], Any]
-TITLE_KEYS = ("widget", "edge", "align")  # shown in a panel's expander title (panel_title)
+# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind;
+# corner: the edge choices): a change rebuilds the page and keeps that panel open
+TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")
 
 
 class SettingsView(Gtk.Box):
@@ -2950,7 +3785,9 @@ class SettingsView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         self.outputs = {o.name: o for o in outputs}
-        self.form = config_form(tuple(widget_names()))
+        names = tuple(widget_names())
+        corner = tuple(n for n in names if widget_kind(n) == "corner")
+        self.form = config_form(names, corner)
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
@@ -3139,7 +3976,12 @@ class SettingsView(Gtk.Box):
         titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
         if titled:  # the panel's expander title shows these: rebuild, keep that panel open
             self._expand[path[1]] = path[3]
-        if not self.apply(lambda d: d.set(path, value), self._row(path), structural=titled):
+        if len(path) == 5 and path[2] == "panels":  # a panel's own key: maybe a compound edit
+            _, entry = lookup(self.session.user, path[:4])
+            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], value))
+        else:
+            edit = lambda d: d.set(path, value)  # noqa: E731
+        if not self.apply(edit, self._row(path), structural=titled):
             self._expand.pop(path[1], None)
 
     def _on_reset(self, path: tuple) -> None:
@@ -3156,21 +3998,34 @@ class SettingsView(Gtk.Box):
     def _row(self, path: tuple) -> FieldRow | None:
         return next((r for r in self.rows if r.path == path), None)
 
-    def undo(self) -> None:
+    def _file_action(self, action: Callable[[], bool]) -> bool:
+        """Run Undo or Revert all: a hand edit since the last read, an unwritable folder or an
+        unreadable file shows in the banner (never an exception in a GTK callback). Returns
+        the action's result, False when it was refused."""
         try:
-            if not self.session.undo():
-                return
+            return action()
         except ChangedOutside as exc:
             self.rebuild()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
-            return
-        self.hide_banner()
-        self.rebuild()
+        except ConfigError as exc:
+            self.show_banner(f"Not saved: {exc}")
+        return False
+
+    def undo(self) -> None:
+        if self._file_action(self.session.undo):
+            self.hide_banner()
+            self.rebuild()
 
     def revert(self) -> None:
-        self.session.revert()
-        self.hide_banner()
-        self.rebuild()
+        if self._file_action(lambda: self.session.revert() or True):
+            self.hide_banner()
+            self.rebuild()
+
+    def flush(self) -> None:
+        """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
+        a font list without Enter): the window is closing."""
+        for row in list(self.rows):
+            row.flush()
 
     def _confirm_revert(self) -> None:
         dialog = Gtk.MessageDialog(
@@ -3181,7 +4036,8 @@ class SettingsView(Gtk.Box):
             text="Revert every change made in this window?",
         )
         dialog.format_secondary_text(
-            f"{self.session.path} goes back to how it was when the window opened."
+            f"{self.session.path} goes back to how it was when the window opened (or when it "
+            "was last changed by hand)."
         )
         answer = dialog.run()
         dialog.destroy()
@@ -3190,27 +4046,44 @@ class SettingsView(Gtk.Box):
 
     def file_changed(self) -> None:
         """The config file changed on disk (the app's ConfigWatcher). Our own writes leave
-        nothing to do; a hand edit is re-read and every page rebuilt."""
-        if not self.session.changed_outside():
+        nothing to do; a hand edit is re-read (the new starting point for Revert all) and
+        every page rebuilt; a file that cannot be read shows in the banner."""
+        try:
+            if not self.session.changed_outside():
+                return
+            self.session.rebase()
+        except ConfigError as exc:
+            self.show_banner(f"Cannot read the config: {exc}")
             return
-        self.session.reload()
-        self.session.history.clear()
         self.rebuild()
         if self.session.config is not None:
             self.show_banner(
                 f"{self.session.path} was changed outside this window; showing the new values",
                 Gtk.MessageType.INFO,
             )
+
+
+def _panel_edit(entry_path: tuple, ops: list[tuple[str, str, Any]]) -> Edit:
+    """One edit from settings.values.panel_ops steps: one write and one reload."""
+
+    def edit(doc: UserDocument) -> None:
+        for op, key, value in ops:
+            if op == "set":
+                doc.set((*entry_path, key), value)
+            else:
+                doc.unset((*entry_path, key))
+
+    return edit
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `scripts/py -m pytest tests/test_settings_view.py -q`
-Expected: `15 passed`.
+Expected: `19 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1325 passed`.
+Run VERIFY. Expected: `1596 passed`.
 
 ```bash
 git add settings/view.py tests/test_settings_view.py
@@ -3221,6 +4094,8 @@ git commit -m "feat(settings): settings view: pages, live apply, undo, revert, h
 
 ### Task 10: The window, its process and the CLI flags
 
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
+
 **Files:**
 - Create: `settings/window.py`, `settings/app.py`
 - Modify: `main.py` (argument parsing and the two new branches)
@@ -3229,9 +4104,9 @@ git commit -m "feat(settings): settings view: pages, live apply, undo, revert, h
 **Interfaces:**
 - Consumes: `SettingsView` (Task 9), `SettingsSession` (Task 4), `restore_backup` (Task 2), `ConfigWatcher` (`shell/config/watcher.py`), `parse_kscreen`, `read_kscreen_json`, `Output` (`shell/outputs.py`), `DEFAULT_PATH`, `USER_PATH` (`shell/config/loader.py`).
 - Produces:
-  - `settings.window.TITLE = "Edge Shell settings"`; `SettingsWindow(Gtk.ApplicationWindow)(session, outputs, application=None)` with `.view`, a `win.undo` action, `.file_changed()`
-  - `settings.app.APP_ID = "org.edgeshell.Settings"`, `TOMLKIT_HINT`, `connected_outputs() -> list[Output]` ([] when kscreen-doctor fails), `class SettingsApp(Gtk.Application)(path, default_path=DEFAULT_PATH)` with `.window`, `.failed`, `do_activate()` (builds once, then presents; Ctrl+Z accel; watches the file), `run_settings(path, default_path=DEFAULT_PATH) -> int` (2 without tomlkit or when the file cannot be read)
-  - `main.py`: `--settings` and `--restore-config` (mutually exclusive with `--list-outputs`; `--stats` with either is an error); both use `--config` or `USER_PATH`; `--settings` runs before the `ConfigStore` is built.
+  - `settings.window.TITLE = "Edge Shell settings"`; `SettingsWindow(Gtk.ApplicationWindow)(session, outputs, application=None)` with `.view`, a `win.undo` action, `.file_changed()`; `delete-event` calls `view.flush()` (pending values are applied before the window closes)
+  - `settings.app.APP_ID = "org.edgeshell.Settings"` (the prefix), `app_id(path) -> str` (`f"{APP_ID}.c{sha1(str(path.resolve()).encode()).hexdigest()[:12]}"`: one window per config file, decision 14), `TOMLKIT_HINT`, `connected_outputs() -> list[Output]` ([] when kscreen-doctor fails), `class SettingsApp(Gtk.Application)(path, default_path=DEFAULT_PATH)` (id `app_id(path)`) with `.window`, `.failed`, `do_activate()` (builds once, then presents; Ctrl+Z accel; watches the file), `run_settings(path, default_path=DEFAULT_PATH) -> int` (registers first and imports the widgets only when `not app.get_is_remote()`; 2 without tomlkit, without a session bus, or when the file cannot be read)
+  - `main.py`: `--settings` and `--restore-config` (mutually exclusive with `--list-outputs`; `--stats` with either is an error); both use `--config` or `USER_PATH`; `--settings` runs before `import widgets` and before the `ConfigStore` is built; `--restore-config` reports an `OSError` like a `ConfigError` (exit 1).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3266,6 +4141,46 @@ def test_connected_outputs_is_empty_when_kscreen_fails(monkeypatch, caplog):
     monkeypatch.setattr(app_mod, "read_kscreen_json", fail)
     assert app_mod.connected_outputs() == []
     assert "kscreen-doctor failed" in caplog.text
+
+
+def test_app_id_depends_on_the_config_path(tmp_path):
+    """A second --settings on ANOTHER file must open its own window, not raise the first one
+    (which edits a different file); the same file through a symlink is the same window."""
+    from gi.repository import Gio
+
+    a, b = tmp_path / "a.toml", tmp_path / "b.toml"
+    a.write_text("")
+    link = tmp_path / "link.toml"
+    link.symlink_to(a)
+    assert app_mod.app_id(a) != app_mod.app_id(b)
+    assert app_mod.app_id(a) == app_mod.app_id(link)
+    assert app_mod.app_id(a).startswith(app_mod.APP_ID + ".c")
+    assert Gio.Application.id_is_valid(app_mod.app_id(a))
+
+
+def test_a_second_launch_does_not_import_the_widgets(monkeypatch, tmp_path):
+    """The second instance only asks the first to come forward: no Fabric import."""
+    pytest.importorskip("tomlkit")
+
+    class Remote:
+        failed = False
+
+        def __init__(self, path, default_path):
+            self.path = path
+
+        def register(self, _cancellable):
+            return True
+
+        def get_is_remote(self):
+            return True
+
+        def run(self, argv):
+            return 0
+
+    monkeypatch.setattr(app_mod, "SettingsApp", Remote)
+    monkeypatch.delitem(sys.modules, "widgets", raising=False)
+    assert app_mod.run_settings(tmp_path / "c.toml") == 0
+    assert "widgets" not in sys.modules
 
 
 def test_without_tomlkit_the_window_explains_how_to_install_it(monkeypatch, tmp_path, capsys):
@@ -3391,6 +4306,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
         undo = Gio.SimpleAction.new("undo", None)  # Ctrl+Z (SettingsApp sets the accel)
         undo.connect("activate", lambda *_a: self.view.undo())
         self.add_action(undo)
+        # closing applies what is still pending (a spin inside its pause, a typed font list)
+        self.connect("delete-event", lambda *_a: self.view.flush() or False)
         self.view.show_all()
 
     def file_changed(self) -> None:
@@ -3400,12 +4317,13 @@ class SettingsWindow(Gtk.ApplicationWindow):
 Create `settings/app.py`:
 
 ```python
-"""The settings window's own process: a single-instance Gtk.Application (a second
-`main.py --settings` brings the open window forward), separate from the running shell, which
-only ever sees the config file change."""
+"""The settings window's own process: a single-instance Gtk.Application per config file (a
+second `main.py --settings` on the same file brings the open window forward), separate from the
+running shell, which only ever sees the config file change."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import subprocess
 import sys
@@ -3414,7 +4332,7 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 from shell.config.loader import DEFAULT_PATH
 from shell.outputs import Output, parse_kscreen, read_kscreen_json
@@ -3422,7 +4340,15 @@ from shell.outputs import Output, parse_kscreen, read_kscreen_json
 log = logging.getLogger(__name__)
 
 APP_ID = "org.edgeshell.Settings"
-TOMLKIT_HINT = "the settings window needs tomlkit: scripts/py -m pip install 'tomlkit>=0.13'"
+TOMLKIT_HINT = "the settings window needs tomlkit: scripts/py -m pip install 'tomlkit>=0.15'"
+
+
+def app_id(path: Path) -> str:
+    """One window per config file: the id carries a hash of the resolved path, so a second
+    launch on the same file (also through a symlink) raises the open window, and a launch on
+    another file (`--config /tmp/x.toml`) opens its own instead of silently showing the first."""
+    digest = hashlib.sha1(str(path.resolve()).encode(), usedforsecurity=False).hexdigest()
+    return f"{APP_ID}.c{digest[:12]}"
 
 
 def connected_outputs() -> list[Output]:
@@ -3437,7 +4363,7 @@ def connected_outputs() -> list[Output]:
 
 class SettingsApp(Gtk.Application):
     def __init__(self, path: Path, default_path: Path = DEFAULT_PATH):
-        super().__init__(application_id=APP_ID)
+        super().__init__(application_id=app_id(path))
         self.path = path
         self.default_path = default_path
         self.window = None
@@ -3465,15 +4391,22 @@ class SettingsApp(Gtk.Application):
 
 
 def run_settings(path: Path, default_path: Path = DEFAULT_PATH) -> int:
-    """Open the settings window on `path` (the shell's config file); returns the exit code."""
+    """Open the settings window on `path` (the shell's config file); returns the exit code.
+    The application registers first: a second launch on the same file only asks the first
+    one to come forward and exits, without importing the widgets (Fabric) at all."""
     try:
         import tomlkit  # noqa: F401
     except ImportError:
         print(TOMLKIT_HINT, file=sys.stderr)
         return 2
-    import widgets  # noqa: F401  (registers the built-in panels: names and defaults)
-
     app = SettingsApp(path, default_path)
+    try:
+        app.register(None)
+    except GLib.Error as exc:  # no session bus
+        print(f"cannot open the settings: {exc.message}", file=sys.stderr)
+        return 2
+    if not app.get_is_remote():
+        import widgets  # noqa: F401  (registers the built-in panels: names and defaults)
     code = app.run([sys.argv[0]])
     return 2 if app.failed else code
 ```
@@ -3526,18 +4459,19 @@ In `main.py`, replace the body of `main()` from `parser.add_argument("--list-out
 
         try:
             print(restore_backup(path))
-        except ConfigError as exc:
+        except (ConfigError, OSError) as exc:
             print(exc, file=sys.stderr)
             return 1
         return 0
 
-    import widgets  # noqa: F401  (registers the built-in panels before the config is validated)
-
     if args.settings:
-        # Before the ConfigStore: the window must open even when the file is invalid.
+        # Before the ConfigStore: the window must open even when the file is invalid. It
+        # imports the widgets itself, only when it is the first instance on this file.
         from settings.app import run_settings
 
         return run_settings(path)
+
+    import widgets  # noqa: F401  (registers the built-in panels before the config is validated)
 
     try:
         store = ConfigStore(path, required=args.config is not None)
@@ -3553,13 +4487,13 @@ In `main.py`, replace the body of `main()` from `parser.add_argument("--list-out
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `scripts/py -m pytest tests/test_settings_app.py tests/test_main_settings.py tests/test_main.py -q`
-Expected: `21 passed` (4 + 9 new, 8 existing).
+Expected: `23 passed` (6 + 9 new, 8 existing).
 
 Headless import check (creates no window): `scripts/py -c "import settings.window, settings.app; print('ok')"` prints `ok`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1338 passed`.
+Run VERIFY. Expected: `1611 passed`.
 
 ```bash
 git add settings/window.py settings/app.py main.py tests/test_settings_app.py tests/test_main_settings.py
@@ -3573,13 +4507,13 @@ git commit -m "feat(settings): settings window process, main.py --settings and -
 **Files:**
 - Modify: `shell/edge_panel.py` (`EdgePanel.__init__` signature, docstring and one attribute; `_on_press`)
 - Modify: `shell/monitors.py` (`MonitorShell.__init__`; `_new_panel`)
-- Modify: `shell/app.py` (imports, `MAIN_PATH`, `settings_command`, `_open_shell`, `open_settings`)
-- Modify: `tests/test_app_sync.py` (`FakeShell.__init__`; one new test), `tests/test_monitor_shell.py` (the `build` fixture; one new test)
+- Modify: `shell/app.py` (imports, `MAIN_PATH`, `settings_command`, `_open_shell`, `open_settings`, `_settings_closed`)
+- Modify: `tests/test_app_sync.py` (`FakeShell.__init__`; one new test), `tests/test_monitor_shell.py` (the `build` fixture; two new tests, one with a corner panel)
 - Test: `tests/test_open_settings.py` (new)
 
 **Interfaces:**
-- Consumes: `main.py --settings --config PATH` (Task 10).
-- Produces: `EdgePanel(..., on_settings: Callable[[], None] | None = None)` (button 3 on the handle calls it and stops the event; button 1 unchanged); `MonitorShell(..., on_settings=None)` passes it to every panel; `shell.app.MAIN_PATH`, `shell.app.settings_command(config_path: Path | None) -> list[str]`, `EdgeShellApp.open_settings()` (spawns in a new session; an `OSError` is logged and notified as "Settings not opened", never raised).
+- Consumes: `main.py --settings --config PATH` (Task 10); from Plan 5: `CornerPanel(EdgePanel)` (inherits `_on_press`), `MonitorShell._new_panel` building corner panels through the same call, the `corner_registry` fixture.
+- Produces: `EdgePanel(..., on_settings: Callable[[], None] | None = None)` (button 3 on the handle calls it and stops the event; button 1 unchanged; corner panels inherit it); `MonitorShell(..., on_settings=None)` passes it to every panel, edge and corner; `shell.app.MAIN_PATH`, `shell.app.settings_command(config_path: Path | None) -> list[str]`, `EdgeShellApp.open_settings()` (spawns in a new session and adds a `GLib.child_watch_add` that reaps the child, `_settings_closed` setting the `Popen`'s `returncode`; an `OSError` is logged and notified as "Settings not opened", never raised).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3650,14 +4584,32 @@ def test_settings_command_uses_this_interpreter_and_the_config(tmp_path):
     assert app_mod.settings_command(None)[-1] == "--settings"
 
 
-def test_open_settings_starts_its_own_process(monkeypatch, make_config, tmp_path):
-    spawned = []
-    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda cmd, **kw: spawned.append((cmd, kw)))
+def test_a_corner_panel_handle_opens_the_settings_too():
+    """Spec 19: CornerPanel inherits EdgePanel's press handler (the right-click included)."""
+    from shell.corner_panel import CornerPanel
+
+    assert CornerPanel._on_press is ep.EdgePanel._on_press
+
+
+def test_open_settings_starts_its_own_process_and_reaps_it(monkeypatch, make_config, tmp_path):
+    spawned, watched = [], []
+    proc = SimpleNamespace(pid=4242, returncode=None)
+
+    def popen(cmd, **kw):
+        spawned.append((cmd, kw))
+        return proc
+
+    monkeypatch.setattr(app_mod.subprocess, "Popen", popen)
+    monkeypatch.setattr(app_mod.GLib, "child_watch_add", lambda *a: watched.append(a) or 1)
     store = SimpleNamespace(config=make_config(), path=tmp_path / "c.toml")
     app_mod.EdgeShellApp(store).open_settings()
     ((cmd, kw),) = spawned
     assert cmd[-3:] == ["--settings", "--config", str(tmp_path / "c.toml")]
     assert kw["start_new_session"] is True  # Ctrl+C on the shell leaves the window open
+    ((_priority, pid, callback, data),) = watched
+    assert pid == 4242 and data is proc
+    callback(4242, 0, proc)  # GLib reaped it: Popen must not wait for it again
+    assert proc.returncode == 0
 
 
 def test_open_settings_failure_is_notified_not_raised(monkeypatch, make_config, tmp_path):
@@ -3737,9 +4689,7 @@ In `tests/test_monitor_shell.py`, in the `build` fixture replace
 with
 
 ```python
-    def _build(
-        monitors, theme=None, monitor=None, on_layout=None, on_error=None, on_settings=None
-    ):
+    def _build(monitors, theme=None, monitor=None, on_layout=None, on_error=None, on_settings=None):
         tracked = []
         cfg = make_config(monitors=monitors, theme=theme)
         shell = mon_mod.MonitorShell(
@@ -3764,6 +4714,14 @@ def test_every_panel_gets_the_settings_opener(build):
     assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
     shell, _, _ = build(edge({"widget": "dock"}))
     assert shell.panels[0].kwargs["on_settings"] is None
+
+
+def test_a_corner_panel_gets_the_settings_opener(build, corner_registry):
+    def opener():
+        return None
+
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock"}), on_settings=opener)
+    assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -3865,24 +4823,33 @@ and add before `def _notify`:
     def open_settings(self) -> None:
         """Start the settings window in its own process on this shell's config file (a
         right-click on a panel handle). A window that is already open is brought forward
-        (single instance). Never raises into GTK."""
+        (single instance per config file). Never raises into GTK. The child is reaped by a
+        GLib child watch when it exits (no zombie for the shell's lifetime)."""
         command = settings_command(self.store.path)
         log.info("opening the settings window: %s", " ".join(command))
         try:
-            subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
+            proc = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
         except OSError as exc:
             log.error("could not open the settings window: %s", exc)
             self._notify("Settings not opened", str(exc))
+            return
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, proc.pid, self._settings_closed, proc)
+
+    @staticmethod
+    def _settings_closed(_pid: int, status: int, proc: subprocess.Popen) -> None:
+        """GLib reaped the settings process; tell its Popen so it never waits for it again."""
+        proc.returncode = status
+        log.debug("the settings window closed (status %d)", status)
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `scripts/py -m pytest tests/test_open_settings.py tests/test_app_sync.py tests/test_monitor_shell.py tests/test_edge_panel_drag.py tests/test_edge_panel_handle.py -q`
-Expected: all pass (6 new in `test_open_settings.py`, 1 new in each of the other two).
+Expected: all pass (7 new in `test_open_settings.py`, 1 new in `test_app_sync.py`, 2 new in `test_monitor_shell.py`).
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1346 passed`.
+Run VERIFY. Expected: `1621 passed`.
 
 ```bash
 git add shell/edge_panel.py shell/monitors.py shell/app.py tests/test_open_settings.py tests/test_app_sync.py tests/test_monitor_shell.py
@@ -3891,7 +4858,95 @@ git commit -m "feat(shell): a right-click on a panel handle opens the settings w
 
 ---
 
-### Task 12: Gate example, README and spec
+### Task 12: Switch off Fabric's unauthenticated D-Bus client
+
+*Default pending Phil (decision 15).* Its own commit, so it can be reverted alone.
+
+**Files:**
+- Modify: `shell/app.py` (`EdgeShellApp.run`: the `Application(...)` line, the only construction site; checked with `grep -n "Application(" shell/app.py`)
+- Modify: `tests/test_app_sync.py` (one new test)
+
+**Interfaces:**
+- Consumes: `fabric.Application(name, *windows, open_client=True, ...)` (`fabric/core/application.py`: with `open_client` it builds a `DBusClient` in `do_activate`, exporting `org.Fabric.fabric.<name>` with `Execute` and `Evaluate`, which `exec` / `eval` any string from any session-bus client, with no caller check). Nothing in this repository calls them (`grep -rn -e Execute -e Evaluate -e fabric-cli --include='*.py' .` finds nothing).
+- Produces: `EdgeShellApp.run` builds `Application(APP_NAME, *self._early, open_client=False)`. The bus name stays owned (the `Gtk.Application` registers it), so `_already_running()` (`Application.name_running`) still refuses a second shell.
+
+- [ ] **Step 1: Write the failing test**
+
+In `tests/test_app_sync.py`, add after `test_run_refuses_a_second_instance_before_creating_windows` (the existing fake `Application` there already takes `*a, **k`):
+
+```python
+def test_the_fabric_dbus_client_is_off(env, monkeypatch):
+    """Fabric's org.Fabric.fabric.edge-shell Execute / Evaluate would run any Python sent by
+    any session-bus client inside the shell; nothing in Edge Shell uses it."""
+    app, _ = env
+    made = []
+
+    class FakeApplication:
+        def __init__(self, *args, **kwargs):
+            made.append((args, kwargs))
+
+        def set_stylesheet_from_string(self, *_a, **_k):
+            pass
+
+        def hold(self):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(app_mod, "_already_running", lambda: False)
+    monkeypatch.setattr(app_mod, "Application", FakeApplication)
+    monkeypatch.setattr(app, "start_watching", lambda: None)
+    monkeypatch.setattr(app, "watch_displays", lambda: None)
+    monkeypatch.setattr(app_mod.signal, "signal", lambda *_a: None)
+    assert app.run() == 0
+    ((args, kwargs),) = made
+    assert args[0] == app_mod.APP_NAME and kwargs == {"open_client": False}
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `scripts/py -m pytest tests/test_app_sync.py -q -k dbus`
+Expected: FAIL: `assert {} == {'open_client': False}`.
+
+- [ ] **Step 3: Implement**
+
+In `shell/app.py`, `EdgeShellApp.run`, replace
+
+```python
+        self.app = Application(APP_NAME, *self._early)
+```
+
+with
+
+```python
+        # open_client=False: no Fabric D-Bus client (org.Fabric.fabric.edge-shell's Execute /
+        # Evaluate run any Python sent by any session-bus client). The bus name itself stays
+        # owned (Gtk.Application), so _already_running still sees a running shell.
+        self.app = Application(APP_NAME, *self._early, open_client=False)
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `scripts/py -m pytest tests/test_app_sync.py -q`
+Expected: all pass.
+
+- [ ] **Step 5: VERIFY and commit**
+
+Run VERIFY. Expected: `1622 passed`.
+
+```bash
+git add shell/app.py tests/test_app_sync.py
+git commit -m "fix(shell): switch off Fabric's unauthenticated D-Bus client" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+Gate B item 6 checks the shell still starts and a second `main.py` still says it is already running (no live probe is needed for the client itself).
+
+---
+
+### Task 13: Gate example, README and spec
+
+Before this task: tomlkit must be installed (Prerequisites: Phil installs it himself). Check: `scripts/py -c 'import tomlkit; print(tomlkit.__version__)'`. If it fails, STOP and report to the controller: do not install it yourself, and do not go on (this task's tests would skip, and a skipped test must not read as green).
 
 **Files:**
 - Create: `examples/settings-test.toml`, `tests/test_settings_example.py`
@@ -3986,7 +5041,7 @@ In "Requirements", replace the Python line with:
 
 ```markdown
 - Python 3.12+ with Fabric (from git), PyGObject **below 3.52**, pycairo, Pydantic 2, tomlkit
-  (the settings window only: `scripts/py -m pip install 'tomlkit>=0.13'`)
+  (the settings window only: `scripts/py -m pip install 'tomlkit>=0.15'`)
 ```
 
 In "Run", add after the `--stats` line:
@@ -4004,33 +5059,50 @@ Add a new section after "### Handles and interactions" (before "## Develop"):
 
 `scripts/py main.py --settings` opens a normal window that edits your config file (the
 `--config` file if given, else `~/.config/edge-shell/config.toml`; it is created on the first
-change). A right-click on any panel handle opens it too, on the running shell's config file.
-Only one settings window runs at a time; opening it again brings it forward.
+change). A right-click on any panel handle (edge or corner panel) opens it too, on the
+running shell's config file. There is one settings window per config file: opening it again on
+the same file brings it forward; `--config` with another file opens a second window for that
+file.
 
 - **Theme** page: every theme key, the border, the shadow, the handle style and the layout gap.
   One page per monitor (connected monitors and the ones in your config): the shell mode
   (`edge`, `plasma`, `both`, `none`), the panels (add, remove, move up or down; every panel key
   including the handle and interactions), a preview of the layout warnings the shell would
   give, and per-monitor theme and layout overrides.
+- Corner panels (for example `widget_panel`) are in the same panel list, labelled
+  "(corner panel)" in the add list. Their rows are corner, edge (only the corner's two edges),
+  width and height instead of align, offset, length and depth. Switching a panel's widget
+  between an edge and a corner widget removes the keys the new kind does not take in the same
+  change; moving a corner panel to a corner without its edge removes that edge.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
-- Changes apply at once (spin buttons 0.4 s after the last change); the running shell reloads
-  them like a hand edit. A change the shell would reject is not saved: the reason (with the
-  key path) shows under the row.
+- Changes apply at once (spin buttons 0.4 s after the last change; closing the window applies
+  a pending one); the running shell reloads them like a hand edit. A change the shell would
+  reject is not saved: the reason (with the key path) shows under the row. The mouse wheel
+  scrolls the page and never changes a value, so scrolling past a monitor's mode cannot switch
+  it.
 - **Undo** (Ctrl+Z) steps back one change; **Revert all** puts the file back as it was when
-  the window opened. Before its first change the window copies the file to `config.toml.bak`;
-  `scripts/py main.py --restore-config` puts that copy back (the replaced file is kept as
-  `config.toml.before-restore`).
+  the window opened, or after your last hand edit. Before its first change the window copies
+  the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
+  that copy back (the replaced file is kept as `config.toml.before-restore`, or `.2`, `.3`, …
+  after an earlier restore).
 - Your comments and formatting are kept: the window edits the file in place (tomlkit) and
-  refuses a change it could not make without touching other keys. If you edit the file by hand
-  while the window is open, it re-reads it and tells you; it never writes over a hand edit.
-  An invalid file opens read-only with the error until it is fixed.
+  refuses a change it could not make without touching other keys or without losing a comment
+  that sits above a table (`[monitors.DP-1]` and the like): edit the file by hand then. Such a
+  comment can still move: a key or panel added at the end of the table before it lands between
+  the comment and its header. Adding a panel to an inline `panels = [{ ... }]` list is refused
+  (add it by hand). If you edit the file by hand while the window is open, it re-reads it and
+  tells you; it never writes over a hand edit, and Revert all keeps it. An invalid file opens
+  read-only with the error until it is fixed; a folder it cannot write to is reported in the
+  window.
+- A symlinked config (for example from a dotfiles repository) keeps its link; the shell also
+  watches the file it points to, so window changes and edits of that file reload the shell.
 
 **Keyboard shortcut (KDE):** System Settings > Keyboard > Shortcuts > Add New > Command or
 Script, command `/home/phil/Projects/pyDev/projects/myShell/scripts/py
-/home/phil/Projects/pyDev/projects/myShell/main.py --settings`, then assign a key (for example
-Meta+Alt+E).
+/home/phil/Projects/pyDev/projects/myShell/main.py --settings`, then assign a key
+(suggested: Meta+Alt+E; any free key works).
 
 `plasma` and `none` both leave a monitor to Plasma for now: hiding or showing Plasma's own panel
 from the window is planned (it needs the Plasma integration, spec section 7).
@@ -4042,7 +5114,11 @@ In "Known limitations / planned", replace `- A settings window is not built yet.
 - Settings window: no Plasma panel toggle yet, no tray icon, no drag-and-drop layout; `pos`
   (deprecated) is shown and can be removed, not edited; a panel with click, hover and drag all
   off takes no input while collapsed, so its handle cannot open the window (use another
-  handle, the shortcut or `--settings`); KWin chooses the window's monitor.
+  handle, the shortcut or `--settings`); KWin chooses the window's monitor; a comment above a
+  table can move when a key or panel is added just before it; inline `panels = [...]` lists
+  are edited by hand.
+- The shell no longer exposes Fabric's D-Bus `Execute` / `Evaluate` methods (`fabric-cli`
+  cannot run code in it).
 ```
 
 - [ ] **Step 4: Spec**
@@ -4056,7 +5132,7 @@ In section 8's tree, after the `├── widgets/` line add:
 In section 13, after its paragraph, add:
 
 ```markdown
-**Implemented (2026-10-14, plan `docs/superpowers/plans/2026-10-14-settings-window.md`):** a separate process (`main.py --settings`, single-instance `Gtk.Application` `org.edgeshell.Settings`), opened from the CLI, a right-click on any panel handle (on the shell's config file) or a KDE custom shortcut; the config file is its only link to the shell. The form is generated from `Config.model_json_schema()` and the widget registry (`settings/form.py`; per-monitor overrides use the base models' bounds, which `ThemeOverride`/`LayoutOverride` lose). Edits are made in place with tomlkit (comments kept), verified by re-parsing, checked by the shell's own loader and `validate_widgets`, and written atomically (symlinks kept); never an invalid file. Live apply (spin buttons debounced 400 ms), Undo/Ctrl+Z, Revert all, per-field reset; `config.toml.bak` per session and `main.py --restore-config`; hand edits while the window is open are re-read and never overwritten; an invalid file opens read-only. Deferred: hiding or showing Plasma's panel (needs section 7 and spike 2), tray icon, drag-and-drop layout, HiDPI. Gate results: see the plan's Tasks 13-14 (recorded below after the gates).
+**Implemented (2026-10-14, plan `docs/superpowers/plans/2026-10-14-settings-window.md`):** a separate process (`main.py --settings`, a `Gtk.Application` `org.edgeshell.Settings.c<hash of the config path>`: one instance per config file), opened from the CLI, a right-click on any panel handle, edge or corner (on the shell's config file), or a KDE custom shortcut; the config file is its only link to the shell. Corner panels (section 19) share the panel list, with rows by the widget's kind (`registry.widget_kind`, the models' `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`). The form is generated from `Config.model_json_schema()` and the widget registry (`settings/form.py`; per-monitor overrides use the base models' bounds, which `ThemeOverride`/`LayoutOverride` lose). Edits are made in place with tomlkit (comments kept; an edit that would lose a comment above a table is refused), verified by re-parsing, checked by the shell's own loader and `validate_widgets`, and written atomically (symlinks kept; the shell's `ConfigWatcher` also watches a symlinked config's target); never an invalid file. Live apply (spin buttons debounced 400 ms; the mouse wheel never edits), Undo/Ctrl+Z, Revert all, per-field reset; `config.toml.bak` per session and `main.py --restore-config`; hand edits while the window is open are re-read, never overwritten, and become Revert all's starting point; an invalid file opens read-only; file-system errors are shown, not raised. The shell's Fabric D-Bus client (`Execute`/`Evaluate`) is switched off. Deferred: hiding or showing Plasma's panel (needs section 7 and spike 2), tray icon, drag-and-drop layout, HiDPI. Gate results: see the plan's Tasks 14-15 (recorded below after the gates).
 ```
 
 In section 14, replace the second bullet with:
@@ -4067,7 +5143,7 @@ In section 14, replace the second bullet with:
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1347 passed`.
+Run VERIFY. Expected: `1623 passed`.
 
 ```bash
 git add examples/settings-test.toml tests/test_settings_example.py README.md docs/superpowers/specs/2026-10-11-edge-shell-design.md
@@ -4076,7 +5152,7 @@ git commit -m "docs(settings): gate example, README section, spec 13 as implemen
 
 ---
 
-### Task 13: Gate A (Phil, live on HDMI-A-1): the window and live reload
+### Task 14: Gate A (Phil, live on HDMI-A-1): the window and live reload
 
 No code. The controller prepares the commands; **Phil runs them** (subagents never launch the shell or the window). DP-1 is never changed: its page shows `plasma`, leave it.
 
@@ -4092,23 +5168,24 @@ Keep terminal 1 visible: each change should print `config reloaded: N change(s):
 
 **Checklist** (Phil answers each with pass / what was seen):
 
-1. The window opens as a normal window titled "Edge Shell settings" (title bar, movable, in the task switcher), not as part of the frame. Pages in the sidebar: Theme, HDMI-A-1, DP-1. The top bar shows Undo (greyed), Revert all and the file path. *On failure:* note what appeared (screenshot with `spectacle`); if it is missing from the task switcher or looks like a panel, stop: decision 3 is wrong.
+1. The window opens as a normal window titled "Edge Shell settings" (title bar, movable, in the task switcher), not as part of the frame. Pages in the sidebar: Theme, HDMI-A-1, DP-1. The top bar shows Undo (greyed), Revert all and the file path. Then open the DP-1 page, put the pointer over its **shell** mode combo and turn the mouse wheel a few notches both ways: the page scrolls (if it can), the combo still shows `plasma`, terminal 1 prints no reload and DP-1 keeps its Plasma panel (decision 13). Do the same over a spin button (Theme page, **thickness**): it stays 10. *On failure:* note what appeared (screenshot with `spectacle`); if it is missing from the task switcher or looks like a panel, stop: decision 3 is wrong. If the DP-1 mode changed, switch it back to `plasma` at once with Ctrl+Z and stop: decision 13 failed.
 2. Theme page: the accent row shows the mint colour, "default" sources everywhere except accent ("your config"). *On failure:* note the row and its text.
 3. Change **frame** with its colour button to a clearly different colour (for example a dark red): within about 1 s the frame and every panel body on HDMI-A-1 take it; terminal 1 shows `restyle`; DP-1 is unchanged. Then change **accent** to any other colour (nothing visible uses it by default) and run `grep -n accent /tmp/edge-settings.toml`: the accent line still ends with `# mint: Gate A item 3 changes it; this comment must survive`. *On failure:* copy the log line and the grep output.
 4. Border: switch **enabled** on, set **width** with the spin arrows from 2 to 6 by clicking quickly: the border appears and grows; terminal 1 shows one or two `restyle` reloads, not one per click. Then **thickness** 10 → 14 with the arrows: one `rebuild-monitor` after you stop; press **Ctrl+Z** in the window: thickness is back to 10 (another reload). *On failure:* count the reload lines; note whether Ctrl+Z did nothing.
 5. HDMI-A-1 page, panel 1 (dock): open it, set **align** `end`, **offset** 40: the dock moves to the bottom right (`panel-rebuild`); set **handle > shape** `chevron`: the handle becomes a chevron with no `building panel` line in the `-v` log (`panel-handle`); set **interaction > hover** off: hovering the collapsed strip no longer peeks. *On failure:* note the kind printed and what moved.
 6. **Add panel** with `clock`: a second clock appears (top centre, next to the first; `panel-add`), its entry "4. clock: top, center" opens in the window. Move it up twice (it becomes "2. clock …", right after the dock; the two clocks may swap places on screen, since equal orders keep the config order), then remove it: the shell follows each step; no error banner. *On failure:* note the step and the banner text.
 7. Dock **length**: `fill` (spans the bottom edge between its neighbours), `percent` 50 (half the free span), back to `px` 560. *On failure:* note the mode and what the dock did.
-8. Dock length `px` 3000: the window shows a warning under the panel list ("... shrunk ..."), and the shell sends a "Panels adjusted" notification. Set it back to 560 (or Ctrl+Z). *On failure:* note which of the two did not happen.
+8. Dock length `px` 3000: the window shows a warning under the panel list ("... shrunk ..."), and the shell sends a "Panels adjusted" notification. Set it back to 560 (or Ctrl+Z). Corner warnings: **Add panel** `widget_panel (corner panel)` twice: the preview shows "… the bottom-left corner already holds monitors.HDMI-A-1.panels.3 (widget_panel); not shown" and the shell notifies the same; remove the second one, set the first one's **width** to 2000: the preview shows "width 2000 px does not fit the bottom edge; shrunk to …". Remove it (or Ctrl+Z three times). *On failure:* note which message is missing, in the window or in the notification.
 9. HDMI-A-1 **shell** mode `plasma`: the frame and panels on HDMI-A-1 disappear (`rebuild-monitor`), DP-1 is untouched; back to `edge`: they return. *On failure:* stop and switch it back by Ctrl+Z; note the log.
 10. Dock **min_length** 600, then **max_length** 300: the second change is refused, a red "Not saved: … min_length must not be larger than max_length" appears under max_length, `/tmp/edge-settings.toml` has no `max_length`, terminal 1 prints nothing new. Reset min_length with its reset button. *On failure:* copy the message or the file.
 11. Theme accent **reset** button: the accent returns to the default `#8fd3b6`, the row says "default", and the `accent` line is gone from the file (`grep accent /tmp/edge-settings.toml` prints nothing). *On failure:* note the row and the file.
-12. **Revert all** → OK in the dialog: the shell returns to the start state; `cmp /tmp/edge-settings.toml examples/settings-test.toml` prints nothing. *On failure:* run `diff` instead of `cmp` and copy it.
-13. `cat /tmp/edge-settings.toml.bak` equals the example (the backup made before the first change). Close the window and stop the shell (Ctrl+C in terminal 1). *On failure:* copy the backup's first lines.
+12. **A corner panel in the list:** **Add panel** `widget_panel (corner panel)`: a 300 x 390 block appears in the bottom-left corner (`panel-add`), and the dock and the system bar keep clear of it. Its entry "4. widget_panel: bottom-left, from bottom, 300x390" opens with the rows widget, corner, edge, width, height, state, handle and interaction (no align, offset, length or depth), and its **edge** offers only `bottom` and `left`. Set **corner** `top-right`: it moves there (`panel-rebuild`), the title follows, the edge row now offers `top` and `right`. Set its **widget** to `dock`: one reload (`panel-rebuild`), the entry shows the edge-panel rows, and `grep -n -A3 'widget = "dock"' /tmp/edge-settings.toml` shows no `corner`. Remove the entry. *On failure:* note the step, the rows shown and the log line.
+13. **Revert all** → OK in the dialog: the shell returns to the start state; `cmp /tmp/edge-settings.toml examples/settings-test.toml` prints nothing. *On failure:* run `diff` instead of `cmp` and copy it.
+14. `cat /tmp/edge-settings.toml.bak` equals the example (the backup made before the first change). Close the window and stop the shell (Ctrl+C in terminal 1). *On failure:* copy the backup's first lines.
 
 ---
 
-### Task 14: Gate B (Phil, live on HDMI-A-1): safety and entry points; record the results
+### Task 15: Gate B (Phil, live on HDMI-A-1): safety and entry points; record the results
 
 **Prepare (Phil):** as in Gate A (fresh copy: `cp examples/settings-test.toml /tmp/edge-settings.toml`), shell in terminal 1 and the window in terminal 2.
 
@@ -4116,13 +5193,15 @@ Keep terminal 1 visible: each change should print `config reloaded: N change(s):
 2. Then change the dock **depth** in the window to 80: written on top of the hand edit (`grep -E 'accent|depth' /tmp/edge-settings.toml` shows both). *On failure:* copy the grep.
 3. **Invalid hand edit:** add `thickness = 1` under `[theme]` and save: the shell notifies "Config not applied" and keeps running; the window shows a red banner naming `theme.thickness` and its pages are greyed out. Fix it (remove the line, save): the window becomes editable again. *On failure:* note which side did not react.
 4. **Restore:** make two more changes in the window (any), close it, run `scripts/py main.py --restore-config --config /tmp/edge-settings.toml`: it prints `restored … from ….bak (the replaced file is ….before-restore)`; the file is back to how it was before the window's first change of this session (item 2): accent `#d3a68f` from the hand edit, no dock `depth`; the shell reloads to that. *On failure:* copy the output and `cat /tmp/edge-settings.toml`.
-5. **Single instance:** with the window open, run `scripts/py main.py --settings --config /tmp/edge-settings.toml` again: no second window; the open one comes forward (or its taskbar entry flashes, if KWin's focus-stealing prevention holds it back); the command exits 0 (`echo $?`). *On failure:* note what opened.
-6. **Right-click a handle:** close the window. Right-click the dock's handle: the settings window opens on `/tmp/edge-settings.toml` (path in its top bar) and terminal 1 logs `opening the settings window: …`. Left-click still toggles the dock, dragging still works. *On failure:* copy the log line; note whether the window opened behind other windows.
+5. **One window per file:** with the window open, run `scripts/py main.py --settings --config /tmp/edge-settings.toml` again: no second window; the open one comes forward (or its taskbar entry flashes, if KWin's focus-stealing prevention holds it back); the command returns at once and exits 0 (`echo $?`). Then `cp /tmp/edge-settings.toml /tmp/edge-other.toml` and run `scripts/py main.py --settings --config /tmp/edge-other.toml`: a SECOND window opens, its top bar shows `/tmp/edge-other.toml`. Close it. *On failure:* note what opened and which path each window shows.
+6. **Right-click a handle:** close the window. Right-click the dock's handle: the settings window opens on `/tmp/edge-settings.toml` (path in its top bar) and terminal 1 logs `opening the settings window: …`. Left-click still toggles the dock, dragging still works. While the shell runs, `scripts/py main.py --config /tmp/edge-settings.toml` in a third terminal still prints "edge-shell is already running" (Task 12 kept the bus name). *On failure:* copy the log line; note whether the window opened behind other windows.
 7. **Without the shell:** close the window, stop the shell (Ctrl+C). Run `scripts/py main.py --settings --config /tmp/edge-settings.toml`: it opens; change the clock's **state** to `collapsed`, close it. Start the shell again: the clock starts collapsed. *On failure:* note the step.
 8. **KDE shortcut (optional):** add the shortcut from the README with `--config /tmp/edge-settings.toml` appended, press it: the window opens. Remove the shortcut afterwards if it was only for the gate. *On failure:* note what happened (information only; not blocking).
 9. **A panel over the window:** move the window over the bottom of HDMI-A-1, then set the dock **depth** to 900 (extended): the dock covers part of the window. With the window still focused press **Ctrl+Z**: the dock shrinks back. *On failure:* note whether the keyboard still reached the window (then decision 6 needs the countdown).
+10. **Right-click a corner panel's handle:** in the window, **Add panel** `widget_panel (corner panel)`, close the window, then right-click the corner panel's handle (on its top side, about x 155 on HDMI-A-1): the settings window opens on `/tmp/edge-settings.toml` and terminal 1 logs `opening the settings window: …`. A left-click on that handle still toggles the corner panel. Remove the corner panel in the window afterwards. *On failure:* copy the log line; note whether the click reached the corner panel at all.
+11. **A symlinked config reloads:** close the window and stop the shell. `mkdir -p /tmp/edge-dotfiles && mv /tmp/edge-settings.toml /tmp/edge-dotfiles/config.toml && ln -s /tmp/edge-dotfiles/config.toml /tmp/edge-settings.toml`. Start the shell and the window on `/tmp/edge-settings.toml` as before. Change the theme **frame** colour in the window: the shell reloads (`restyle`) and `ls -l /tmp/edge-settings.toml` still shows the link. Then edit `/tmp/edge-dotfiles/config.toml` (the target) in a text editor and save a change of `accent`: the shell reloads again and the window shows the "changed outside" banner. Clean up: stop both, `rm /tmp/edge-settings.toml` (the link). *On failure:* note which of the two writes the shell missed.
 
-**Record the results (controller, after Phil's answers):** in the spec's section 13 replace "Gate results: see the plan's Tasks 13-14 (recorded below after the gates)." with a short "Results." paragraph (each gate item: passed, or what was seen and what was changed), and adjust the README if a gate changed behaviour. VERIFY (expected `1347 passed`), then:
+**Record the results (controller, after Phil's answers):** in the spec's section 13 replace "Gate results: see the plan's Tasks 14-15 (recorded below after the gates)." with a short "Results." paragraph (each gate item: passed, or what was seen and what was changed), and adjust the README if a gate changed behaviour. VERIFY (expected `1623 passed`), then:
 
 ```bash
 git add docs/superpowers/specs/2026-10-11-edge-shell-design.md README.md
@@ -4133,15 +5212,19 @@ git commit -m "docs: record the settings window gate results" -m "Co-Authored-By
 
 ## Self-review
 
-- **Spec coverage.** Spec 13: normal window (Task 10, decision 3), opened from a key binding (README + Gate B item 8), frame handle (Task 11), tray icon (deferred, decision 1); colours, monitor modes, panel positions, widget list (Tasks 5-9); hiding or showing the Plasma shell (deferred with its cost, decision 1); writes the user file only (Tasks 2-4, Global Constraints); form from the JSON schema and the registry (Task 5, Task 8's widget list). Spec 6: validation with key paths (Task 4, shown in Task 9), invalid config never replaces a working one (Task 4: never written; the shell's own rule still holds for hand edits). Spec 16: slot, order and gap exposed and the overlap warning shown (Tasks 6 and 9: `layout_preview`). Spec 14: forms only (Task 12).
+- **Spec coverage.** Spec 13: normal window (Task 10, decision 3), opened from a key binding (README + Gate B item 8), frame handle, edge or corner (Task 11), tray icon (deferred, decision 1); colours, monitor modes, panel positions, widget list (Tasks 5-9); hiding or showing the Plasma shell (deferred with its cost, decision 1); writes the user file only (Tasks 2-4, Global Constraints); form from the JSON schema and the registry (Task 5, Task 8's widget list). Spec 6: validation with key paths (Task 4, shown in Task 9), invalid config never replaces a working one (Task 4: never written; the shell's own rule still holds for hand edits). Spec 16: slot, order and gap exposed and the overlap warning shown (Tasks 6 and 9: `layout_preview`). Spec 19 (Plan 5): corner panels in the panel list with their own rows, titles and warnings (Tasks 5, 6, 8, 9; decisions 11-12). Spec 14: forms only (Task 13).
 - **Placeholders.** None: every code step carries the full file or the exact replacement; every test is written out.
-- **Type consistency.** `UserDocument` methods (Task 3) are what `SettingsSession.apply` edits receive (Task 4) and what `PanelEditor` and `SettingsView` build (Tasks 8-9); `on_edit(edit, open_index)` matches between Tasks 8 and 9; `FieldValue` (Task 6) is what `FieldRow.show_value` takes (Task 7); `settings_command` / `open_settings` (Task 11) call `--settings --config` from Task 10; `SettingsWindow.file_changed` (Task 10) forwards to `SettingsView.file_changed` (Task 9).
-- **Prototype.** Every module and test in Tasks 1-12 was run in a scratch copy of the worktree (with tomlkit 0.15.1 from the local uv cache on the path): `1347 passed`, ruff clean; with tomlkit hidden: `1273 passed, 6 skipped`. The GTK tests built widgets only.
+- **Type consistency.** `UserDocument` methods (Task 3) are what `SettingsSession.apply` edits receive (Task 4) and what `PanelEditor` and `SettingsView` build (Tasks 8-9, `_panel_edit` from `panel_ops` steps); `on_edit(edit, open_index)` matches between Tasks 8 and 9; `FieldValue` (Task 6, with the uncompared `default`) is what `FieldRow.show_value` takes (Task 7); `ConfigForm.panel_for(kind, corner)` (Task 5) is what `panel_section` calls with `registry.widget_kind` (Task 8); `FieldSpec.labels` (Task 5) feed `ChoiceEditor` (Task 7) and the add-panel combo (Task 8); `wheel_scrolls_the_page` (Task 7) is used again in Task 8; `SettingsSession.rebase` (Task 4) is what `SettingsView.file_changed` calls (Task 9); `SettingsView.flush` (Task 9) is what `SettingsWindow`'s `delete-event` calls (Task 10); `settings_command` / `open_settings` (Task 11) call `--settings --config` from Task 10; `app_id` (Task 10) hashes the same resolved path `write_atomic` writes.
+- **Plan 5's contract only.** `registry.widget_kind`, `registry.defaults`, `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split("-")`, `default_edge`, `corner_has_edge`, `CornerRequest`, `CornerDefaults`, `CornerPanel` and the `corner_registry` fixture; nothing reads `registry._DEFAULTS`. Plan 5's 10 settings-plan changes are all here: two panel sections through `section_for` with skip sets (Task 5); the `corner` enum and `width` / `height` spin buttons, 60-4000 (Task 5, from the schema); the corner's two edges only (Tasks 5, 8); the `CornerDefaults` branch (Task 6); corner titles (Task 8); a widget-kind switch as one edit (Tasks 6, 9); a corner change unsetting a foreign edge (Tasks 6, 9); the widget combo grouped by kind (Tasks 5, 8); corner warnings in the preview (Task 6, Gate A item 8); the right-click on corner panels (Task 11, Gate B item 10).
+- **Review corrections applied** (independent review of the first draft): C1 the mouse wheel never edits (Task 7, decision 13, Gate A item 1); C2 corner panel readiness (decisions 11-12, Tasks 5, 6, 8, 9, 11; `test_every_panel_form_field_has_a_value`; `HINTS` by (model, key)); I1 the watcher follows a symlinked config (Task 2, decision 6, Gate B item 11); I2 file-system errors are messages (Tasks 4 and 9); I3 Revert all keeps a hand edit (`rebase`, Task 4); I4 one window per config file (Task 10, Gate B item 5); I5 the comment census plus honest wording for comments that move (Task 3, decision 2, README); I6 tomlkit is Phil's own install, `>=0.15`, and every tomlkit task checks it first; the D-Bus client off (Task 12); the minor ones: placement source labels, flush on close, no 60 px length, `.bak` mode, numbered `.before-restore`, the reaped child, register before importing the widgets, readable labels, inline arrays refused.
+- **Prototype.** Plan 5's code was taken from its prototype tree (the corner plan at `cd8a6d1`, all 13 tasks applied: `1424 passed`), standing in for the merged `main`. Every module and test of this plan's Tasks 1-13 was then extracted from this plan text into a fresh copy of that tree and run task by task, with tomlkit 0.15.1 from the local uv cache on the path and again without it: every expected total in the File Structure table was reproduced (`1623 passed` at the end; `1534 passed, 7 skipped` without tomlkit), `ruff check` clean after every task and `ruff format --check` clean apart from blank lines around inserted tests (VERIFY's `ruff format` fixes those). The symlink test was also run against the old watcher: both cases fail with `assert []`, as Task 2 Step 2 says. The GTK tests built widgets only.
 
 ## Open questions for Phil
 
-1. **tomlkit:** OK to add the dependency and install it in the shared venv (`scripts/py -m pip install 'tomlkit>=0.13'`)? (Decision 2; the alternative is the overlay file.)
-2. **Opening from the frame:** is a right-click on a panel handle the gesture you want (decision 3), or a dock button / middle click instead? Which key for the KDE shortcut?
-3. **Plasma toggle:** deferring "hide or show the Plasma shell" to its own plan (spike on a temporary HDMI-A-1 panel first) OK? (Decision 1.)
-4. **Live apply** without an Apply button, with Undo/Revert all and no 15 s confirm countdown: OK? (Decisions 5, 6.)
-5. Not part of this plan, noticed while reading Fabric: `fabric.Application` registers `org.Fabric.fabric.edge-shell` on the session bus with `Execute`/`Evaluate` methods that run arbitrary Python inside the shell for any local session-bus client. The settings window does not use it. Turning it off (`Application(..., open_client=False)`) would be a one-line follow-up if nothing else needs it.
+The answers below are recorded as defaults pending Phil; each is one decision to confirm or change.
+
+1. **tomlkit:** add the dependency (`>=0.15`) and install it yourself in the shared venv (`scripts/py -m pip install 'tomlkit>=0.15'`)? Default: yes (decision 2; the alternative is the overlay file).
+2. **Opening from the frame:** a right-click on a panel handle (edge or corner) is the gesture (decision 3). The KDE shortcut key is yours to pick; suggested Meta+Alt+E.
+3. **Plasma toggle:** deferred to its own plan, starting with a spike on a temporary HDMI-A-1 panel (decision 1). Default: yes.
+4. **Live apply** without an Apply button, with Undo, Revert all and no 15 s confirm countdown (decisions 5, 6). Default: yes.
+5. **New, from the review:** corner panels in the same list with their own rows (decision 11); a widget-kind or corner change as one compound edit that drops the keys and edge that no longer fit (decision 12); the mouse wheel never edits (decision 13); one window per config file (decision 14); Fabric's D-Bus `Execute`/`Evaluate` switched off (decision 15, Task 12, one revertible commit). Default: all yes.
