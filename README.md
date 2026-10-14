@@ -11,6 +11,7 @@ alongside Plasma and does not replace it.
 - [Layout and anchoring plan](docs/superpowers/plans/2026-10-13-layout-anchoring.md)
 - [Handle customization plan](docs/superpowers/plans/2026-10-13-handle-customization.md)
 - [Corner panel plan](docs/superpowers/plans/2026-10-14-corner-panel.md)
+- [Settings window plan](docs/superpowers/plans/2026-10-14-settings-window.md)
 
 **Status:** early development.
 
@@ -32,7 +33,8 @@ alongside Plasma and does not replace it.
 ## Requirements
 
 - KDE Plasma 6 on Wayland (KWin implements `wlr-layer-shell`)
-- Python 3.12+ with Fabric (from git), PyGObject **below 3.52**, pycairo, Pydantic 2
+- Python 3.12+ with Fabric (from git), PyGObject **below 3.52**, pycairo, Pydantic 2, tomlkit
+  (the settings window only: `scripts/py -m pip install 'tomlkit>=0.15'`)
 - `gtk-layer-shell`, `kscreen-doctor`; fonts Hack Nerd Font Mono and JetBrains Mono
 
 PyGObject must stay below 3.52: Fabric 0.0.2 breaks on newer versions
@@ -50,6 +52,9 @@ scripts/py main.py --config examples/layout-test.toml -v        # several panels
 scripts/py main.py --config examples/layout-sizes-test.toml -v  # fill, content, percent
 scripts/py main.py --config examples/corner-test.toml -v      # corner panels next to edge panels
 scripts/py main.py --config examples/panels-test.toml --stats 10  # 10 s measurement, then quit
+scripts/py main.py --settings                              # the settings window (user config)
+scripts/py main.py --settings --config /tmp/edge.toml      # ... on another file
+scripts/py main.py --restore-config                        # undo the last settings session
 ```
 
 `scripts/py` runs the shared venv; override it with `EDGE_SHELL_PYTHON=/path/to/python`.
@@ -198,6 +203,59 @@ line naming such panels. Handle and interaction changes apply in place on reload
 `scripts/py -m shell.handle_draw --sheet /tmp/handles.png` renders every shape for a look
 without starting the shell.
 
+### Settings window
+
+`scripts/py main.py --settings` opens a normal window that edits your config file (the
+`--config` file if given, else `~/.config/edge-shell/config.toml`; it is created on the first
+change). A right-click on any panel handle (edge or corner panel) opens it too, on the
+running shell's config file. There is one settings window per config file: opening it again on
+the same file brings it forward; `--config` with another file opens a second window for that
+file.
+
+- **Theme** page: every theme key, the border, the shadow, the handle style and the layout gap.
+  One page per monitor (connected monitors and the ones in your config): the shell mode
+  (`edge`, `plasma`, `both`, `none`), the panels (add, remove, move up or down; every panel key
+  including the handle and interactions), a preview of the layout warnings the shell would
+  give, and per-monitor theme and layout overrides.
+- Corner panels (for example `widget_panel`) are in the same panel list, labelled
+  "(corner panel)" in the add list. Their rows are corner, edge (only the corner's two edges),
+  width and height instead of align, offset, length and depth. Switching a panel's widget
+  between an edge and a corner widget removes the keys the new kind does not take in the same
+  change; moving a corner panel to a corner without its edge removes that edge.
+- Each row shows the value in effect and where it comes from (`your config`, `default`,
+  `global theme`, `widget default`, ...). The reset button removes the key from your file, so
+  the value is inherited again.
+- Changes apply at once (spin buttons 0.4 s after the last change; closing the window applies
+  a pending one); the running shell reloads them like a hand edit. A change the shell would
+  reject is not saved: the reason (with the key path) shows under the row. The mouse wheel
+  scrolls the page and never changes a value, so scrolling past a monitor's mode cannot switch
+  it.
+- **Undo** (Ctrl+Z) steps back one change; **Revert all** puts the file back as it was when
+  the window opened, or after your last hand edit. Before its first change the window copies
+  the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
+  that copy back (the replaced file is kept as `config.toml.before-restore`, or `.2`, `.3`, ...
+  after an earlier restore).
+- Your comments and formatting are kept: the window edits the file in place (tomlkit) and
+  refuses a change it could not make without touching other keys or without losing a comment
+  that sits above a table (`[monitors.DP-1]` and the like): edit the file by hand then. A
+  comment run directly above a table header is that table's label and stays attached to it,
+  also when keys or panels are added, moved or removed in the table before it. The comments
+  directly above a `[[panels]]` entry are its label: they move and are removed with that
+  panel. Adding a panel to an inline `panels = [{ ... }]` list is refused (add it by hand).
+  If you edit the file by hand while the window is open, it re-reads it and tells you; it
+  never writes over a hand edit, and Revert all keeps it. An invalid file opens read-only with
+  the error until it is fixed; a folder it cannot write to is reported in the window.
+- A symlinked config (for example from a dotfiles repository) keeps its link; the shell also
+  watches the file it points to, so window changes and edits of that file reload the shell.
+
+**Keyboard shortcut (KDE):** System Settings > Keyboard > Shortcuts > Add New > Command or
+Script, command `/home/phil/Projects/pyDev/projects/myShell/scripts/py
+/home/phil/Projects/pyDev/projects/myShell/main.py --settings`, then assign a key
+(suggested: Meta+Alt+E; any free key works).
+
+`plasma` and `none` both leave a monitor to Plasma for now: hiding or showing Plasma's own
+panel from the window is deferred (it needs the Plasma integration, spec section 7).
+
 ## Develop
 
 ```bash
@@ -221,7 +279,24 @@ that need `gi` or Fabric skip themselves there.
 ## Known limitations / planned
 
 - Plasma integration (workspaces panel, tray host, hiding Plasma's panel) is not built yet.
-- A settings window is not built yet. It must use the corner panel contract: `registry.widget_kind`, `registry.defaults`, `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split('-')`, `default_edge` and `corner_has_edge` (the settings plan on branch `feat/settings-window` already depends on it).
+- Settings window: no Plasma panel toggle yet (hiding or showing Plasma's panel is deferred), no
+  tray icon, no drag-and-drop layout; `pos` (deprecated) is shown and can be removed, not
+  edited; a panel with click, hover and drag all off takes no input while collapsed, so its
+  handle cannot open the window (use another handle, the shortcut or `--settings`); KWin
+  chooses the window's monitor; inline `panels = [...]` lists are edited by hand.
+- Settings window, editing limits: unsetting a whole table leaves that table's own label comment
+  behind (not reachable from the window, which only resets single keys); after an edit a CRLF
+  file may have `\n` endings on the lines the window writes (the session reads with universal
+  newlines, so the first write rewrites CRLF as LF; the `.bak` stays byte-exact); a comment
+  inside a multi-line array is dropped when that array is set.
+- Settings window, start and close: at start `kscreen-doctor` is asked for the connected
+  monitors and may delay the window by up to 5 s (if it fails, only the configured monitors are
+  shown); `--config=~/x` is not expanded (use `--config ~/x`, or an absolute path, so the shell
+  expands it); the first instance imports the widgets, which loads Fabric's typelibs (no layer
+  surface is created); closing the window while the last write failed keeps it open once, so
+  the error is seen, and the next close closes it; a right-click on a handle opens the window.
+- The shell no longer exposes Fabric's D-Bus `Execute` / `Evaluate` methods (its D-Bus client
+  is switched off, so `fabric-cli` cannot run code in it).
 - Corner panels: one per corner; only corner widgets (`widget_panel`) can sit in a corner; no "content" length; a corner panel's sizes are fixed px (no percentages). Edge widgets (clock, dock) in corners are deferred. A corner request with a height below `T + 16` is hidden with a warning that names the height.
 - Corner panels, Gate B (live, HDMI-A-1, Phil): passed. `--stats 10` on `examples/corner-test.toml` gave a damaged-draw p95 of 9.70 ms (median 6.04, max 10.82), above the 8 ms target by 1.7 ms. The run's config copy still had the sixth same-corner entry and border and shadow were probably still enabled; Phil accepted it. Where the cost comes from (headless, 1920x1080, all panels toggling, border 2 and elevation 50): `examples/corner-test.toml` animates five panels (two corner, three edge) against three in `examples/panels-test.toml`, so its p95 is 6.5 ms against 4.2 ms. Its three edge panels alone give p95 4.4 ms and its two corner panels alone 2.1 ms: about 0.95 ms per corner shape against about 1.4 ms per edge panel. Per shape a corner panel costs no more than an edge panel; the p95 rose with the number of animating panels. (0.29 ms is the median without effects; the no-effects p95 is 0.33 ms.)
 - Performance follow-up options, not done: the shadow strokes the whole outline path once per reach level (about 24 strokes), so the cost is mostly fixed per draw. Drawing each damaged clip rectangle into its own small group, instead of one group over the bounding extents, cut the effects run by about 13% in a scratch test (median 6.18 to 5.39 ms) with the damage contract holding. A tighter corner damage box alone gained only about 4%, so it is not worth doing first.

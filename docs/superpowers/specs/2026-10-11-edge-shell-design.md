@@ -231,6 +231,7 @@ edge-shell/
 │   ├── corner_panel.py       # CornerPanel(EdgePanel)
 │   └── registry.py
 ├── widgets/                  # clock, dock, system_bar, workspaces, widget_panel
+├── settings/                 # the settings window (own process): form, document, session, GTK view
 ├── services/plasma.py
 ├── spikes/                   # throwaway probes
 ├── tests/
@@ -294,10 +295,12 @@ Each is a throwaway script in `spikes/` that answers one question.
 
 A normal window (opened from a key binding, tray icon or frame handle) for editing colors, monitor modes, panel positions and the widget list, and for hiding or showing the Plasma shell. It writes the user config file only. Its form fields can be generated from the Pydantic JSON schema and the widget registry. Designed once the schema has settled, after milestone 7.
 
+**Implemented (2026-10-14, plan `docs/superpowers/plans/2026-10-14-settings-window.md`):** a separate process (`main.py --settings`, a `Gtk.Application` `org.edgeshell.Settings.c<hash of the config path>`: one instance per config file), opened from the CLI, a right-click on any panel handle, edge or corner (on the shell's config file), or a KDE custom shortcut; the config file is its only link to the shell. Corner panels (section 19) share the panel list, with rows by the widget's kind (`registry.widget_kind`, the models' `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`). The form is generated from `Config.model_json_schema()` and the widget registry (`settings/form.py`; per-monitor overrides use the base models' bounds, which `ThemeOverride`/`LayoutOverride` lose). Edits are made in place with tomlkit (comments kept; a comment run directly above a table header is that table's label and stays attached to it; an edit that would lose such a comment is refused), verified by re-parsing, checked by the shell's own loader and `validate_widgets`, and written atomically (symlinks kept; the shell's `ConfigWatcher` also watches a symlinked config's target); never an invalid file. Live apply (spin buttons debounced 400 ms; the mouse wheel never edits), Undo/Ctrl+Z, Revert all, per-field reset; `config.toml.bak` per session and `main.py --restore-config`; hand edits while the window is open are re-read, never overwritten, and become Revert all's starting point; an invalid file opens read-only; file-system errors are shown, not raised. The shell's Fabric D-Bus client (`Execute`/`Evaluate`) is switched off. Known limits: unsetting a whole table leaves its label behind (not reachable from the window); CRLF files get LF on written lines; comments inside a multi-line array go when it is set; `kscreen-doctor` may delay the window start by up to 5 s; `--config=~/x` is not expanded; the first instance imports the widgets (Fabric typelibs load, no layer surface); a close after a failed write keeps the window open once. Deferred: hiding or showing Plasma's panel (needs section 7 and spike 2), tray icon, drag-and-drop layout, HiDPI. Gate results: see the plan's Tasks 14-15 (recorded below after the gates).
+
 ## 14. Open questions
 
 - Should a pinned panel reserve space (push windows) or float over them? This spec assumes **float**.
-- Should the settings window also expose a drag-and-drop layout editor, or only form fields? Deferred to its own design.
+- Should the settings window also expose a drag-and-drop layout editor, or only form fields? **v1 is forms only** (settings window plan, decision 1); drag-and-drop is revisited after Phil has used v1.
 
 ## 15. Implemented: handle customization and per-interaction toggles
 

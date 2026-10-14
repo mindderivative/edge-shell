@@ -67,7 +67,7 @@
 
 The seven input classes most likely to bite Phil that the spec implies but a happy-path test would not catch, each pinned by a test in the owning task:
 
-1. **Phil's comments and layout must survive, and an edit must never move a key to another table** (tomlkit writes a table added inside a dotted-key table as a top-level header: `[monitors.X] theme.accent = …` plus a new `theme.shadow.elevation` would land in the global `[theme.shadow]`; and tomlkit keeps the comments above a header in the table before it, so removing the last panel or pruning `[layout]` would delete them). Expect comments, key order and style kept, dotted keys used inside existing tables, a refused edit (nothing written) whenever the re-parsed file differs from the intended edit or a comment above a table would be lost, and an inline panel array refused for adding. Pinned by `test_an_unedited_document_is_byte_identical`, `test_replacing_a_value_keeps_its_comment`, `test_a_new_key_inside_a_dotted_table_stays_in_that_monitor`, `test_other_toml_layouts_are_edited_in_place`, `test_an_edit_that_would_change_other_keys_is_refused`, `test_an_edit_that_would_lose_a_comment_above_a_table_is_refused`, `test_a_comment_above_a_table_can_move_but_stays` and `test_adding_to_an_inline_panel_array_is_refused` (Task 3), `test_apply_writes_a_valid_change_keeping_comments` (Task 4), `test_the_settings_example_is_valid_and_keeps_its_comments` (Task 13); live by Gate A item 3.
+1. **Phil's comments and layout must survive, and an edit must never move a key to another table** (tomlkit writes a table added inside a dotted-key table as a top-level header: `[monitors.X] theme.accent = …` plus a new `theme.shadow.elevation` would land in the global `[theme.shadow]`; and tomlkit keeps the comments above a header in the table before it, so removing the last panel or pruning `[layout]` would delete them). Expect comments, key order and style kept, dotted keys used inside existing tables, a refused edit (nothing written) whenever the re-parsed file differs from the intended edit or a comment above a table would be lost, and an inline panel array refused for adding. Pinned by `test_an_unedited_document_is_byte_identical`, `test_replacing_a_value_keeps_its_comment`, `test_a_new_key_inside_a_dotted_table_stays_in_that_monitor`, `test_other_toml_layouts_are_edited_in_place`, `test_an_edit_that_would_change_other_keys_is_refused`, `test_an_edit_that_would_lose_a_comment_above_a_table_is_refused`, `test_a_new_key_goes_above_the_next_tables_label`, `test_a_panel_edit_keeps_the_comment_above_the_next_table_in_place` and `test_adding_to_an_inline_panel_array_is_refused` (Task 3), `test_apply_writes_a_valid_change_keeping_comments` (Task 4), `test_the_settings_example_is_valid_and_keeps_its_comments` (Task 13); live by Gate A item 3.
 2. **Phil edits the file by hand while the window is open.** Expect the hand edit never to be overwritten, by an edit, an Undo or a Revert all: the window re-reads it, says so, takes it as the new starting point, and the next change applies on top of it. Pinned by `test_a_hand_edit_is_never_overwritten`, `test_undo_after_a_hand_edit_rereads_instead` and `test_revert_after_a_hand_edit_keeps_the_hand_edit` (Task 4), `test_a_hand_edit_is_reloaded_and_announced`, `test_our_own_write_does_not_rebuild` and `test_an_edit_after_a_hand_edit_is_not_applied` (Task 9); live by Gate B items 1-2.
 3. **A value the shell would reject** (a cross-field rule such as `min_length > max_length` or `pos` with `align`, an unknown widget, a bound the spin button cannot stop, an edge-only key left on an entry whose widget became a corner widget) must never reach the file, and the reason must show where the change was made. Pinned by `test_an_invalid_change_is_not_written`, `test_an_unknown_widget_is_not_written` and `test_a_cross_field_rule_is_not_written` (Task 4), `test_panel_ops_keep_the_entry_valid` (Task 6), `test_an_invalid_edit_shows_its_error_under_the_row`, `test_a_rejected_panel_edit_shows_in_the_banner` and `test_a_dock_turned_into_a_corner_widget_is_one_edit` (Task 9); live by Gate A items 10 and 12.
 4. **A config the shell cannot use, or a file system that will not write** (invalid by hand, missing, a symlink into a dotfiles repo, a directory by mistake, a read-only folder, a second window on another file) must not lock Phil out or crash a callback: the window still opens (read-only with the error while invalid), writes keep the link and the shell still reloads through it, file errors show in the banner, `--restore-config` brings back the backup without overwriting an earlier restore's file, and each config file gets its own window. Pinned by `test_write_atomic_follows_a_symlink`, `test_a_write_through_a_symlink_fires`, `test_a_failed_write_leaves_the_old_file_and_no_temp_file`, `test_backup_keeps_the_files_mode`, `test_a_second_restore_keeps_the_first_replaced_file` and the other restore tests (Task 2), `test_a_missing_file_is_the_defaults`, `test_an_invalid_file_opens_with_its_error` and `test_an_unwritable_folder_is_an_error_not_a_crash` (Task 4), `test_an_invalid_file_is_shown_read_only_with_its_error` and `test_an_unwritable_folder_shows_in_the_banner` (Task 9), `test_settings_opens_even_when_the_config_is_invalid`, `test_an_unreadable_config_fails_without_a_window` and `test_app_id_depends_on_the_config_path` (Task 10); live by Gate B items 3, 4, 5, 7 and 11.
@@ -924,21 +924,20 @@ def test_comments_inside_a_removed_entry_may_go():
 
 
 @pytest.mark.parametrize(
-    "edit, before",
+    "edit",
     [
-        (lambda d: d.set(("theme", "thickness"), 12), "thickness = 12"),
-        (lambda d: d.add_panel("HDMI-A-1", "bar"), "[[monitors.HDMI-A-1.panels]]"),
-        (lambda d: d.move_panel("HDMI-A-1", 1, 0), "[[monitors.HDMI-A-1.panels]]"),
+        lambda d: d.add_panel("HDMI-A-1", "bar"),
+        lambda d: d.move_panel("HDMI-A-1", 1, 0),
+        lambda d: d.remove_panel("HDMI-A-1", 1),
     ],
 )
-def test_a_comment_above_a_table_can_move_but_stays(edit, before):
-    """Pinned as it is today (decision 2): a key or panel added at the end of the table before a
-    commented header lands below the comment; the comment is kept, the edit is allowed."""
+def test_a_panel_edit_keeps_the_comment_above_the_next_table_in_place(edit):
+    """Final behaviour (decision 2): a comment run directly above a table header is that
+    table's label and stays directly above it, whatever is added, moved or removed before."""
     doc = UserDocument(COMMENTED)
     edit(doc)
-    comment = "# wide gaps on purpose" if "thickness" in before else "# DP-1 holds the Plasma panel"
     lines = doc.text.splitlines()
-    assert lines[lines.index(comment) + 1] == before
+    assert lines[lines.index("# DP-1 holds the Plasma panel") + 1] == "[monitors.DP-1]"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -5150,8 +5149,8 @@ file.
   refuses a change it could not make without touching other keys or without losing a comment
   that sits above a table (`[monitors.DP-1]` and the like): edit the file by hand then. The
   comments directly above a `[[panels]]` entry are its label: they move and are removed with
-  that panel. A comment above a table can still move when a key is added at the end of the
-  table before it (it lands between the comment and its header). A CRLF file may get `\n` endings
+  that panel. A comment run directly above a table header is that table's label and stays
+  attached to it. A CRLF file may get `\n` endings
   on the lines the window writes, and a comment inside a multi-line list goes when the window
   replaces that list. Adding a panel to an inline `panels = [{ ... }]` list is refused
   (add it by hand). If you edit the file by hand while the window is open, it re-reads it and
@@ -5176,8 +5175,7 @@ In "Known limitations / planned", replace `- A settings window is not built yet.
 - Settings window: no Plasma panel toggle yet, no tray icon, no drag-and-drop layout; `pos`
   (deprecated) is shown and can be removed, not edited; a panel with click, hover and drag all
   off takes no input while collapsed, so its handle cannot open the window (use another
-  handle, the shortcut or `--settings`); KWin chooses the window's monitor; a comment above a
-  table can move when a key is added just before it; inline `panels = [...]` lists
+  handle, the shortcut or `--settings`); KWin chooses the window's monitor; inline `panels = [...]` lists
   are edited by hand.
 - The shell no longer exposes Fabric's D-Bus `Execute` / `Evaluate` methods (`fabric-cli`
   cannot run code in it).
