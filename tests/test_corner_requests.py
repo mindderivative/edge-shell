@@ -145,21 +145,33 @@ def test_a_valid_corner_entry_passes(corner_registry, make_config):
 
 
 @pytest.mark.parametrize(
-    "defaults",
+    ("defaults", "message"),
     [
-        CornerDefaults(corner="bottom-left", width=300, height=390, label="x", edge="top"),
-        CornerDefaults(corner="bottom-left", width=30, height=390, label="x"),
-        CornerDefaults(corner="bottom-left", width=4001, height=390, label="x"),
-        CornerDefaults(corner="bottom-left", width=300, height=59, label="x"),
-        CornerDefaults(corner="middle", width=300, height=390, label="x"),
-        CornerDefaults(corner="bottom-left", width=300, height=390, label="x", state="open"),
-        CornerDefaults(
-            corner="bottom-left", width=300, height=390, label="x", handle=HandleSpec(size=99)
+        (
+            CornerDefaults(corner="bottom-left", width=300, height=390, label="x", edge="top"),
+            "not an edge of",
+        ),
+        (CornerDefaults(corner="bottom-left", width=30, height=390, label="x"), "60-4000"),
+        (CornerDefaults(corner="bottom-left", width=4001, height=390, label="x"), "60-4000"),
+        (CornerDefaults(corner="bottom-left", width=300, height=59, label="x"), "60-4000"),
+        (
+            CornerDefaults(corner="middle", width=300, height=390, label="x"),
+            "corner 'middle' must be one of",
+        ),
+        (
+            CornerDefaults(corner="bottom-left", width=300, height=390, label="x", state="open"),
+            "state 'open' must be",
+        ),
+        (
+            CornerDefaults(
+                corner="bottom-left", width=300, height=390, label="x", handle=HandleSpec(size=99)
+            ),
+            "invalid handle",
         ),
     ],
 )
-def test_bad_corner_defaults_fail_at_registration(corner_registry, defaults):
-    with pytest.raises(ValueError):
+def test_bad_corner_defaults_fail_at_registration(corner_registry, defaults, message):
+    with pytest.raises(ValueError, match=message):
         corner_registry.register("bad", defaults)
     assert "bad" not in corner_registry.widget_names()
 

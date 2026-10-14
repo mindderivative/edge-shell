@@ -156,3 +156,70 @@ def test_corner_box_grows_by_pad_and_rounds_depth_up():
         340,
         1080,
     )
+
+
+def _mx(rect, width):
+    x, y, w, h = rect
+    return (width - x - w, y, w, h)
+
+
+def _my(rect, height):
+    x, y, w, h = rect
+    return (x, height - y - h, w, h)
+
+
+def _t(rect):
+    x, y, w, h = rect
+    return (y, x, h, w)
+
+
+def _all(corner, edge, d, offset):
+    """Every pure rect for one placement, as a name -> rects dict."""
+    return {
+        "body": [cn.body_rect(corner, edge, 300, 380, d, T)],
+        "content": [cn.content_rect(corner, edge, 300, 380, T)],
+        "hit": [cn.hit_rect(corner, edge, 300, 380, d, T, HIT, offset)],
+        "input": sorted(cn.input_rects(corner, edge, 300, 380, d, T, 16, ALL, HIT, offset)),
+        "input_click": sorted(
+            cn.input_rects(corner, edge, 300, 380, d, T, 16, Interaction(hover=False), HIT, offset)
+        ),
+    }
+
+
+@pytest.mark.parametrize("d", [0, 7.5, 190, 380])
+@pytest.mark.parametrize("offset", [0, 30, -20, 9999])
+def test_x_mirror_bottom_left_vs_bottom_right_negates_the_offset(d, offset):
+    left = _all("bottom-left", "bottom", d, offset)
+    right = _all("bottom-right", "bottom", d, -offset)
+    sw, _sh = cn.surface_size("bottom", 300, 380, T)
+    for key, rects in left.items():
+        assert sorted(_mx(r, sw) for r in rects) == right[key], key
+    lb = cn.corner_box("bottom-left", "bottom", 300, d, 1920, 1080, T, R)
+    rb = cn.corner_box("bottom-right", "bottom", 300, d, 1920, 1080, T, R)
+    assert (1920 - lb[2], lb[1], 1920 - lb[0], lb[3]) == rb
+
+
+@pytest.mark.parametrize("d", [0, 7.5, 190, 380])
+@pytest.mark.parametrize("offset", [0, 30, -20, 9999])
+def test_y_mirror_top_vs_bottom_keeps_the_offset(d, offset):
+    bottom = _all("bottom-left", "bottom", d, offset)
+    top = _all("top-left", "top", d, offset)
+    _sw, sh = cn.surface_size("bottom", 300, 380, T)
+    for key, rects in bottom.items():
+        assert sorted(_my(r, sh) for r in rects) == top[key], key
+    bb = cn.corner_box("bottom-left", "bottom", 300, d, 1920, 1080, T, R)
+    tb = cn.corner_box("top-left", "top", 300, d, 1920, 1080, T, R)
+    assert (bb[0], 1080 - bb[3], bb[2], 1080 - bb[1]) == tb
+
+
+@pytest.mark.parametrize("d", [0, 7.5, 190, 380])
+@pytest.mark.parametrize("offset", [0, 30, -20, 9999])
+def test_transpose_top_left_edge_top_vs_left(d, offset):
+    top = _all("top-left", "top", d, offset)
+    left = _all("top-left", "left", d, offset)
+    for key, rects in top.items():
+        assert sorted(_t(r) for r in rects) == left[key], key
+
+
+def test_corner_box_top_left_on_the_top_edge():
+    assert cn.corner_box("top-left", "top", 300, 380, 1920, 1080, T, R) == (0, 0, 314, 404)

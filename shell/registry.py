@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict
+from typing import get_args
 
 from pydantic import ValidationError
 
@@ -16,6 +17,7 @@ from shell.config.models import (
     HandleConfig,
     InteractionConfig,
     PanelConfig,
+    PanelState,
 )
 from shell.panel_spec import (
     CornerDefaults,
@@ -62,9 +64,10 @@ def _check_defaults(name: str, defaults: PanelDefaults | CornerDefaults) -> None
             raise ValueError(
                 f"widget {name!r}: corner {defaults.corner!r} must be one of {', '.join(CORNERS)}"
             )
-        if defaults.state not in ("collapsed", "extended"):
+        states = get_args(PanelState)
+        if defaults.state not in states:
             raise ValueError(
-                f"widget {name!r}: state {defaults.state!r} must be collapsed or extended"
+                f"widget {name!r}: state {defaults.state!r} must be {' or '.join(states)}"
             )
         if defaults.edge is not None and not corner_has_edge(defaults.corner, defaults.edge):
             raise ValueError(
