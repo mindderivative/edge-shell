@@ -44,6 +44,9 @@ class SettingsView(Gtk.Box):
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
         self.save_failed = False  # the last flush() could not write something (shown on screen)
+        # the last flush() met a hand edit: that row and the rest were not applied (warning on
+        # screen); the caller must not go on to a structural edit or an undo on the re-read file
+        self.refused_outside = False
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
 
@@ -86,7 +89,7 @@ class SettingsView(Gtk.Box):
         or a hand edit); keeps the visible page."""
         visible = self.stack.get_visible_child_name()
         for row in self.rows:
-            row.cancel_pending()  # pending values go with the old rows, never written later
+            row.discard()  # pending or typed values go with the old rows, never written later
         retired = self.stack.get_children()
         for child in retired:
             self.stack.remove(child)
@@ -223,6 +226,7 @@ class SettingsView(Gtk.Box):
         try:
             self.session.apply(edit)
         except ChangedOutside as exc:
+            self.refused_outside = True
             self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
@@ -283,6 +287,8 @@ class SettingsView(Gtk.Box):
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
         rows that may point at an entry that is gone). `expand`: the entry to show open."""
         self.flush()  # pending values go to the row indexes they were typed for, before they move
+        if self.refused_outside:
+            return  # the file was re-read: these row indexes may mean other panels now
         if expand is not None:
             self._expand[monitor] = expand
         if not self.apply(edit, structural=True):
@@ -306,6 +312,8 @@ class SettingsView(Gtk.Box):
 
     def undo(self) -> None:
         self.flush()  # a pending value is applied first (and then undone), never written after
+        if self.refused_outside:
+            return  # a hand edit was met: the file was re-read, the warning is on screen
         if self._file_action(self.session.undo):
             self.hide_banner()
             self.rebuild()
@@ -324,12 +332,16 @@ class SettingsView(Gtk.Box):
         edit through the refresh after each apply, so every row is applied in turn; a rebuild an
         apply asks for waits until the last row was applied (once, at the end). Not for Revert
         all or a hand edit: their pending values are discarded with the rows. `save_failed` says
-        whether any of them could not be written (the error is on screen)."""
+        whether any of them could not be written (the error is on screen); `refused_outside` that
+        a hand edit was met: the rows from that one on were dropped (a rebuild follows)."""
         self.save_failed = False
+        self.refused_outside = False
         self._flushing = True
         try:
             for row in list(self.rows):
                 row.flush()
+                if self.refused_outside:
+                    break  # the rest would be applied onto the re-read file
         finally:
             self._flushing = False
             if self._rebuild_due:

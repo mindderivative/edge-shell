@@ -520,3 +520,74 @@ def test_the_revert_dialog_says_where_an_invalid_hand_edit_is_kept(make):
     assert path.read_text() == USER
     assert path.with_name("config.toml.before-revert").read_text().endswith("'edgee'\n")
     assert "before-revert" not in view.revert_text()
+
+
+TWO_PANELS = USER + '\n[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\n'
+SWAPPED = (
+    '# gate config\n[monitors.HDMI-A-1]\nshell = "edge"\n\n'
+    '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\n\n'
+    '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\n'
+)
+
+
+def test_a_flush_that_met_a_hand_edit_applies_no_further_row(make, pending):
+    """The first row's apply is refused (the file was edited by hand); the rows after it must
+    not be applied onto the re-read file."""
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    row(view, THICKNESS).editor.widget.set_value(17)
+    path.write_text(USER.replace('"edge"', '"both"'))
+    view.flush()
+    assert path.read_text() == USER.replace('"edge"', '"both"')
+    assert view.refused_outside and not view.save_failed
+    assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
+    view.flush()  # a later, clean flush forgets it
+    assert not view.refused_outside
+
+
+def test_a_structural_edit_after_a_refused_flush_is_not_applied(make, pending):
+    view, path = make()
+    panel_editor(view).add("clock")
+    row(view, DEPTH).editor.widget.set_value(120)  # pending on the dock (entry 0)
+    path.write_text(SWAPPED)  # by hand: the clock is entry 0 now
+    panel_editor(view).remove(1)  # the user meant the clock
+    assert path.read_text() == SWAPPED
+    assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
+
+
+def test_undo_after_a_refused_flush_does_nothing_more(make, pending):
+    view, path = make()
+    view._on_change(SHELL, "both")
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER)  # by hand
+    view.undo()
+    assert path.read_text() == USER and not view.session.history
+
+
+def test_close_stays_open_once_after_a_refused_flush(make, pending):
+    from types import SimpleNamespace
+
+    from settings.window import SettingsWindow
+
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('"edge"', '"both"'))
+    win = SimpleNamespace(view=view, _close_warned=False)
+    assert SettingsWindow._on_delete(win) is True  # stays open once, the warning is on screen
+    assert SettingsWindow._on_delete(win) is False  # closing again closes anyway
+
+
+FONT = ("theme", "font")
+
+
+def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
+    """The rebuild unparents the focused entry and GTK sends focus-out: the retired row's
+    commit must not write the typed fonts onto the re-read file."""
+    view, path = make()
+    old = row(view, FONT)
+    old.editor.widget.set_text("Typed Font")
+    path.write_text(USER.replace('"edge"', '"both"'))
+    view.file_changed()
+    old.editor.commit()  # the focus-out of the retired entry
+    old.flush()
+    assert "Typed Font" not in path.read_text() and not view.session.history

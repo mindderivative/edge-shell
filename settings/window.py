@@ -25,14 +25,15 @@ class SettingsWindow(Gtk.ApplicationWindow):
         undo.connect("activate", lambda *_a: self.view.undo())
         self.add_action(undo)
         # closing applies what is still pending (a spin inside its pause, a typed font list)
-        # a value that could not be written keeps the window open once, so its error is seen
+        # a value that could not be written (or a hand edit met while applying) keeps the
+        # window open once, so its error is seen
         self._close_warned = False
         self.connect("delete-event", self._on_delete)
         self.view.show_all()
 
     def _on_delete(self, *_args) -> bool:
         self.view.flush()
-        if self.view.save_failed and not self._close_warned:
+        if (self.view.save_failed or self.view.refused_outside) and not self._close_warned:
             self._close_warned = True
             return True  # stay open; closing again closes anyway
         return False

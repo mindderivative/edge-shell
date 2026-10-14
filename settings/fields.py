@@ -292,6 +292,7 @@ class FieldRow(Gtk.Box):
         self._on_change = on_change
         self._updating = False
         self._timer = 0
+        self._discarding = False  # retired by a rebuild: nothing it holds may be written
         self._pending: Any = None
         self._shown: Any = _UNSHOWN  # the value last shown or written: a no-op is not written
         self.editor = make_editor(spec, self._changed)
@@ -354,7 +355,7 @@ class FieldRow(Gtk.Box):
             self._write(self._pending)
 
     def _changed(self, value: Any) -> None:
-        if self._updating:
+        if self._updating or self._discarding:
             return
         if self.spec.kind not in DEBOUNCED:
             self._write(value)
@@ -369,6 +370,8 @@ class FieldRow(Gtk.Box):
         return GLib.SOURCE_REMOVE
 
     def _write(self, value: Any) -> None:
+        if self._discarding:
+            return
         if _same(value, self._shown):
             return  # a no-op must not turn an inherited value into an explicit one
         self._shown = value
@@ -376,6 +379,12 @@ class FieldRow(Gtk.Box):
 
     def cancel_pending(self) -> None:
         """Drop a debounced value without writing it (the row is about to be discarded)."""
+        self._cancel()
+
+    def discard(self) -> None:
+        """The row is retired (a rebuild or a hand-edit reload): drop what it holds and never
+        call back again, also for the focus-out GTK sends when its entry is unparented."""
+        self._discarding = True
         self._cancel()
 
     def _cancel(self) -> None:
