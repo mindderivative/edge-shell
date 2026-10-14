@@ -41,7 +41,7 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 | Frame color | `#0b0c0d` | Panels use the same color so they read as part of the frame |
 | Text / secondary | `#e6e8ea` / `#9ba0a6` | |
 | Accent | `#8fd3b6` | Active workspace and focus rings only |
-| Handle dots | `#7b7f84`, hover `#e6e8ea` | Three 3 px dots, 3 px gaps |
+| Handle | `#7b7f84`, hover `#e6e8ea` (theme `handle` / `handle_hover`) | Default: three 3 px dots, 3 px gaps; shape, size, weight, position and colours customizable per panel (section 15) |
 | Font | `["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]` | Ordered fallback list |
 | Icon buttons | 44×44 px, radius 10 px | 20 px glyphs |
 
@@ -81,6 +81,8 @@ Three states per panel. Only **extended** shows content.
 
 **Hover target.** The collapsed input region is grown to 16 px beyond the frame without drawing it, so the strip is easy to hit.
 
+**Per-panel toggles (section 15, implemented).** Each of click, hover and drag can be turned off per panel (`interaction` table). Hover off: no peek; drag off: a press never drags; click off: the handle ignores clicks and takes no keyboard focus (built-in panels use `keyboard_mode="none"`, so their handles never take keyboard focus anyway). With hover off the collapsed input region is only the handle's hit target; with all three off a collapsed panel takes no input and each config load logs one INFO line naming it.
+
 ## 5. Architecture
 
 ### 5.1 Surfaces per monitor
@@ -100,7 +102,7 @@ Two Fabric details that change the design:
 
 **Surface sizing.** Each panel's surface is allocated once at its fully extended size `(length + 2R) × (T + depth)`. Animation redraws and moves the input region only; KWin never resizes a layer surface mid-animation.
 
-**Implemented (2026-10-13):** the single-canvas design (section 18, option B) replaced per-window drawing. The strips only reserve space; panels are content, handle and input windows above the canvas. The startup re-raise of panels is still needed: with it off, the collapsed handle dots stayed hidden behind the canvas (Gate 1 item 7), so the delayed `raise_to_top` was kept (`EDGE_SHELL_RAISE_MS=0` is a debug switch).
+**Implemented (2026-10-13):** the single-canvas design (section 18, option B) replaced per-window drawing. The strips only reserve space; panels are content, handle and input windows above the canvas. The startup re-raise of panels is still needed: with it off, the collapsed handle dots stayed hidden behind the canvas (Gate 1 item 7), so the delayed `raise_to_top` was kept (`EDGE_SHELL_RAISE_MS=0` is a debug switch). Re-checked by the handle plan's Gate B: without the raise the collapsed handles were hidden again; whether the extended content (dock icons, clock text, system bar labels) stayed visible was not recorded, so the raise stays on the existing evidence.
 
 ### 5.2 Drawing
 
@@ -155,6 +157,8 @@ align = "center"              # start | center | end; offset = px from that end
 order = 0                     # within the slot (edge + align)
 depth = 46
 state = "extended"            # collapsed | extended
+handle.shape = "auto"         # auto | dots | bar | chevron | none (section 15)
+interaction.hover = true      # click / hover / drag, each optional
 
 [monitors.DP-1]
 shell = "plasma"
@@ -175,8 +179,9 @@ shell = "plasma"
 
   | Change | Reaction |
   | --- | --- |
-  | Theme colour, border or shadow | Regenerate CSS; redraw the canvas (no rebuild) |
+  | Theme colour, border, shadow or handle style | Regenerate CSS; redraw the canvas (no rebuild) |
   | Panel `state` | Retarget the tween |
+  | Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |
   | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
   | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
@@ -288,26 +293,30 @@ A normal window (opened from a key binding, tray icon or frame handle) for editi
 - Should a pinned panel reserve space (push windows) or float over them? This spec assumes **float**.
 - Should the settings window also expose a drag-and-drop layout editor, or only form fields? Deferred to its own design.
 
-## 15. Planned: handle customization and per-interaction toggles
+## 15. Implemented: handle customization and per-interaction toggles
 
 Requested by Phil at Gate D of the core plan. It is not part of the core plan, but the core must not paint this into a corner.
 
 **Requirements**
 
 - The handle (today: three 3 px dots) is customizable per panel: shape, color (rest and hover), size, and position along the edge.
-- Handle shapes include at least: dots, a thin bar, and a chevron/arrow. A chevron can **morph with the panel's depth**: pointing one way when collapsed, rotating to point the other way when expanded.
+- Handle shapes include at least: dots, a thin bar, and a chevron/arrow. A chevron can **morph with the panel's depth**: pointing one way when collapsed, rotating to point the other way when expanded. **Implemented as a fold, not a rotation:** the chevron folds through a flat bar (a rotation would point along the edge half-way, which reads as "slide sideways"); handle plan decision 4, judged at its Gate A.
 - The three interactions are individually opt-in/opt-out per panel: **click to toggle**, **hover to peek**, **drag to open**. Defaults stay all-on, so existing configs behave as today.
 - A handle style may depend on which interactions are enabled (e.g. a thin bar when only drag is on, an arrow when only click is on).
 
 **Design implications (for the future plan; nothing here changes the current core)**
 
-- Config: a per-panel `[handle]` table (`shape`, `size`, `offset`, `color`, `hover_color`) and an `[interaction]` table (`click`, `hover`, `drag`, all default true) in the Pydantic models; the registry can supply per-widget defaults. Unknown shapes fail validation with the key path as elsewhere.
+- Config: a per-panel `[handle]` table (`shape`, `size`, `offset`, `color`, `hover_color`) and an `[interaction]` table (`click`, `hover`, `drag`, all default true) in the Pydantic models; the registry can supply per-widget defaults. Unknown shapes fail validation with the key path as elsewhere. **Added:** a `weight` key (dot diameter, bar and chevron thickness, needed for "thin bar") and a theme-wide `[theme.handle_style]` (a `[theme.handle]` table would clash with the existing `handle` colour key); widget defaults are validated at registration.
 - Rendering: the handle moves from CSS-styled widgets to cairo drawing inside the panel canvas (or a dedicated drawing area), driven by a pure `draw_handle(cr, shape, ...)` plus a morph parameter derived from `d / depth`. That makes the arrow morph free and keeps shapes testable with the same headless pixel tests as the panels.
 - Hit area vs visual: the clickable/hover/drag area stays a separate, larger target than the drawn shape.
-- Behavior: `panel_state` and `EdgePanel` consult the interaction flags (no hover peek when hover is off; ignore press-drag when drag is off; the handle is not a button when click is off). Keyboard activation still follows the click flag.
+- Behavior: `panel_state` and `EdgePanel` consult the interaction flags (no hover peek when hover is off; ignore press-drag when drag is off; the handle is not a button when click is off). Keyboard activation still follows the click flag. **Deviation:** with click off the handle stays a Gtk.Button that ignores clicks and cannot take focus; it is still the drag and hover target and carries the accessible name ("Drag to expand clock", or "clock handle" with drag off too).
 - Diffing: handle and interaction changes are cheap in-place updates (restyle or flag change), not window rebuilds.
 - Today's code touch points: `EdgePanel._build_handle`, `_place_handle`, the pointer handlers, the `.handle-dot` CSS in `shell/theme.py`, and the `handle`/`handle_hover` theme tokens.
 - The settings window (section 13) exposes these controls.
+
+**Implemented (2026-10-13, plan `docs/superpowers/plans/2026-10-13-handle-customization.md`):** the handle stays in the panel's own window: its Button is the hit target (click, keyboard, accessible name) and a `Gtk.DrawingArea` child draws it with the pure `draw_handle` (`shell/handle_draw.py`); the shape canvas is unchanged and the delayed re-raise stays (the collapsed handles are hidden without it; the extended content's visibility without it was not recorded, so the canvas could retire the raise only if a later check shows the extended content is unaffected). Config: per panel `handle` (`shape` auto/dots/bar/chevron/none, `size` 4-40, `weight` 1-8, `offset`, `color`, `hover_color`) and `interaction` (`click`, `hover`, `drag`); theme-wide `[theme.handle_style]` (`shape`, `size`, `weight`, per monitor through the theme override; colours from `handle` / `handle_hover`); widget defaults through `PanelDefaults.handle` / `.interaction`, validated at registration. `auto` follows the interactions (dots; bar for drag only; chevron for click only; none when all are off); a panel with all three off never draws the theme's shape (only its own entry's or widget's) and each config load logs one INFO line naming it. The chevron folds through a flat bar as `d / depth` goes from 0 to 1. Placement: the shape's centre sits `T + d - min(T / 2, 5)` px from the screen edge, i.e. 5 px inside the body's leading edge (the band's inner edge while collapsed) from the default `T = 10` up, and in the middle of a thinner band; the shape is at most `shape_room(T) = band_room(min(T, 10))` px across (6 px from `T = 10` up, so 2 px of the band stay empty on both sides at `T = 10`; 4 / 5 / 4 / 2 / 0 at `T = 8 / 7 / 6 / 4 / 2`); a larger size or weight is clamped across; snapped to the pixel grid as a distance from the screen edge (the same rounding on every edge, so the four edges mirror each other). The hit target is at least 44 x 14 px (14 across on any frame) and rides the inner edge. Phil's Gate B finding at `thickness = 64` (the handle sat mid-body when extended, mid-band when collapsed, and the chevron grew with the frame) decided that handles hug the frame's inner edge and keep one small size at every thickness; the earlier "centred in the last `T` px, room `T - 2` or `band_room(T)`" rule, and decision 12's "thickness = 12 gives room 8", are superseded. Consequences: with `hover` off on a thick frame only the 14 px target toggles (the outer band is click-through, like the rest of the band); frames of 11-14 px move the handle 0.5-2 px toward the body edge; `T <= 10` renders byte-identically to before the change. Hover-only and all-off panels keep an invisible inert button over the inner 14 px of the extended body. Reload: a `panel-handle` change kind, applied in place (`EdgePanel.set_handle`); theme handle changes are a restyle; `-v` shows `building panel ...` for every panel built and the change kinds of every reload.
+
+**Results.** Gate A (Phil, the PNG sheets): passed; defaults accepted (size 15, weight 3; at `T = 10` the chevron rises 3 px and is 6 px across); the chevron folds through a flat bar and reads fine at this height. Phil's answers to the open questions: 1, 2, 4, 5 and 6 as recommended (handle in the panel window; `auto` default; canonical snap; the handle lights up while peeking and all-off is allowed with one INFO line; a theme-level shape never draws on an all-off panel); 3: the fold kept, with the handle away from the band edges (2 px clear at the default theme), default thickness unchanged. Gate B (Phil, live on HDMI-A-1): passed. `--stats 10` on `examples/handles-test.toml`: 56.7 fps while animating; canvas damaged draws median 0.26 ms, p95 0.48 ms, max 0.56 ms; one full draw 1.55 ms; CPU 0.23 of a core; ticks between canvas draws: every panel 550-551 in step, 1-2 idle redraws, none skipped. The startup log showed the all-off INFO line and the `building panel` debug lines. The all-off panel (all three interactions false) drew nothing and was click-through. In-place edits, theme-level changes, invalid-shape rejection, the border and the thin frame items (including `thickness = 6`): no problems reported. At `thickness = 64` the handle was mid-body, mid-band and oversized (fixed, see above; the 64 px sheet looked good). Raise-off record run (`EDGE_SHELL_RAISE_MS=0`): done by Phil, who said it worked as expected, i.e. the collapsed handles are hidden, as at Plan 1 Gate 1; whether the extended content (dock icons, clock text, bar labels) stayed visible with the raise off was not recorded, so the delayed re-raise stays (decision 1) on the existing evidence.
 
 ## 16. Implemented: several panels on one edge (layout and separation)
 
