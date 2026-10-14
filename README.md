@@ -249,9 +249,10 @@ file.
   watches the file it points to, so window changes and edits of that file reload the shell.
 
 **Keyboard shortcut (KDE):** System Settings > Keyboard > Shortcuts > Add New > Command or
-Script, command `/home/phil/Projects/pyDev/projects/myShell/scripts/py
-/home/phil/Projects/pyDev/projects/myShell/main.py --settings`, then assign a key
-(suggested: Meta+Alt+E; any free key works).
+Script, command `/path/to/edge-shell/scripts/py /path/to/edge-shell/main.py --settings` on one
+line, with `/path/to/edge-shell` replaced by the folder of your checkout (it must contain
+`scripts/py`; check with `ls /path/to/edge-shell/scripts/py`). Append `--config FILE` if the
+shell runs on another config. Then assign a key (suggested: Meta+Alt+E; any free key works).
 
 `plasma` and `none` both leave a monitor to Plasma for now: hiding or showing Plasma's own
 panel from the window is deferred (it needs the Plasma integration, spec section 7).
