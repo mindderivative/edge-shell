@@ -315,10 +315,13 @@ class FieldRow(Gtk.Box):
         self.connect("destroy", lambda *_a: self._cancel())  # a stale timer must not write
 
     def show_value(self, value: FieldValue, keep_pending: bool = False) -> None:
-        """Show `value`. With `keep_pending` a row holding an edit that is not applied yet (a
-        debounced spin value, typed text) only updates its source, reset and error, so that
-        refreshing every row after another row's apply never drops it."""
+        """Show `value` and clear the error. With `keep_pending` (refreshing every row after
+        another row's apply) the error stays, and a row holding an edit that is not applied yet
+        (a debounced spin value, typed text) only updates its source and reset, so that the
+        refresh never drops it."""
         self._shown = value.value
+        if not keep_pending:
+            self.show_error(None)
         if keep_pending and (self._timer or self.editor.dirty()):
             self._show_note(value)
             return
@@ -337,7 +340,6 @@ class FieldRow(Gtk.Box):
         note = value.source if not self.spec.hint else f"{self.spec.hint} · {value.source}"
         self.source.set_text(note)
         self.reset.set_sensitive(value.is_set and self.spec.kind != "widget")
-        self.show_error(None)
 
     def show_error(self, message: str | None) -> None:
         self.error.set_text(message or "")

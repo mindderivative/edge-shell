@@ -187,7 +187,8 @@ class SettingsView(Gtk.Box):
     def refresh(self) -> None:
         """Show the session's current values in every row (no rebuild: focus is kept). A row
         holding an edit that is not applied yet keeps it (`keep_pending`): another row's apply
-        must neither drop a pending spin value nor reset a typed font list."""
+        must neither drop a pending spin value nor reset a typed font list, nor clear a row's
+        "Not saved" error (apply() clears the error of the row whose edit went through)."""
         config, user = self.config, self.session.user
         for row in self.rows:
             row.show_value(field_value(config, user, row.path), keep_pending=True)
@@ -220,10 +221,15 @@ class SettingsView(Gtk.Box):
         except ConfigError as exc:
             self.save_failed = True
             if row is not None:
+                # the row goes back to the value in effect at once (the refused value is in no
+                # file); the error stays until this row's own next edit or reset
+                row.show_value(field_value(self.config, self.session.user, row.path))
                 row.show_error(f"Not saved: {exc}")
             else:
                 self.show_banner(f"Not saved: {exc}")
             return False
+        if row is not None:
+            row.show_error(None)  # its own edit or reset went through
         self.hide_banner()
         if structural:
             self._rebuild_soon()

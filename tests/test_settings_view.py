@@ -440,3 +440,37 @@ def test_undo_is_insensitive_after_a_rebuild_with_no_history(make):
     path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')  # invalid: no refresh runs
     view.file_changed()
     assert not view.session.history and not view.undo_button.get_sensitive()
+
+
+MIN_LENGTH, MAX_LENGTH = (*P0, "min_length"), (*P0, "max_length")
+
+
+def type_into(view, path, value):
+    """A user edit of a spin row: the value typed, then its 400 ms pause over."""
+    r = row(view, path)
+    r.editor.widget.set_value(value)
+    r.flush()
+    return r
+
+
+def test_a_refused_edit_snaps_back_and_another_rows_reset_leaves_its_row_alone(make):
+    """Gate A item 10: min_length 600, max_length 300 refused, then min_length's reset. The
+    refused row shows the value in effect at once (not the refused 300 until some other row's
+    apply happens to refresh it) and keeps its error until its own next edit or reset."""
+    view, path = make()
+    type_into(view, MIN_LENGTH, 600)
+    refused = type_into(view, MAX_LENGTH, 300)
+    assert "max_length" not in path.read_text()
+    assert (
+        refused.error.get_visible() and "min_length must not be larger" in refused.error.get_text()
+    )
+    shown = (refused.editor.widget.get_value(), refused.source.get_text())
+    assert shown == (60, "px · not set")  # max_length is not set: never the refused 300
+
+    view._on_reset(MIN_LENGTH)
+    assert "min_length" not in path.read_text()
+    assert (refused.editor.widget.get_value(), refused.source.get_text()) == shown
+    assert refused.error.get_visible()  # still true: the 300 was not saved
+
+    type_into(view, MAX_LENGTH, 300)  # the same value again, valid now: written
+    assert "max_length = 300" in path.read_text() and not refused.error.get_visible()
