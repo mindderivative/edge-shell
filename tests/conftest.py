@@ -48,3 +48,15 @@ def fake_registry(monkeypatch):
         PanelDefaults(edge="right", length=300, depth=56, pos=600, label="bar", state="collapsed"),
     )(type("Bar", (), {}))
     return registry
+
+
+@pytest.fixture
+def corner_registry(fake_registry):
+    """fake_registry plus a corner widget "box" (spec 19): bottom-left, 300 x 390, opening from
+    the bottom edge (its default), extended."""
+    from shell.panel_spec import CornerDefaults
+
+    fake_registry.register(
+        "box", CornerDefaults(corner="bottom-left", width=300, height=390, label="box")
+    )(type("Box", (), {}))
+    return fake_registry
