@@ -153,7 +153,11 @@ class EdgeShellApp:
 
     def refresh_css(self) -> None:
         if self.app is not None:
-            self.app.set_stylesheet_from_string(self.css(), compile=False)
+            # never empty: with no Edge Shell monitor css() is "", and Fabric's
+            # load_from_data(bytearray(b"")) hands GTK a NULL pointer (Gtk-CRITICAL
+            # 'data != NULL'). A comment replaces the old provider just the same.
+            css = self.css() or "/* no Edge Shell monitor */"
+            self.app.set_stylesheet_from_string(css, compile=False)
 
     def start_watching(self) -> None:
         path = self.store.path
@@ -335,7 +339,7 @@ class EdgeShellApp:
         # owned (Gtk.Application), so _already_running still sees a running shell.
         self.app = Application(APP_NAME, *self._early, open_client=False)
         self._early.clear()
-        self.app.set_stylesheet_from_string(self.css(), compile=False)
+        self.refresh_css()
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)
         self.start_watching()
         self.watch_displays()

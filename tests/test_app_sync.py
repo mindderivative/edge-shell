@@ -631,3 +631,25 @@ def test_all_off_panels_are_logged_once_per_load(renv, caplog):
         "panels with click, hover and drag all off (these panels open only through state): "
         "monitors.HDMI-A-1.panels.1"
     ]
+
+
+class StyledFabricApp(FakeFabricApp):
+    def __init__(self):
+        super().__init__()
+        self.stylesheets = []
+
+    def set_stylesheet_from_string(self, css, compile=True):
+        self.stylesheets.append(css)
+
+
+def test_the_last_edge_monitor_leaving_never_loads_an_empty_stylesheet(env, make_config):
+    """Gate A item 9: HDMI-A-1 edge -> plasma left no shell, css() was "", and Fabric's
+    load_from_data(bytearray(b"")) hands GTK a NULL pointer: Gtk-CRITICAL 'data != NULL'."""
+    app, mapping = env
+    app.app = StyledFabricApp()
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "plasma"}})
+    app.sync_monitors()
+    assert app.shells == {} and len(app.app.stylesheets) == 2
+    assert all(css.strip() for css in app.app.stylesheets)
