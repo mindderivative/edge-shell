@@ -234,7 +234,9 @@ file.
   the window opened, or after your last hand edit. Before its first change the window copies
   the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
   that copy back (the replaced file is kept as `config.toml.before-restore`, or `.2`, `.3`, ...
-  after an earlier restore).
+  after an earlier restore). A hand edit that left the file invalid is not a starting point:
+  Revert all then returns to the last valid state and keeps the invalid text as
+  `config.toml.before-revert` (`.2`, `.3`, ... for later ones); the dialog says so.
 - Your comments and formatting are kept: the window edits the file in place (tomlkit) and
   refuses a change it could not make without touching other keys or without losing a comment
   that sits above a table (`[monitors.DP-1]` and the like): edit the file by hand then. A
@@ -243,7 +245,8 @@ file.
   directly above a `[[panels]]` entry are its label: they move and are removed with that
   panel. Adding a panel to an inline `panels = [{ ... }]` list is refused (add it by hand).
   If you edit the file by hand while the window is open, it re-reads it and tells you; it
-  never writes over a hand edit, and Revert all keeps it. An invalid file opens read-only with
+  never writes over a hand edit, and Revert all never goes back past a valid one (an invalid
+  one it replaces is saved as `.before-revert`). An invalid file opens read-only with
   the error until it is fixed; a folder it cannot write to is reported in the window.
 - A symlinked config (for example from a dotfiles repository) keeps its link; the shell also
   watches the file it points to, so window changes and edits of that file reload the shell.

@@ -508,3 +508,15 @@ def test_a_rebuild_cancels_the_old_rows_pending_values_at_once(make, pending):
     path.write_text(USER.replace('"edge"', '"both"'))
     view.file_changed()  # a hand edit: rebuild, pending values go with the old rows
     assert not old._timer
+
+
+def test_the_revert_dialog_says_where_an_invalid_hand_edit_is_kept(make):
+    view, path = make()
+    assert "before-revert" not in view.revert_text()
+    path.write_text(USER + "[monitors.DP-2]\nmode = 'edgee'\n")
+    view.file_changed()  # a hand edit with a typo: read-only banner, Revert all enabled
+    assert "config.toml.before-revert" in view.revert_text()
+    view.revert()
+    assert path.read_text() == USER
+    assert path.with_name("config.toml.before-revert").read_text().endswith("'edgee'\n")
+    assert "before-revert" not in view.revert_text()

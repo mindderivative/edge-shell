@@ -336,6 +336,20 @@ class SettingsView(Gtk.Box):
                 self._rebuild_due = False
                 self.rebuild()
 
+    def revert_text(self) -> str:
+        """What the Revert all dialog says is about to happen."""
+        text = (
+            f"{self.session.path} goes back to how it was when the window opened (or after "
+            "your last valid hand edit)."
+        )
+        if self.session.keeps_hand_edit():
+            name = self.session.path.name
+            text += (
+                f"\n\nThe file as it is now (your hand edit, which is not valid) is kept as "
+                f"{name}.before-revert next to it."
+            )
+        return text
+
     def _confirm_revert(self) -> None:
         dialog = Gtk.MessageDialog(
             transient_for=self.get_toplevel(),
@@ -344,10 +358,7 @@ class SettingsView(Gtk.Box):
             buttons=Gtk.ButtonsType.OK_CANCEL,
             text="Revert every change made in this window?",
         )
-        dialog.format_secondary_text(
-            f"{self.session.path} goes back to how it was when the window opened (or when it "
-            "was last changed by hand)."
-        )
+        dialog.format_secondary_text(self.revert_text())
         answer = dialog.run()
         dialog.destroy()
         if answer == Gtk.ResponseType.OK:

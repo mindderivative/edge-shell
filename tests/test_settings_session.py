@@ -281,3 +281,95 @@ def test_a_file_invalid_at_open_can_be_fixed_by_hand_then_reverted(path):
     s.apply(lambda d: d.set(DEPTH, 80))
     s.revert()
     assert path.read_text() == USER
+
+
+HAND = USER + "# new hand work\n[monitors.DP-2]\nmode = 'edgee'\n"  # one typo: invalid
+
+
+def kept(path):
+    return sorted(p.name for p in path.parent.iterdir() if "before-revert" in p.name)
+
+
+def test_revert_keeps_an_invalid_hand_edit_as_before_revert(path):
+    """Reviewer's probe: open on valid A, hand-edit new work with a typo, Revert all."""
+    s = SettingsSession(path)
+    path.write_text(HAND)
+    s.rebase()
+    assert s.config is None and s.keeps_hand_edit()
+    s.revert()
+    assert path.read_text() == USER
+    assert kept(path) == ["config.toml.before-revert"]
+    copy = path.with_name("config.toml.before-revert")
+    assert copy.read_bytes() == HAND.encode()
+    assert not path.with_name("config.toml.bak").exists()  # no edit this session: no .bak
+
+
+def test_a_second_revert_numbers_the_copy(path):
+    s = SettingsSession(path)
+    for n in (1, 2):
+        text = HAND + f"# take {n}\n"
+        path.write_text(text)
+        s.rebase()
+        s.revert()
+        assert path.read_text() == USER
+    assert kept(path) == ["config.toml.before-revert", "config.toml.before-revert.2"]
+    assert path.with_name("config.toml.before-revert.2").read_text().endswith("# take 2\n")
+
+
+def test_the_copy_has_the_files_mode(path):
+    path.chmod(0o600)
+    s = SettingsSession(path)
+    path.write_text(HAND)
+    s.rebase()
+    s.revert()
+    assert (path.with_name("config.toml.before-revert").stat().st_mode & 0o777) == 0o600
+
+
+def test_a_valid_hand_edit_is_the_baseline_and_needs_no_copy(path):
+    s = SettingsSession(path)
+    path.write_text(USER + "# valid hand work\n")
+    s.rebase()
+    assert not s.keeps_hand_edit()
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.revert()
+    assert path.read_text() == USER + "# valid hand work\n" and kept(path) == []
+
+
+def test_window_edits_replaced_by_revert_need_no_copy(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    assert not s.keeps_hand_edit()
+    s.revert()
+    assert kept(path) == [] and path.read_text() == USER
+
+
+def test_a_failing_copy_blocks_the_revert_and_leaves_the_file(path, monkeypatch):
+    s = SettingsSession(path)
+    path.write_text(HAND)
+    s.rebase()
+
+    def boom(*_a, **_k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(files, "keep_before_revert", boom)
+    with pytest.raises(ConfigError, match="cannot write"):
+        s.revert()
+    assert path.read_text() == HAND and kept(path) == []
+    monkeypatch.undo()
+    s.revert()  # the user can try again
+    assert path.read_text() == USER
+
+
+def test_an_unwritable_folder_blocks_the_revert_of_a_hand_edit(path):
+    if os.geteuid() == 0:
+        pytest.skip("root can write into a read-only folder")
+    s = SettingsSession(path)
+    path.write_text(HAND)
+    s.rebase()
+    os.chmod(path.parent, 0o500)
+    try:
+        with pytest.raises(ConfigError, match="cannot write"):
+            s.revert()
+    finally:
+        os.chmod(path.parent, 0o700)
+    assert path.read_text() == HAND and kept(path) == []

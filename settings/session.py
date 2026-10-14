@@ -123,10 +123,17 @@ class SettingsSession:
         self.reload()
         return True
 
+    def keeps_hand_edit(self) -> bool:
+        """True when Revert all would replace an invalid hand edit (it has no valid baseline
+        of its own), which is then kept as config.toml.before-revert."""
+        return self.config is None and self.text != self.start_text
+
     def revert(self) -> None:
         """Back to the file as it was when the session started, or when it was last changed
-        by hand (no validation: it was the file on disk). Refused, with ChangedOutside, when
-        the file was changed by hand since the last read: that hand edit becomes the start."""
+        by hand (no validation: it was the file on disk). An invalid hand edit being replaced is
+        first kept as config.toml.before-revert (if that cannot be written, nothing changes).
+        Refused, with ChangedOutside, when the file was changed by hand since the last read:
+        that hand edit becomes the start."""
         if self.changed_outside():
             self.rebase()
             raise ChangedOutside(
@@ -134,6 +141,8 @@ class SettingsSession:
                 "change (it is the new starting point)"
             )
         if self.start_text != self.text:
+            if self.keeps_hand_edit():  # the only copy of that text: keep it first
+                self._write_file(lambda: files.keep_before_revert(self.path))
             self._write_file(lambda: files.write_atomic(self.path, self.start_text))
         self.history.clear()
         self.reload()

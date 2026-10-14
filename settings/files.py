@@ -105,6 +105,16 @@ def _free_name(path: Path) -> Path:
     return candidate
 
 
+def keep_before_revert(path: Path) -> Path:
+    """Copy the current file, byte for byte and with its mode, to config.toml.before-revert
+    (.2, .3, ... when one exists: never overwritten), before Revert all replaces a hand edit.
+    Returns the copy's path."""
+    target = path.resolve()
+    kept = _free_name(target.with_name(target.name + ".before-revert"))
+    write_atomic(kept, target.read_bytes(), mode=stat.S_IMODE(target.stat().st_mode))
+    return kept
+
+
 def restore_backup(path: Path) -> str:
     """Put config.toml.bak back in place. The current file is kept first as
     config.toml.before-restore (config.toml.before-restore.2, .3, ... when an earlier restore

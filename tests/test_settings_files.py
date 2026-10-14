@@ -229,3 +229,13 @@ def test_a_non_utf8_file_backs_up_and_restores(tmp_path):
     path.write_bytes(b"x\n")
     files.restore_backup(path)
     assert path.read_bytes() == data
+
+
+def test_keep_before_revert_copies_with_the_mode_and_numbers(tmp_path):
+    target = tmp_path / "config.toml"
+    target.write_bytes(b"a\r\nb")
+    target.chmod(0o600)
+    first = files.keep_before_revert(target)
+    second = files.keep_before_revert(target)
+    assert first.name == "config.toml.before-revert" and second.name == first.name + ".2"
+    assert first.read_bytes() == b"a\r\nb" and (first.stat().st_mode & 0o777) == 0o600
