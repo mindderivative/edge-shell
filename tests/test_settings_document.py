@@ -304,24 +304,81 @@ shell = "plasma"
 """
 
 
+def test_an_edit_that_would_lose_a_comment_above_a_table_is_refused():
+    """tomlkit keeps the comment lines above a header in the table before it: removing that
+    whole table would delete the next table's label with it (the comment census)."""
+    text = "# t\n[theme]\na = 1\n\n# l\n[layout]\ngap = 1\n"
+    doc = UserDocument(text)
+    with pytest.raises(DocumentError, match="losing the comment '# l'.*by hand"):
+        doc.unset(("theme",))
+    assert doc.text == text
+
+
+# ---- resetting a table's only key ------------------------------------------------------------
 @pytest.mark.parametrize(
-    "text, edit, comment",
+    "text, path, expected",
     [
-        (COMMENTED, lambda d: d.unset(("layout", "gap")), "# the test monitor"),
-        (  # the end of the file counts like a header
-            '[theme]\naccent = "#111111"\n\n[layout]\ngap = 4\n# vim: ft=toml\n',
-            lambda d: d.unset(("layout", "gap")),
-            "# vim: ft=toml",
+        (
+            COMMENTED,
+            ("layout", "gap"),
+            COMMENTED.replace("# wide gaps on purpose\n[layout]\ngap = 4\n\n", ""),
+        ),
+        (  # the end of the file
+            '[theme]\naccent = "#111111"\n\n# gaps\n[layout]\ngap = 4\n# vim: ft=toml\n',
+            ("layout", "gap"),
+            '[theme]\naccent = "#111111"\n\n# vim: ft=toml\n',
+        ),
+        (  # a monitor's theme override
+            '[monitors.X]\nshell = "edge"\n\n# X theme\n[monitors.X.theme]\naccent = "#ffffff"\n'
+            '\n# the Y screen\n[monitors.Y]\nshell = "edge"\n',
+            ("monitors", "X", "theme", "accent"),
+            '[monitors.X]\nshell = "edge"\n\n# the Y screen\n[monitors.Y]\nshell = "edge"\n',
+        ),
+        (  # a table known only from dotted keys under a [monitors] header
+            '[theme]\naccent = "#111111"\n\n# all screens\n[monitors]\nX.theme.accent = 1\n# end\n',
+            ("monitors", "X", "theme", "accent"),
+            '[theme]\naccent = "#111111"\n\n# end\n',
+        ),
+        (  # a comment at the top of the file may be the file's head comment: it stays
+            '# my config\n[layout]\ngap = 4\n\n# colours\n[theme]\naccent = "#111111"\n',
+            ("layout", "gap"),
+            '# my config\n\n# colours\n[theme]\naccent = "#111111"\n',
+        ),
+        (  # a panel entry's sub-table (found inside that entry, not the other one's)
+            '[[monitors.X.panels]]\nwidget = "a"\n\n# a handle\n[monitors.X.panels.handle]\n'
+            'shape = "pill"\n\n# b\n[[monitors.X.panels]]\nwidget = "b"\n\n# b handle\n'
+            '[monitors.X.panels.handle]\nshape = "bar"\n\n# the Y screen\n[monitors.Y]\n'
+            'shell = "edge"\n',
+            ("monitors", "X", "panels", -1, "handle", "shape"),
+            '[[monitors.X.panels]]\nwidget = "a"\n\n# a handle\n[monitors.X.panels.handle]\n'
+            'shape = "pill"\n\n# b\n[[monitors.X.panels]]\nwidget = "b"\n\n# the Y screen\n'
+            '[monitors.Y]\nshell = "edge"\n',
+        ),
+        (  # no label, at the top of the file: no leading blank line
+            '[layout]\ngap = 4\n\n# colours\n[theme]\naccent = "#111111"\n',
+            ("layout", "gap"),
+            '# colours\n[theme]\naccent = "#111111"\n',
         ),
     ],
 )
-def test_an_edit_that_would_lose_a_comment_above_a_table_is_refused(text, edit, comment):
-    """tomlkit keeps the comment lines above a header (or at the end of the file) in the table
-    before it: pruning [layout] would delete them with it (the comment census)."""
+def test_resetting_a_tables_only_key_drops_its_header_and_own_label(text, path, expected):
+    """The emptied table's header goes with its own label; the next table's label stays (this
+    used to be refused for the next table's label, which tomlkit keeps in the emptied table)."""
     doc = UserDocument(text)
-    with pytest.raises(DocumentError, match=f"losing the comment '{comment}'.*by hand"):
-        edit(doc)
-    assert doc.text == text
+    doc.unset(path)
+    assert doc.text == expected
+
+
+def test_resetting_the_only_key_of_a_monitor_split_across_the_file_keeps_the_next_label():
+    """[monitors.X] still holds the panels further down: its header stays (empty), and the
+    label of the table after it is kept (tomlkit used to drop the emptied part with it)."""
+    text = (
+        '# lx\n[monitors.X]\nshell = "edge"\n\n# ly\n[monitors.Y]\nshell = "e"\n\n'
+        '# xp\n[[monitors.X.panels]]\nwidget = "a"\n'
+    )
+    doc = UserDocument(text)
+    doc.unset(("monitors", "X", "shell"))
+    assert doc.text == text.replace('shell = "edge"\n', "")
 
 
 def test_comments_inside_a_removed_entry_may_go():
@@ -450,13 +507,99 @@ def test_the_first_panel_of_a_monitor_goes_below_its_tables_not_below_the_next_l
     assert doc.data["monitors"]["DP-1"] == {"shell": "plasma", "panels": [{"widget": "dock"}]}
 
 
+# a comment block separated from a header by a blank line belongs to the place, not the entry
+HEAD_COMMENT = """\
+# edge-shell config, written by Phil
+# see README
+
+[[monitors.DP-1.panels]]
+widget = "dock"
+
+[[monitors.DP-1.panels]]
+widget = "clock"
+"""
+
+BANNER = """\
+[theme]
+accent = "#ffffff"
+
+# ---- DP-1: the left screen ----
+
+# the dock
+[[monitors.DP-1.panels]] # 0: dock
+widget = "dock"
+
+# the clock
+[[monitors.DP-1.panels]] # 1: clock
+widget = "clock"
+
+# the bar
+[[monitors.DP-1.panels]] # 2: bar
+widget = "bar"
+"""
+
+
+def _entry(widget, label=None, note=""):
+    return (f"# the {widget}\n" if label else "") + (
+        f'[[monitors.DP-1.panels]]{note}\nwidget = "{widget}"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "edit, expected",
+    [
+        (
+            lambda d: d.remove_panel("DP-1", 0),
+            "# edge-shell config, written by Phil\n# see README\n\n" + _entry("clock"),
+        ),
+        (
+            lambda d: d.move_panel("DP-1", 0, 1),
+            "# edge-shell config, written by Phil\n# see README\n\n"
+            + _entry("clock")
+            + "\n"
+            + _entry("dock"),
+        ),
+        (lambda d: d.add_panel("DP-1", "bar"), HEAD_COMMENT + "\n" + _entry("bar")),
+    ],
+)
+def test_the_comment_at_the_head_of_the_file_stays_there(edit, expected):
+    text, _ = edited(edit, HEAD_COMMENT)
+    assert text == expected
+
+
+@pytest.mark.parametrize(
+    "edit, expected",
+    [
+        (
+            lambda d: d.remove_panel("DP-1", 0),
+            BANNER.replace(
+                '# the dock\n[[monitors.DP-1.panels]] # 0: dock\nwidget = "dock"\n\n', ""
+            ),
+        ),
+        (
+            lambda d: d.move_panel("DP-1", 0, 2),
+            '[theme]\naccent = "#ffffff"\n\n# ---- DP-1: the left screen ----\n\n'
+            + _entry("clock", True, " # 1: clock")
+            + "\n"
+            + _entry("bar", True, " # 2: bar")
+            + "\n"
+            + _entry("dock", True, " # 0: dock"),
+        ),
+        (lambda d: d.add_panel("DP-1", "clock"), BANNER + "\n" + _entry("clock")),
+    ],
+)
+def test_a_banner_above_a_label_stays_in_place(edit, expected):
+    text, _ = edited(edit, BANNER)
+    assert text == expected
+
+
 def test_the_comment_at_the_end_of_the_file_stays_at_the_end():
     text = '[[monitors.X.panels]]\nwidget = "dock"\n\n[[monitors.X.panels]]\nwidget = "clock"\n'
     doc = UserDocument(text + "# vim: ft=toml\n")
     doc.move_panel("X", 1, 0)
     assert doc.text.endswith('widget = "dock"\n# vim: ft=toml\n')
-    doc.remove_panel("X", 1)
-    assert doc.text.endswith('widget = "clock"\n# vim: ft=toml\n')
+    doc.remove_panel("X", 1)  # the blank line above the removed entry is its place's: it stays
+    assert doc.text.endswith('widget = "clock"\n\n# vim: ft=toml\n')
 
 
 # ---- removing the last panel of a monitor ----------------------------------------------------
@@ -477,6 +620,65 @@ def test_the_comment_at_the_end_of_the_file_stays_at_the_end():
 def test_removing_the_last_panel_of_a_monitor_with_only_panels_removes_the_monitor(text, expected):
     _, data = edited(lambda d: d.remove_panel("X", 0), text)
     assert data == expected
+
+
+_THEME = "[theme]\naccent = 1\n\n"
+_NEXT = '\n# the Y screen\n[monitors.Y]\nshell = "edge"\n'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _THEME + '# the X screen\n[monitors.X]\n\n[[monitors.X.panels]]\nwidget = "a"\n' + _NEXT,
+        _THEME + '# the X screen\n[monitors.X]\npanels = [{ widget = "a" }]\n' + _NEXT,  # inline
+    ],
+)
+def test_an_emptied_monitor_goes_with_its_own_label_and_keeps_the_next_one(text):
+    text, data = edited(lambda d: d.remove_panel("X", 0), text)
+    assert data == {"theme": {"accent": 1}, "monitors": {"Y": {"shell": "edge"}}}
+    assert text == _THEME + _NEXT[1:]
+
+
+def test_an_emptied_inline_monitor_at_the_end_of_the_file_takes_its_label():
+    text = '[monitors.Y]\nshell = "edge"\n\n# the X screen\n[monitors.X]\n'
+    text += 'panels = [{ widget = "a" }]\n'
+    text, _ = edited(lambda d: d.remove_panel("X", 0), text)
+    assert text == '[monitors.Y]\nshell = "edge"\n'
+
+
+@pytest.mark.parametrize(
+    "text, edit, expected",
+    [
+        (  # the first entry at the top of the file: no leading blank line
+            '[[monitors.X.panels]]\nwidget = "a"\n\n[[monitors.X.panels]]\nwidget = "b"\n',
+            lambda d: d.remove_panel("X", 0),
+            '[[monitors.X.panels]]\nwidget = "b"\n',
+        ),
+        (  # a monitor with only panels at the top of the file
+            '# the dock\n[[monitors.X.panels]]\nwidget = "dock"\n\n# theme\n[theme]\naccent = 1\n',
+            lambda d: d.remove_panel("X", 0),
+            "# theme\n[theme]\naccent = 1\n",
+        ),
+        (  # a file of only comments: the entry goes below them
+            "# my config\n# nothing yet\n",
+            lambda d: d.add_panel("X", "dock"),
+            '# my config\n# nothing yet\n\n[[monitors.X.panels]]\nwidget = "dock"\n',
+        ),
+        (  # the new entry copies the blank line above the last one, not the head comment
+            '# my config\n\n[[monitors.X.panels]]\nwidget = "a"\n',
+            lambda d: d.add_panel("X", "b"),
+            '# my config\n\n[[monitors.X.panels]]\nwidget = "a"\n\n[[monitors.X.panels]]\n'
+            'widget = "b"\n',
+        ),
+        (  # a spaced header is copied as written (tomlkit reads a file back only then)
+            '[[ monitors.X.panels ]]\nwidget = "a"\n',
+            lambda d: d.add_panel("X", "b"),
+            '[[ monitors.X.panels ]]\nwidget = "a"\n[[ monitors.X.panels ]]\nwidget = "b"\n',
+        ),
+    ],
+)
+def test_panel_edits_leave_a_tidy_file(text, edit, expected):
+    assert edited(edit, text)[0] == expected
 
 
 # ---- layouts that used to crash or be refused ------------------------------------------------
@@ -537,6 +739,78 @@ def test_an_edit_through_a_scalar_or_an_inline_table_is_a_document_error(text, e
     with pytest.raises(DocumentError):
         edit(doc)
     assert doc.text == text
+
+
+WRITTEN_BY_HAND = "this edit cannot be written in place; edit the file by hand"
+NESTED_ARRAY = (
+    '[[monitors.X.panels]]\nwidget = "a"\ntags = [\n  ["x"]\n]\n\n'
+    '[[monitors.X.panels]]\nwidget = "b"\n'
+)
+
+
+@pytest.mark.parametrize(
+    "text, edit, message",
+    [
+        (
+            'monitors = { X = { shell = "edge" } }\n',
+            lambda d: d.add_panel("X", "dock"),
+            WRITTEN_BY_HAND,
+        ),
+        (
+            'monitors = { X = { shell = "edge" } }\n',
+            lambda d: d.add_panel("Y", "dock"),
+            WRITTEN_BY_HAND,
+        ),
+        (NESTED_ARRAY, lambda d: d.move_panel("X", 1, 0), WRITTEN_BY_HAND),
+        (NESTED_ARRAY, lambda d: d.remove_panel("X", 0), WRITTEN_BY_HAND),
+        (  # the result is valid TOML that tomlkit cannot read back (the next edit would fail)
+            '[[monitors.X.panels]]\nwidget = "a"\n\n[extra]\nx = 1\n\n'
+            '[[monitors."X".panels]]\nwidget = "b"\n',
+            lambda d: d.unset(("extra", "x")),
+            WRITTEN_BY_HAND,
+        ),
+        (
+            '[theme]\naccent = "#111111"\n',
+            lambda d: d.set(("theme", "accent", "x"), 1),
+            "theme.accent is a value, not a table: edit the file by hand",
+        ),
+        (
+            "[monitors.X]\npanels = 3\n",
+            lambda d: d.add_panel("X", "dock"),
+            "monitors.X.panels is a value, not a table: edit the file by hand",
+        ),
+        (
+            "[monitors.X]\npanels = 3\n",
+            lambda d: d.remove_panel("X", 0),
+            "monitors.X.panels is a value, not a table: edit the file by hand",
+        ),
+        (
+            "[monitors.X]\npanels = 3\n",
+            lambda d: d.move_panel("X", 0, 1),
+            "monitors.X.panels is a value, not a table: edit the file by hand",
+        ),
+    ],
+)
+def test_refusals_say_what_to_do(text, edit, message):
+    doc = UserDocument(text)
+    with pytest.raises(DocumentError) as caught:
+        edit(doc)
+    assert str(caught.value) == message
+    assert doc.text == text
+
+
+# ---- CRLF ------------------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda d: d.set(("layout", "gap"), 3),
+        lambda d: d.set(("theme", "accent"), 2),
+        lambda d: d.add_panel("X", "dock"),
+    ],
+)
+def test_a_crlf_file_without_a_trailing_newline_stays_so(edit):
+    text, _ = edited(edit, "[theme]\r\naccent = 1")
+    assert not text.endswith("\n")
 
 
 def test_a_new_nested_key_under_an_inline_table_is_refused_clearly():

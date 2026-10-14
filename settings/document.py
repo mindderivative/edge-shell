@@ -8,10 +8,15 @@ means something else. Any failure inside tomlkit is a DocumentError too; the doc
 left unchanged.
 
 Panel entries ([[monitors.X.panels]]) are moved, removed and added on the text itself, entry by
-entry: an entry is its header, its body and its sub-tables, plus its label, the whole-line
-comments directly above its header. A moved entry takes its label with it, a removed entry takes
-only its own label, and an added entry goes below the last one (or below the monitor's last
-table), never between a comment and the header it labels. Blank lines stay where they were.
+entry: an entry is its header, its body and its sub-tables, plus its label, the run of
+whole-line comments directly above its header (no blank line in between). A moved entry takes
+its label with it, a removed entry takes only its own label, and an added entry goes below the
+last one (or below the monitor's last table), never between a comment and the header it labels.
+Blank lines, and comment blocks separated from a header by a blank line (a file's head comment,
+a section banner), belong to the place: they stay where they were.
+
+A table emptied by an edit (the last panel of a monitor removed, the only key of a table reset)
+loses its header line together with the header's own label; the next table's label stays.
 
 Known and accepted (decision 2): a key added at the end of a table lands between a comment and
 the next header; a CRLF file may get "\n" endings on the lines tomlkit writes; a comment inside
@@ -47,6 +52,8 @@ UNREADABLE = (
     "this file's layout cannot be edited in place by the settings window (valid TOML, but "
     "tomlkit cannot read it); edit it by hand"
 )
+# an edit of a readable file whose result tomlkit cannot write or read back
+UNWRITABLE = "this edit cannot be written in place; edit the file by hand"
 
 
 class DocumentError(ConfigError):
@@ -90,12 +97,21 @@ class UserDocument:
     # ---- edits ---------------------------------------------------------------------------
     def set(self, path: Path_, value: Any) -> None:
         self._edit(
-            _in_doc(lambda doc: _set(doc, path, value)), lambda data: _plain_set(data, path, value)
+            _in_doc(lambda doc: _set(doc, path, value)),
+            lambda data: _plain_set(data, path, value),
+            path,
         )
 
     def unset(self, path: Path_) -> None:
-        """Remove the key (the value is inherited again) and any table left empty by it."""
-        self._edit(_in_doc(lambda doc: _unset(doc, path)), lambda data: _plain_unset(data, path))
+        """Remove the key (the value is inherited again) and any table left empty by it (an
+        emptied table's header goes with its own label)."""
+        may_lose: Counter[str] = Counter()
+        self._edit(
+            lambda text: _unset_text(text, self._data, path, may_lose),
+            lambda data: _plain_unset(data, path),
+            path,
+            may_lose,
+        )
 
     def add_panel(self, monitor: str, widget: str) -> int:
         """Append a panel entry with only its widget (every other key from the widget's
@@ -103,6 +119,7 @@ class UserDocument:
         self._edit(
             lambda text: _add_panel_text(text, self._data, monitor, widget),
             lambda data: _plain_panels(data, monitor, create=True).append({"widget": widget}),
+            (*_panel_path(monitor), 0),
         )
         return len(self._data["monitors"][monitor]["panels"]) - 1
 
@@ -112,6 +129,7 @@ class UserDocument:
         self._edit(
             lambda text: _remove_panel_text(text, self._data, monitor, index, may_lose),
             lambda data: _plain_remove_panel(data, monitor, index),
+            (*_panel_path(monitor), index),
             may_lose,
         )
 
@@ -122,34 +140,44 @@ class UserDocument:
             panels = _plain_panels(data, monitor)
             panels.insert(to, panels.pop(index))
 
-        self._edit(lambda text: _move_panel_text(text, self._data, monitor, index, to), plain)
+        self._edit(
+            lambda text: _move_panel_text(text, self._data, monitor, index, to),
+            plain,
+            (*_panel_path(monitor), index),
+        )
 
     def _edit(
         self,
         on_text: Callable[[str], str],
         on_data: Callable[[dict], None],
+        path: Path_,
         may_lose: Counter[str] | None = None,
     ) -> None:
         """Apply on_text to the text and on_data to the plain data; keep the result only when
         both agree and no comment above a table is lost (except those in `may_lose`, filled
-        by on_text: a removed entry's own comments)."""
+        by on_text: a removed entry's or emptied table's own comments). `path` is what the
+        edit goes through, to name a value standing where a table should be."""
         expected = copy.deepcopy(self._data)
         try:
             on_data(expected)
-        except (KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise DocumentError(f"cannot edit the config: no such key or entry ({exc})") from None
+        except (TypeError, AttributeError) as exc:
+            raise DocumentError(_not_a_table(self._data, path) or _no_such(exc)) from None
+        except (KeyError, IndexError) as exc:
+            raise DocumentError(_no_such(exc)) from None
         old = self._text
         newline = "\r\n" if "\r\n" in old else "\n"
         unterminated = bool(old) and not old.endswith("\n")  # tomlkit needs the newline
         try:
             new = on_text(old + newline if unterminated else old)
-            if unterminated and new.endswith(newline):
-                new = new[: -len(newline)]
             got = tomllib.loads(new)
         except DocumentError:
             raise
-        except (*_TOMLKIT_FAILURES, tomllib.TOMLDecodeError) as exc:
-            raise DocumentError(f"cannot edit the config in place: {exc}") from None
+        except (TypeError, AttributeError):
+            raise DocumentError(_not_a_table(self._data, path) or UNWRITABLE) from None
+        except (*_TOMLKIT_FAILURES, tomllib.TOMLDecodeError):
+            raise DocumentError(UNWRITABLE) from None
+        if unterminated:  # it stays so (tomlkit may end its own lines with "\n" in a CRLF file)
+            new = new.rstrip("\r\n")
         if not _same(got, expected):
             raise DocumentError(
                 "cannot edit the config in place without changing other keys; edit the file by hand"
@@ -159,7 +187,7 @@ class UserDocument:
         except _TOMLKIT_FAILURES:
             readable = False
         if not readable:
-            raise DocumentError(UNREADABLE)
+            raise DocumentError(UNWRITABLE)
         lost = (_header_comments(old) - (may_lose or Counter())) - _comments(new)
         if lost:
             raise DocumentError(
@@ -167,6 +195,29 @@ class UserDocument:
                 "above a table; edit the file by hand"
             )
         self._text, self._data = new, got
+
+
+def _no_such(exc: Exception) -> str:
+    return f"cannot edit the config: no such key or entry ({exc})"
+
+
+def _not_a_table(data: dict, path: Path_) -> str | None:
+    """The message for the first part of `path` that is a value where the edit needs a table
+    (or a list of panel entries), or None."""
+    node: Any = data
+    for i, key in enumerate(path):
+        name = ".".join(str(k) for k in path[:i])
+        if not isinstance(node, (dict, list)):
+            return f"{name} is a value, not a table: edit the file by hand"
+        if isinstance(key, int) != isinstance(node, list):
+            kind = "a list of panel entries" if isinstance(key, int) else "a table"
+            return f"{name} is not {kind}: edit the file by hand"
+        if isinstance(node, list) and not -len(node) <= key < len(node):  # type: ignore[operator]
+            return None
+        if isinstance(node, dict) and key not in node:
+            return None
+        node = node[key]  # type: ignore[index]
+    return None
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -186,7 +237,8 @@ def _same(a: Any, b: Any) -> bool:
 # tomlkit keeps the comment lines above a table header inside the table BEFORE it, so removing
 # or pruning that table would silently drop them. Whole-line comments above a header (blank
 # lines allowed in between) and at the end of the file must survive an edit; other comments
-# may go with the key or entry they sat in, and a removed panel entry takes its own label. A
+# may go with the key or entry they sat in, and a removed panel entry (or the header of a table
+# emptied by the edit) takes its own label. A
 # comment can still MOVE (a key added at the end of the table before it lands below the
 # comment): see decision 2. The census counts comment texts, so it cannot tell two identical
 # comments apart (one surviving copy hides the loss of the other).
@@ -249,34 +301,47 @@ def _blank_or_comment(line: str) -> bool:
     return not s or s.startswith("#")
 
 
+def _comment(line: str) -> bool:
+    return line.lstrip().startswith("#")
+
+
 def _label_start(lines: list[str], header: int) -> int:
-    """First line of the comment and blank lines directly above line `header`."""
+    """First line of the label of line `header`: the comment lines directly above it (a blank
+    line ends the label; what is above it belongs to the place)."""
     i = header
-    while i > 0 and _blank_or_comment(lines[i - 1]):
+    while i > 0 and _comment(lines[i - 1]):
         i -= 1
     return i
 
 
-def _first_content(lines: list[str], start: int, stop: int) -> int:
-    """First non-blank line in lines[start:stop] (stop if none): the blank lines above a
-    label stay in place, only the label moves."""
-    while start < stop and not lines[start].strip():
-        start += 1
-    return start
+def _cut(lines: list[str], start: int, end: int) -> None:
+    """Delete lines[start:end]; the blank lines around it belong to the places and stay, but no
+    doubled blank line is left there, nor a blank line at the top or the end of the file."""
+    del lines[start:end]
+    _close_gap(lines, start)
+
+
+def _close_gap(lines: list[str], at: int) -> None:
+    """After lines were removed at `at`: see _cut."""
+    if at == 0:
+        while lines and not lines[0].strip():
+            del lines[0]
+    elif at < len(lines):
+        if not lines[at].strip() and not lines[at - 1].strip():
+            del lines[at]
+    elif not lines[at - 1].strip():
+        del lines[at - 1]
 
 
 class _Spans:
     """The panel entries of one monitor in the text: entry k is lines[start[k]:end[k]], its
-    blank lines lines[start[k]:body[k]] belong to its place, the rest moves with it."""
+    label, header, body and sub-tables up to its last non-comment line; the lines between
+    entries (blank lines, comments not directly above a header, other tables) are the places."""
 
     def __init__(self, lines: list[str], panels: tuple[str, ...], count: int):
         heads = [(i, h) for i, line in enumerate(lines) if (h := _header(line))]
-        tail = len(lines)
-        while tail > 0 and _blank_or_comment(lines[tail - 1]):
-            tail -= 1
         self.head: list[int] = []
         self.start: list[int] = []
-        self.body: list[int] = []
         self.end: list[int] = []
 
         def inside(path):  # a sub-table of an entry: [monitors.X.panels.handle]
@@ -285,12 +350,12 @@ class _Spans:
         for n, (i, (path, aot)) in enumerate(heads):
             if path != panels or not aot:
                 continue
-            nxt = next((j for j, (p, _) in heads[n + 1 :] if not inside(p)), None)
-            start = _label_start(lines, i)
+            stop = next((j for j, (p, _) in heads[n + 1 :] if not inside(p)), len(lines))
+            while stop > i + 1 and _blank_or_comment(lines[stop - 1]):
+                stop -= 1
             self.head.append(i)
-            self.start.append(start)
-            self.body.append(_first_content(lines, start, i))
-            self.end.append(max(i + 1, tail) if nxt is None else _label_start(lines, nxt))
+            self.start.append(_label_start(lines, i))
+            self.end.append(stop)
         if len(self.start) != count:
             raise DocumentError(
                 f"cannot find the {count} [[{'.'.join(panels)}]] entries in the file; "
@@ -323,23 +388,29 @@ def _move_panel_text(text: str, data: dict, monitor: str, index: int, to: int) -
     order.insert(to, order.pop(index))
     out = lines[: s.start[0]]
     for slot, entry in enumerate(order):
-        out += lines[s.start[slot] : s.body[slot]]  # the place's blank lines
-        out += lines[s.body[entry] : s.end[entry]]  # the entry with its label
+        out += lines[s.start[entry] : s.end[entry]]  # the entry with its label
         out += lines[s.end[slot] : s.start[slot + 1]] if slot + 1 < count else lines[s.end[slot] :]
     return "".join(out)
+
+
+def _table_headers(lines: list[str]) -> set[tuple[str, ...]]:
+    return {h[0] for line in lines if (h := _header(line)) and not h[1]}
 
 
 def _remove_panel_text(
     text: str, data: dict, monitor: str, index: int, may_lose: Counter[str]
 ) -> str:
     count = _panel_count(data, monitor)
-    if _is_inline(text, monitor):
-        return _in_doc(lambda doc: _remove_panel(doc, monitor, index))(text)
     lines = _lines(text)
-    s = _Spans(lines, _panel_path(monitor), count)
-    k = range(count)[index]
-    may_lose.update(_comments("".join(lines[s.start[k] : s.end[k]])))
-    lines[s.start[k] : s.end[k]] = []
+    if _is_inline(text, monitor):
+        # tomlkit prunes only tables without a header; the text drops an emptied header
+        headed = _table_headers(lines)
+        lines = _lines(_in_doc(lambda doc: _remove_panel(doc, monitor, index, headed))(text))
+    else:
+        s = _Spans(lines, _panel_path(monitor), count)
+        k = range(count)[index]
+        may_lose.update(_comments("".join(lines[s.start[k] : s.end[k]])))
+        _cut(lines, s.start[k], s.end[k])
     if count == 1:  # the monitor may be left empty: its own table header goes too
         rest = copy.deepcopy(data)
         _plain_remove_panel(rest, monitor, index)
@@ -350,25 +421,85 @@ def _remove_panel_text(
     return "".join(lines)
 
 
-def _drop_empty_header(lines: list[str], path: tuple[str, ...], may_lose: Counter[str]):
-    """Remove the [path] header line and its own label when its table has no lines left (the
-    comments in its body label the next header and stay)."""
-    for i, line in enumerate(lines):
-        if _header(line) != (path, False):
+def _drop_empty_header(
+    lines: list[str],
+    path: tuple[str, ...],
+    may_lose: Counter[str],
+    within: tuple[int, int] | None = None,
+):
+    """Remove the [path] header line (the first one in lines[within], e.g. a panel entry) and
+    its own label when its table has no lines left (the comments in its body stay: tomlkit
+    keeps the next header's label there). A label at the very top of the file stays too: it
+    may as well be the file's head comment."""
+    lo, hi = within or (0, len(lines))
+    for i in range(lo, hi):
+        if _header(lines[i]) != (path, False):
             continue
         j = i + 1
         while j < len(lines) and not _header(lines[j]):
             if not _blank_or_comment(lines[j]):
                 return lines
             j += 1
-        start = _label_start(lines, i)
-        first = _first_content(lines, start, i)
-        may_lose.update(_comments("".join(lines[first:i])))
-        out = lines[:first] + lines[i + 1 :]
-        if 0 < first < len(out) and not out[first - 1].strip() and not out[first].strip():
-            del out[first]  # no double blank line where the header was
+        start = _label_start(lines, i) or i
+        may_lose.update(_comments("".join(lines[start:i])))
+        out = lines[:]
+        _cut(out, start, i + 1)
         return out
     return lines
+
+
+def _unset_text(text: str, data: dict, path: Path_, may_lose: Counter[str]) -> str:
+    """Unset with tomlkit; a table emptied by it that has a [header] in the text is not pruned
+    by tomlkit (that would take the next table's label, kept in its body, with it) but
+    dropped from the text with its own label."""
+    rest = copy.deepcopy(data)
+    _plain_unset(rest, path)
+    pruned = []  # the tables _plain_unset prunes, deepest first (never a panel entry)
+    for depth in range(len(path) - 1, 0, -1):
+        if isinstance(path[depth - 1], int) or isinstance(path[depth], int):
+            break
+        if _has(rest, path[:depth]):
+            break
+        pruned.append(path[:depth])
+    headers = _table_headers(_lines(text))
+    headed = [table for table in pruned if _header_key(table) in headers]
+    keep = len(headed[0]) if headed else 0
+    new = _in_doc(lambda doc: _unset(doc, path, keep))(text)
+    lines = _lines(new)
+    for table in headed:
+        key = _header_key(table)
+        within = None
+        if len(table) > 3 and isinstance(table[3], int):  # a sub-table of a panel entry
+            monitor, count = str(table[1]), _panel_count(data, str(table[1]))
+            k = range(count)[table[3]]
+            s = _Spans(lines, _panel_path(monitor), count)
+            within = (s.head[k], s.head[k + 1] if k + 1 < count else len(lines))
+        lines = _drop_empty_header(lines, key, may_lose, within)  # type: ignore[arg-type]
+    return "".join(lines)
+
+
+def _header_key(table: Path_) -> tuple | None:
+    """The key a [header] line of this table spells: a panel entry's sub-table is written
+    [monitors.X.panels.handle] (no index); None for any other path with an index."""
+    if not any(isinstance(k, int) for k in table):
+        return tuple(table)
+    if table[:1] == ("monitors",) and table[2:3] == ("panels",) and isinstance(table[3], int):
+        rest = table[4:]
+        if not any(isinstance(k, int) for k in rest):
+            return (*table[:3], *rest)
+    return None
+
+
+def _has(data: dict, path: Path_) -> bool:
+    node: Any = data
+    for key in path:
+        if isinstance(key, int):
+            if not isinstance(node, list) or not -len(node) <= key < len(node):
+                return False
+        elif not isinstance(node, dict) or key not in node:
+            return False
+        node = node[key]
+    return True
 
 
 def _key_parts(line: str) -> list[str]:
@@ -398,10 +529,30 @@ def _key_parts(line: str) -> list[str]:
     return parts
 
 
-def _new_entry(text: str, key: str, widget: str, blank: bool) -> list[str]:
+def _bracket(line: str) -> str:
+    """The [[...]] of a header line exactly as written (spaces and quotes kept, the comment
+    after it left out)."""
+    s = line.strip()
+    quote, i = "", 0
+    while i < len(s):
+        c = s[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c in "\"'":
+            quote = c
+        elif s.startswith("]]", i):
+            return s[: i + 2]
+        i += 1
+    return s
+
+
+def _new_entry(text: str, header: str, widget: str, blank: bool) -> list[str]:
     newline = "\r\n" if "\r\n" in text else "\n"
     body = "widget = " + tomlkit.item(widget).as_string()
-    return ([newline] if blank else []) + ["[[" + key + "]]" + newline, body + newline]
+    return ([newline] if blank else []) + [header + newline, body + newline]
 
 
 def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
@@ -416,9 +567,12 @@ def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
             )
         s = _Spans(lines, _panel_path(monitor), count)
         at = s.end[-1]
-        key = ".".join(_key_parts(lines[s.head[-1]]))
-        entry = _new_entry(text, key, widget, False)
-        return "".join(lines[:at] + lines[s.start[-1] : s.body[-1]] + entry + lines[at:])
+        # the blank lines above the last entry, none of the comments (the place's, not its)
+        above = s.start[-1]
+        while above > 0 and not lines[above - 1].strip():
+            above -= 1
+        entry = _new_entry(text, _bracket(lines[s.head[-1]]), widget, False)
+        return "".join(lines[:at] + lines[above : s.start[-1]] + entry + lines[at:])
     tail = len(lines)
     while tail > 0 and _blank_or_comment(lines[tail - 1]):
         tail -= 1
@@ -426,15 +580,18 @@ def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
     own = [n for n, (_, path) in enumerate(heads) if path[:2] == ("monitors", monitor)]
     if own:  # below the monitor's last table
         nxt = own[-1] + 1
-        at = _label_start(lines, heads[nxt][0]) if nxt < len(heads) else tail
+        at = heads[nxt][0] if nxt < len(heads) else tail
+        while at > 0 and _blank_or_comment(lines[at - 1]):
+            at -= 1  # above the next header's label and the place's lines
         key = ".".join(_key_parts(lines[heads[own[-1]][0]])[:2] + ["panels"])
+        header = "[[" + key + "]]"
     elif monitor not in monitors:  # a new monitor: at the end, above a closing comment
-        at = tail
-        key = tomlkit.key(list(_panel_path(monitor))).as_string()
+        at = tail or len(lines)  # a file of only comments: below them
+        header = "[[" + tomlkit.key(list(_panel_path(monitor))).as_string() + "]]"
     else:  # a monitor known only from dotted keys or an inline table
         return _in_doc(lambda doc: _add_panel(doc, monitor, widget))(text)
     blank = at > 0 and bool(lines[at - 1].strip())
-    return "".join(lines[:at] + _new_entry(text, key, widget, blank) + lines[at:])
+    return "".join(lines[:at] + _new_entry(text, header, widget, blank) + lines[at:])
 
 
 # ---- tomlkit side ------------------------------------------------------------------------
@@ -471,13 +628,19 @@ def _set(doc, path: Path_, value: Any) -> None:
     node[path[-1]] = value
 
 
-def _unset(doc, path: Path_) -> None:
+def _unset(doc, path: Path_, keep: int = 0) -> None:
+    """Delete the key and prune the tables left empty, deepest first, but never a [[panels]]
+    entry (an int key) nor a table path[:depth] with depth <= keep (the text drops those)."""
     chain = [doc]
     for key in path[:-1]:
         chain.append(chain[-1][key])
-    del chain[-1][path[-1]]
-    # prune tables left empty, deepest first; never a [[panels]] entry (an int key)
-    for depth in range(len(path) - 1, 0, -1):
+    # a table split across the file is a proxy over its parts: deleting through it drops an
+    # emptied part with its header and the comments in its body (the next table's label), so
+    # delete from the one part that holds the key (a key in several parts, e.g. a panel list,
+    # goes through the proxy)
+    holders = [part for part in getattr(chain[-1], "_tables", ()) if path[-1] in part]
+    del (holders[0] if len(holders) == 1 else chain[-1])[path[-1]]
+    for depth in range(len(path) - 1, keep, -1):
         if isinstance(path[depth - 1], int) or isinstance(path[depth], int):
             break
         if len(chain[depth]) == 0:
@@ -508,15 +671,16 @@ def _add_panel(doc, monitor: str, widget: str) -> None:
     table["panels"].append(entry)
 
 
-def _remove_panel(doc, monitor: str, index: int) -> None:
-    """An inline panel array."""
+def _remove_panel(doc, monitor: str, index: int, headed: set[tuple[str, ...]]) -> None:
+    """An inline panel array; an emptied table is pruned only when it has no [header] in the
+    text (`headed`): the text drops such a header with its own label."""
     table = doc["monitors"][monitor]
     del table["panels"][index]
     if len(table["panels"]) == 0:
         del table["panels"]
-        if len(table) == 0:
+        if len(table) == 0 and ("monitors", monitor) not in headed:
             del doc["monitors"][monitor]
-            if len(doc["monitors"]) == 0:
+            if len(doc["monitors"]) == 0 and ("monitors",) not in headed:
                 del doc["monitors"]
 
 
