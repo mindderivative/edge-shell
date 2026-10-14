@@ -113,8 +113,9 @@ def test_corner_panel_fields(form):
 def test_the_panel_sections_split_the_panel_keys_by_kind(form):
     edge = {f.key for f in form.edge_panel.fields} | {s.key for s in form.edge_panel.sections}
     corner = {f.key for f in form.corner_panel.fields} | {s.key for s in form.corner_panel.sections}
-    assert edge & corner == set(SHARED_KEYS)
-    assert edge | corner == set(PanelConfig.model_fields)
+    no_rows = {"panel", "name", "widget_props"}  # not shown as rows (yet)
+    assert edge & corner == set(SHARED_KEYS) - no_rows
+    assert edge | corner == set(PanelConfig.model_fields) - no_rows
     assert edge - corner == set(EDGE_ONLY_KEYS) and corner - edge == set(CORNER_ONLY_KEYS)
 
 
@@ -205,7 +206,7 @@ def test_every_string_field_is_known_to_the_form():
         for key, prop in model["properties"].items():
             options = [o for o in prop.get("anyOf", [prop]) if o.get("type") != "null"]
             plain = [o for o in options if o.get("type") == "string" and "enum" not in o]
-            if plain and key not in ("widget", "pos", "length"):
+            if plain and key not in ("widget", "pos", "length", "name"):
                 assert key in COLOR_KEYS, f"{name}.{key}"
 
 

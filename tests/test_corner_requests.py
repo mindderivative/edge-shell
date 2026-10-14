@@ -111,8 +111,8 @@ def test_edge_widgets_still_give_panel_requests(corner_registry, make_config):
     [
         (
             {"widget": "box", "align": "end"},
-            "monitors.HDMI-A-1.panels[0].align: box is a corner panel; it takes corner, edge, "
-            "width and height, not align",
+            "monitors.HDMI-A-1.panels[0].align: a corner panel takes corner, edge, width and "
+            "height, not align",
         ),
         (
             {"widget": "box", "edge": "top"},
@@ -121,12 +121,12 @@ def test_edge_widgets_still_give_panel_requests(corner_registry, make_config):
         ),
         (
             {"widget": "dock", "width": 300},
-            "monitors.HDMI-A-1.panels[0].width: dock is an edge panel; corner, width and height "
-            "only apply to corner panels",
+            "monitors.HDMI-A-1.panels[0].width: an edge panel takes no width; corner, width and "
+            "height only apply to corner panels",
         ),
         (
             {"widget": "clock", "corner": "top-left"},
-            "monitors.HDMI-A-1.panels[0].corner: clock is an edge panel",
+            "monitors.HDMI-A-1.panels[0].corner: an edge panel takes no corner",
         ),
     ],
 )

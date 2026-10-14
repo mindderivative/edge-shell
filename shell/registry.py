@@ -225,8 +225,7 @@ def _kind_problems(where: str, panel: PanelConfig) -> list[str]:
     if isinstance(d, CornerDefaults):
         wrong = [k for k in EDGE_ONLY_KEYS if getattr(panel, k) is not None]
         problems = [
-            f"{where}.{key}: {panel.widget} is a corner panel; it takes corner, edge, width "
-            f"and height, not {key}"
+            f"{where}.{key}: a corner panel takes corner, edge, width and height, not {key}"
             for key in wrong
         ]
         corner = panel.corner or d.corner
@@ -238,22 +237,55 @@ def _kind_problems(where: str, panel: PanelConfig) -> list[str]:
             )
         return problems
     return [
-        f"{where}.{key}: {panel.widget} is an edge panel; corner, width and height only "
-        "apply to corner panels"
+        f"{where}.{key}: an edge panel takes no {key}; corner, width and height only apply "
+        "to corner panels"
         for key in CORNER_ONLY_KEYS
         if getattr(panel, key) is not None
     ]
+
+
+def _name_problems(where: str, panels: list[PanelConfig]) -> list[str]:
+    """A name used twice on one monitor: reported at every later use, naming the first."""
+    first: dict[str, int] = {}
+    problems = []
+    for i, panel in enumerate(panels):
+        if panel.name is None:
+            continue
+        if panel.name in first:
+            problems.append(
+                f"{where}[{i}].name: names must be unique: {panel.name!r} is used by "
+                f"panels[{first[panel.name]}] and panels[{i}]"
+            )
+        else:
+            first[panel.name] = i
+    return problems
+
+
+def _entry_problems(where: str, panel: PanelConfig) -> list[str]:
+    if panel.panel == "float":
+        return [f"{where}.panel: float panels are not implemented yet"]
+    if panel.widget not in _DEFAULTS:
+        return [f"{where}.widget: unknown widget {panel.widget!r}"]
+    kind = widget_kind(panel.widget)
+    if panel.panel is not None and panel.panel != kind:
+        article = "an" if panel.panel == "edge" else "a"
+        return [
+            f"{where}.panel: {panel.widget} cannot be shown in {article} {panel.panel} panel "
+            f"(it supports: {kind})"
+        ]
+    problems = _kind_problems(where, panel)
+    problems += [
+        f"{where}.{key}: unknown key for widget {panel.widget!r}" for key in panel.widget_props
+    ]
+    return problems
 
 
 def validate_widgets(config: Config) -> None:
     problems = []
     for name, mon in config.monitors.items():
         for i, panel in enumerate(mon.panels):
-            where = f"monitors.{name}.panels[{i}]"
-            if panel.widget not in _DEFAULTS:
-                problems.append(f"{where}.widget: unknown widget {panel.widget!r}")
-            else:
-                problems.extend(_kind_problems(where, panel))
+            problems.extend(_entry_problems(f"monitors.{name}.panels[{i}]", panel))
+        problems.extend(_name_problems(f"monitors.{name}.panels", mon.panels))
     if problems:
         known = ", ".join(widget_names()) or "none"
         raise ConfigError("\n".join(problems) + f"\nknown widgets: {known}")

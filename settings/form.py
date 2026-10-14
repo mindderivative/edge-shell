@@ -208,6 +208,7 @@ def config_form(widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()) 
     schema = Config.model_json_schema()
 
     def panel(skip: tuple[str, ...]) -> SectionSpec:
+        skip += ("panel", "name", "widget_props")  # no rows for these keys yet
         return section_for(schema, "PanelConfig", "", "Panel", widgets, skip, corner_widgets)
 
     corner = panel(EDGE_ONLY_KEYS)
