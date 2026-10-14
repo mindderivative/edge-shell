@@ -37,7 +37,7 @@ font_size = 12
 ```
 
 - `panel` is required. A file without it fails with `monitors.X.panels[i].panel: missing; use "edge", "corner" or "float"` (and names the old format in the message once per file). There are no aliases and no migration tool: Phil has no saved configs, and the examples and tests are rewritten.
-- `name` is required, 1-40 characters, no control characters, unique per monitor (case-sensitive). It is the panel's label in logs, notifications, the settings tree and tab bar. It is not an identity: panels are still tracked by list index, as today.
+- `name` is required, 1-40 characters, no control characters, no leading or trailing whitespace (rejected with a message, never trimmed silently), unique per monitor (case-sensitive). It is the panel's label in logs, notifications, the settings tree and tab bar. It is not an identity: panels are still tracked by list index, as today.
 - `widget` must be a registered widget id that has defaults for the chosen `panel` kind (3.4).
 - Keys fall in three groups. **Shared** (`panel`, `name`, `widget`, `edge`, `state`, `handle`, `interaction`) apply to every kind. **Kind keys**: edge panels take `pos` (deprecated, unchanged), `align`, `offset`, `order`, `length`, `min_length`, `max_length`, `depth`; corner panels take `corner`, `width`, `height` (`edge` is the edge it opens from). Mixing the two kinds' keys is rejected as today. **Widget keys** are everything else, validated against the widget's property model.
 
@@ -51,7 +51,7 @@ font_size = 12
 - duplicate `name` on one monitor (`names must be unique: 'Clock' is used by panels[0] and panels[3]`);
 - `panel = "float"`: `float panels are not implemented yet`.
 
-Widget property names must not collide with framework keys: checked at registration (`ValueError` at import, like bad defaults today).
+Every panel error, the loader's included (`monitors.X.panels[0].panel: missing; ...`), writes the entry's index in brackets; layout warnings and log lines keep their dotted paths. Widget property names must not collide with framework keys, and every property must have a type the settings window can show (`str`, `int`, `bool`, a `Literal` of strings, or one of these `| None`): both checked at registration (`ValueError` at import naming the widget and the property, like bad defaults today).
 
 ### 3.3 Panel kinds
 
@@ -69,7 +69,7 @@ A widget is a class with a content builder and a property model, registered with
 class ClockProps(WidgetProps):             # pydantic model, extra forbid, frozen
     format: str = "HH:mm"
     font: str | None = None                # None = the theme font
-    font_size: Annotated[int, Field(ge=6, le=96)] | None = None
+    font_size: Annotated[int, Field(ge=6, le=96)] | None = None   # points
 
 @register_widget(
     "clock", title="Clock", props=ClockProps,
@@ -82,8 +82,8 @@ class ClockWidget(Widget):
 
 - `Widget` replaces the `EdgePanel`/`CornerPanel` subclassing: the panel classes are no longer subclassed by widgets. `EdgePanel` and `CornerPanel` receive a widget instance and call `build` for their content (they keep `build_content` as the single seam, now delegating).
 - A widget supports a panel kind by registering defaults for it (`edge=PanelDefaults(...)`, `corner=CornerDefaults(...)`); both may be given. Registered now: `dock` (edge), `clock` (edge), `system_bar` (edge), `summary` (corner; the old `widget_panel`, same content: time, date, CPU, RAM). A test registers a fake widget for both kinds to prove the path.
-- `title` is the display name used in the settings window's widget list (`Dock`, `Clock`, `System bar`, `Summary block`) and the default for a new panel's `name`.
-- The clock gets `format`, `font`, `font_size` to prove properties end to end (format uses strftime-style tokens translated from `HH:mm`-style: the spec fixes the accepted tokens to `HH`, `mm`, `ss`, `H`, `h`, `a`, `ddd`, `dd`, `MMM`, `MM`, `yyyy`; anything else is a validation error). Dock, system bar and summary have empty property models for now.
+- `title` is the display name used in the settings window's widget list (`Dock`, `Clock`, `System bar`, `Summary`) and the default for a new panel's `name` (`Clock`, `Clock 2`, ...).
+- The clock gets `format`, `font`, `font_size` to prove properties end to end (format uses strftime-style tokens translated from `HH:mm`-style: the spec fixes the accepted tokens to `HH`, `mm`, `ss`, `H`, `h`, `a`, `ddd`, `dd`, `MMM`, `MM`, `yyyy`; text in single quotes is literal (`'at'`), `''` is one quote, an unterminated quote is a validation error, and any other letter is a validation error; literal text never goes through strftime). `font_size` is in points (6-96), emitted as `pt`. Dock, system bar and summary have empty property models for now.
 - Widget font properties are emitted in generated CSS under the existing font-name rule (`_FONT_FORBIDDEN`).
 
 ### 3.5 Registry, layout, shell
@@ -116,7 +116,7 @@ A single live gate: the converted examples run on HDMI-A-1 (edge and corner pane
 
 ## 4. Data flow and error handling
 
-Unchanged architecture: window → `UserDocument` (tomlkit) → file → shell watcher → `load_config` → `validate_widgets` → diff → in-place change or panel rebuild. Errors: any validation failure names the key path, is never written by the window, and in the shell keeps the previous layout and notifies. Widget `build` failures log and skip that panel (the panel is not shown; a notification names `name`), they do not take down the monitor.
+Unchanged architecture: window → `UserDocument` (tomlkit) → file → shell watcher → `load_config` → `validate_widgets` → diff → in-place change or panel rebuild. Errors: any validation failure names the key path, is never written by the window, and in the shell keeps the previous layout and notifies. Widget `build` failures log and skip that panel (the panel is not shown; a notification names `name`), they do not take down the monitor. A failed panel is not tried again on every re-sync: only when its entry (`panel`, `widget`, `name` or a widget property) changes, so a reload that changes it retries.
 
 ## 5. Testing approach
 
@@ -151,7 +151,7 @@ Test-first per task; pure logic (models, registry, form, values) tested without 
 
 - The widget/panel refactor touches every widget and the panel classes; the existing 1881 tests are the safety net, and plan 1's first task is the registry and widget base class with the old widgets ported one by one.
 - `extra` keys for widget props weaken the single-model JSON schema; the settings form therefore reads widget models from the registry. Documented in the form module.
-- Clock format tokens are a small custom grammar; kept to a fixed table to avoid strftime injection of `%` sequences.
+- Clock format tokens are a small custom grammar; kept to a fixed table (plus quoted literal text) to avoid strftime injection of `%` sequences.
 - Gtk popup sizing may not have a clean fix on this GTK version (plan 4, spike first).
 
 ## 10. Decisions recorded from Phil (2026-10-14)

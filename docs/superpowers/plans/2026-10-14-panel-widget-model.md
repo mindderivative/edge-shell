@@ -14,20 +14,22 @@
 
 **Date:** 2026-10-14. **Size:** 11 tasks: 8 code tasks (1-8), docs and the gate example (9), Phil's live gate (10), recorded results (11). Riskiest: Task 2 (it touches about 280 test configs at once; the conversion is a script whose output was checked byte for byte against the prototype), Task 5 (the only change to how live panels are built and rebuilt), Task 7 (the form's rows now come from two schemas).
 
-## Decisions taken while planning (each a default pending Phil, with its cost)
+## Decisions taken while planning
+
+Phil answered the first draft's open questions "all as recommended" (2026-10-14); his answers are folded in below and marked *Phil's answer*, and the last section lists them.
 
 1. **The required flip waits for the conversion.** Task 1 adds `panel` and `name` as optional keys with every new rule applied when they are present; Task 2 converts the examples and tests and makes both required in the same commit. *Why:* the suite stays green after every task and Task 1 stays reviewable on its own. *Cost if Phil prefers one step:* Tasks 1 and 2 merge (one large commit).
 2. **The widget-key bag is `PanelConfig.widget_props`, filled by a `mode="before"` validator.** Every key that is not in `FRAMEWORK_KEYS` (`SHARED_KEYS + EDGE_ONLY_KEYS + CORNER_ONLY_KEYS`) goes there, a key literally called `widget_props` too (in a file it can only be a widget key, which the widget then rejects as unknown). `extra="forbid"` stays on the model. `Config.model_json_schema()` therefore shows `widget_props` as a plain object; the settings form skips it and reads each widget's own model from the registry (`settings.form.registry_widgets`, `ConfigForm.widget_props(widget_id)`), as spec section 9 foresees. *Cost:* none beyond the spec.
-3. **Where each rule is checked.** The model (pure, no registry): `panel` is one of the three kinds, `name` 1-40 characters without control characters (Unicode category Cc), the old mix-of-kinds rule. `registry.validate_widgets` (needs the registry): float, unknown widget, a kind the widget does not support (`clock cannot be shown in a corner panel (it supports: edge)`), the kind's keys (`monitors.X.panels[0].align: a corner panel takes corner, edge, width and height, not align`; `...width: an edge panel takes no width; corner, width and height only apply to corner panels`), the widget's keys against its model (`format: unknown key for widget 'dock'`, or pydantic's own text for a bad value) and duplicate names (`monitors.X.panels[3].name: names must be unique: 'Clock' is used by panels[0] and panels[3]`; case-sensitive). *Cost:* none.
-4. **The missing-`panel` message** keeps the loader's existing path style (`monitors.HDMI-A-1.panels.0.panel: missing; use "edge", "corner" or "float"`, dotted like every other pydantic error) and adds ONE extra line per file naming the old format. The spec writes the path as `panels[i]`, which is the registry's style; changing the loader's style would change every pydantic error message. *Cost if Phil wants `[i]` there:* a small `_path()` helper in `shell/config/loader.py` and about 12 test expectations.
+3. **Where each rule is checked.** The model (pure, no registry): `panel` is one of the three kinds, `name` 1-40 characters without control characters (Unicode category Cc) and without leading or trailing whitespace (rejected: "must not start or end with whitespace", never trimmed; Phil's answer), the old mix-of-kinds rule. `registry.validate_widgets` (needs the registry): float, unknown widget, a kind the widget does not support (`clock cannot be shown in a corner panel (it supports: edge)`), the kind's keys (`monitors.X.panels[0].align: a corner panel takes corner, edge, width and height, not align`; `...width: an edge panel takes no width; corner, width and height only apply to corner panels`), the widget's keys against its model (`format: unknown key for widget 'dock'`, or pydantic's own text for a bad value) and duplicate names (`monitors.X.panels[3].name: names must be unique: 'Clock' is used by panels[0] and panels[3]`; case-sensitive). `register_widget` (at import): the property names and types (decision 10).
+4. **Every panel error writes the entry's index in brackets** (Phil's answer): the loader formats pydantic error locations with `shell.config.loader.key_path`, which writes `panels[0]` as `validate_widgets` does (`monitors.HDMI-A-1.panels[0].panel: missing; use "edge", "corner" or "float"`, `monitors.HDMI-A-1.panels[0].length: ...`); other lists keep their dots (`theme.font.0`), and layout warnings and log lines (`monitors.X.panels.1 (dock): ...`, the `pos` / all-off INFO lines) are not errors and keep theirs. A missing `panel` adds ONE extra line per file naming the old format. Three existing test expectations change (Task 2).
 5. **Requests carry the props as the validated, frozen `WidgetProps` instance** (pydantic `frozen=True`, so it compares by value and cannot be changed: the spec's "frozen mapping"); `PanelRequest` and `CornerRequest` get `name: str = ""` and `props: WidgetProps = NO_PROPS` (defaults keep every positional constructor in the tests working). `diff_configs` needs no change: `_in_place` drops only state, handle and interaction, so a name or props change is already `panel-rebuild`.
 6. **`MonitorShell` must rebuild on a name or props change.** Found while prototyping: `_sync_panels` rebuilds only when the resolved geometry changed, so a renamed clock or a new `format` was reported as `panel-rebuild` and then silently kept the old window. Task 5 keeps a per-index `(name, props)` next to the geometry and rebuilds when it differs.
-7. **A widget build failure** (the widget's constructor, `build()`, or the panel window around it) is caught in `MonitorShell._new_panel`: logged with the traceback, the canvas shape removed, the half-built window destroyed (`EdgePanel.__init__` destroys itself if `build_content` raises), the panel left out (`None`, like a panel the layout hides) and the message `HDMI-A-1: panel 'Top clock' (clock) could not be built and is not shown: <error>` added to `shell.build_failures`. The app notifies "Panel not shown" when a monitor's failure list changes (not on every reload). The next sync tries the panel again (a reload may fix it). A failure that is not a panel build (the layout itself) still closes the monitor as before. *Cost if Phil wants no retry:* a per-index "failed with this request" memo (small).
-8. **The clock format grammar.** Longest token first (`MMM` before `MM`, `ddd` before `dd`); any other ASCII letter is an error naming it and its 1-based position; every other character (digits, spaces, punctuation, `%`, non-ASCII) is literal text. No quoting, so a word like "at" cannot be written (it reads `a` then `t`: an error). Formatting is done per token from the `datetime` fields (`ddd` / `MMM` use the fixed strftime codes `%a` / `%b`, locale abbreviations); user text never reaches strftime. `format` 1-64 characters. *Cost if Phil wants quoted literals:* a `'...'` rule in `parse_clock_format` (small).
-9. **Clock font and size** go into a `Gtk.CssProvider` on the clock's label at priority `STYLE_PROVIDER_PRIORITY_USER + 1` (Fabric adds the app stylesheet at USER, so the label's own rule wins), CSS from the pure `shell.theme.label_font_css(font, size)`. `font` is checked by the theme's font-name rule, now public as `shell.config.models.check_font_name`; `font_size` is px, 6-96 (the theme's CSS uses px). Unset = the theme's font and size.
-10. **Settings form for widgets.** `config_form(widgets: tuple[WidgetChoice, ...])` (`WidgetChoice(id, title, kinds, props)`; `registry_widgets()` builds them). A widget property's row comes from its JSON-schema type alone (str: a text row; int with bounds: a spin button; Literal: a combo; bool: a switch) with its `Field(description=...)` as the hint; the config's name-based rules (colour keys, `length`, `pos`) do not apply there (found while prototyping: a property called `text` became a colour row). `name` is a text row; `panel`, `name` and `widget` have no reset button (`FieldSpec.required`). The Panel type row is shown only for a widget of more than one kind, with every kind listed and the unsupported ones (always `float`) greyed out and never sent. The add list and the widget row show titles, sorted by title (the "(corner panel)" suffix goes). A property type the walk does not know (a list, a float) raises when the form is built; `test_the_real_widgets_make_a_form...` guards the built-in widgets.
+7. **A widget build failure** (the widget's constructor, `build()`, or the panel window around it) is caught in `MonitorShell._new_panel`: logged with the traceback, the canvas shape removed, the half-built window destroyed (`EdgePanel.__init__` destroys itself if `build_content` raises), the panel left out (`None`, like a panel the layout hides) and the message `HDMI-A-1: panel 'Top clock' (clock) could not be built and is not shown: <error>` added to `shell.build_failures`. The app notifies "Panel not shown" when a monitor's failure list changes (not on every reload). **The panel is not tried again on every re-sync** (Phil's answer): `MonitorShell._failed` remembers the entry it failed for (`_entry_key`: kind, widget, name, props) and skips it, still listing its message, until a reload changes one of those; a move (a resolution change, a neighbour, `depth`) does not retry. A failure that is not a panel build (the layout itself) still closes the monitor as before.
+8. **The clock format grammar.** Longest token first (`MMM` before `MM`, `ddd` before `dd`); text in single quotes is literal, letters included (`HH 'at' mm`); two single quotes (`''`) are one literal quote, inside or outside quoted text; a quote that is never closed is an error naming its position (Phil's answer); any other ASCII letter is an error naming it and its 1-based position; every other character (digits, spaces, punctuation, `%`, non-ASCII) is literal text. Formatting is done per token from the `datetime` fields (`ddd` / `MMM` use the fixed strftime codes `%a` / `%b`, locale abbreviations); literal and quoted text never reaches strftime. `format` 1-64 characters.
+9. **Clock font and size** go into a `Gtk.CssProvider` on the clock's label at priority `STYLE_PROVIDER_PRIORITY_USER + 1` (Fabric adds the app stylesheet at USER, so the label's own rule wins), CSS from the pure `shell.theme.label_font_css(font, size)`. `font` is checked by the theme's font-name rule, now public as `shell.config.models.check_font_name`; `font_size` is in points, 6-96, emitted as `pt` (Phil's answer; GTK draws 12 pt as 16 px, so the old 20 px clock text is 15 pt). The settings row's hint says "pt". Unset = the theme's font and size.
+10. **Settings form and property types.** `config_form(widgets: tuple[WidgetChoice, ...])` (`WidgetChoice(id, title, kinds, props)`; `registry_widgets()` builds them). A widget property's row comes from its JSON-schema type alone (str: a text row; int with bounds: a spin button; a Literal of strings: a combo; bool: a switch; each also `| None`) with its `Field(description=...)` as the hint; the config's name-based rules (colour keys, `length`, `pos`, the `font` list) do not apply there (found while prototyping: a property called `text` became a colour row). Anything else (a float, a list, a dict, a Literal of numbers, a union of two types, a nested model) has no row: the form raises, and **`register_widget` refuses it at import** with a ValueError naming the widget and the property (Phil's answer; `registry.form_type_ok`, `FORM_TYPES = (str, int, bool)`). A test (Task 7) checks that the registry and the form agree type by type. `name` is a text row; `panel`, `name` and `widget` have no reset button (`FieldSpec.required`). The Panel type row is shown only for a widget of more than one kind, with every kind listed and the unsupported ones (always `float`) greyed out and never sent. The add list and the widget row show titles, sorted by title (the "(corner panel)" suffix goes; Phil kept this).
 11. **How the tests are converted (Task 2).** A one-off AST script (not committed) gives every dict literal and `PanelConfig(...)` call with a `widget` key, and every TOML string with a `widget = ` line, a `panel` (corner for `box`, `side`, `widget_panel`, `summary`, else edge) and a `name` equal to the widget id, numbered within the same list, call or string (`dock`, `dock 2`), so names are unique per monitor and an unchanged entry keeps its name in before/after pairs. `tests/test_settings_document.py` is not converted (it edits text that is never validated); its `add_panel` calls pass `{"widget": ...}`. About twenty hand fixes follow (a second script, in Task 2). The examples are rewritten by hand with readable names.
-12. **Renames.** `widgets/widget_panel.py` becomes `widgets/summary.py` (`SummaryWidget`, title "Summary block", CSS ids `#summary` / `#summary-time` instead of `#widget-panel` / `#widget-panel-time`); `tests/test_widget_panel.py` becomes `tests/test_summary.py`.
+12. **Renames.** `widgets/widget_panel.py` becomes `widgets/summary.py` (`SummaryWidget`, title "Summary" (Phil's answer; new panels are named `Summary`, `Summary 2`, like `Dock`, `Clock`, `System bar`), CSS ids `#summary` / `#summary-time` instead of `#widget-panel` / `#widget-panel-time`); `tests/test_widget_panel.py` becomes `tests/test_summary.py`.
 13. **The pure clock grammar lives in `services/clock_format.py`**, not in `widgets/`: importing anything under `widgets/` imports Fabric, and CI runs the pure tests without it.
 
 ## Prerequisites
@@ -55,29 +57,29 @@
 The five input classes or failure modes most likely to bite Phil that the spec implies but a happy-path test would not catch, most likely first, each pinned by a test in the owning task:
 
 1. **A rename or a property change on a panel whose place did not change** (a new clock `format`, a new `name`, from the window or a hand edit). The diff says `panel-rebuild`, but `MonitorShell._sync_panels` used to compare only geometry, so the old window stayed with the old text. Expect that panel, and only it, rebuilt in place. Pinned by `test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place` and `test_an_unchanged_entry_is_not_rebuilt` (Task 5), `test_a_name_or_property_change_rebuilds_the_panel` (Task 3, the diff kinds).
-2. **A widget whose build raises** (a bug, a missing icon, a bad font at runtime). Expect the frame and every other panel on that monitor to stay, the half-built window destroyed, one "Panel not shown" notification that names the panel, and a retry on the next reload. Pinned by `test_a_panel_that_fails_to_build_is_left_out_and_named`, `test_a_failure_while_the_monitor_is_built_keeps_the_frame`, `test_panels_that_could_not_be_built_are_notified_by_name_once`, `test_a_build_that_fails_destroys_the_half_built_window` (Task 5).
-3. **A clock format or font that is really an injection** (`%Y`, `%n`, `%%`, a font name with `"; } * {`). Expect a validation error naming the key, or the characters shown literally; never strftime on user text, never broken CSS. Pinned by `test_strftime_sequences_are_plain_text`, `test_any_other_letter_is_an_error_naming_it` (Task 6), `test_bad_properties_are_refused` and `test_bad_properties_name_the_key_path_in_a_config` (Task 6).
-4. **An old-format file** (an earlier gate copy under `/tmp`, a hand-written entry with only `widget`). Expect "Config not applied" with one line per entry (`...panels.0.panel: missing; use "edge", "corner" or "float"`) plus ONE line naming the old format, and the previous layout kept. Pinned by `test_an_entry_without_panel_names_the_new_format` (Task 2); every example file by `test_every_example_is_valid` (Task 2).
+2. **A widget whose build raises** (a bug, a missing icon, a bad font at runtime). Expect the frame and every other panel on that monitor to stay, the half-built window destroyed, one "Panel not shown" notification that names the panel, no retry on every re-sync, and a retry when a reload changes that entry. Pinned by `test_a_panel_that_fails_to_build_is_left_out_and_named`, `test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change`, `test_a_failure_while_the_monitor_is_built_keeps_the_frame`, `test_panels_that_could_not_be_built_are_notified_by_name_once`, `test_a_build_that_fails_destroys_the_half_built_window` (Task 5).
+3. **A clock format or font that is really an injection** (`%Y`, `%n`, `%%`, `'%Y'` in quotes, an unclosed quote, a font name with `"; } * {`). Expect a validation error naming the key, or the characters shown literally; never strftime on user text, never broken CSS. Pinned by `test_strftime_sequences_are_plain_text`, `test_quoted_text_is_shown_as_written`, `test_an_unterminated_quote_is_an_error`, `test_any_other_letter_is_an_error_naming_it` (Task 6), `test_bad_properties_are_refused` and `test_bad_properties_name_the_key_path_in_a_config` (Task 6).
+4. **An old-format file** (an earlier gate copy under `/tmp`, a hand-written entry with only `widget`). Expect "Config not applied" with one line per entry (`...panels[0].panel: missing; use "edge", "corner" or "float"`) plus ONE line naming the old format, and the previous layout kept. Pinned by `test_an_entry_without_panel_names_the_new_format` and `test_a_panel_index_is_written_in_brackets` (Task 2); every example file by `test_every_example_is_valid` (Task 2).
 5. **Switching a panel's widget or kind in the settings window** (a clock with `format` turned into a dock, a two-kind widget moved to a corner, a duplicate name typed in). Expect one write that the shell accepts: the old widget's keys and the old kind's keys removed, the name kept; float and a duplicate name refused under their rows, nothing written. Pinned by `test_a_new_widget_drops_the_old_widgets_keys`, `test_a_new_panel_type_drops_the_old_kinds_keys`, `test_a_panel_type_the_widget_cannot_take_is_a_plain_set_for_the_session` (Task 7), `test_switching_the_widget_drops_its_property_keys_in_one_write`, `test_the_panel_type_of_a_two_kind_widget_is_switched_in_one_write`, `test_a_name_used_twice_is_not_written` (Task 8).
 
-Also pinned (registration mistakes fail at import, before any window): a widget property named like a panel key (`edge`, `widget_props`), a property without a default, a bad title (`test_a_bad_registration_fails_at_import`, Task 3).
+Also pinned (registration mistakes fail at import, before any window): a widget property named like a panel key (`edge`, `widget_props`), a property without a default, a property type the settings window cannot show, a bad title (`test_a_bad_registration_fails_at_import`, `test_a_property_the_settings_window_cannot_show_is_refused`, Task 3); a name with a leading or trailing space (`test_a_bad_name_names_the_key_path`, Task 1).
 
 ## File Structure
 
 ```
 shell/config/models.py      # panel, name, widget_props on PanelConfig; FRAMEWORK_KEYS, PANEL_KINDS,
                             #   check_panel_name (T1); required (T2); check_font_name public (T6)
-shell/config/loader.py      # the missing-panel message and the old-format line (T2)
+shell/config/loader.py      # key_path (panels[0]), the missing-panel message and the old-format line (T2)
 shell/widget.py             # NEW, PURE: WidgetProps, NO_PROPS, Widget (T3)
 shell/registry.py           # validate_widgets rules (T1, T2); register_widget, WidgetInfo,
-                            #   widget_title, widget_props_model, supported_kinds, defaults(id, kind),
+                            #   widget_title, widget_props_model, supported_kinds, defaults(id, kind), form_type_ok,
                             #   widget_props, request_for by cfg.panel (T3; widget_kind removed)
 shell/panel_spec.py         # PanelRequest / CornerRequest gain name and props (T3)
 shell/edge_panel.py         # hosts a Widget: widget/props kwargs, build_content delegates,
                             #   _on_destroy (T4); destroys itself if the build raises (T5)
 shell/corner_panel.py       # docstring only (T4)
 shell/monitors.py           # panel_class(geo), the widget instance (T4); rebuild on name/props,
-                            #   build_failures (T5)
+                            #   build_failures, no retry until the entry changes (T5)
 shell/app.py                # "Panel not shown" notification (T5)
 shell/theme.py              # #summary-time (T4); label_font_css (T6)
 services/clock_format.py    # NEW, PURE: TOKENS, parse_clock_format, format_clock (T6)
@@ -91,7 +93,7 @@ settings/values.py          # panel_ops sets panel; unique_name, new_panel_entry
 settings/panels.py          # add writes {panel, name, widget} (T2); kind from the request (T3);
                             #   titles by name, Panel type row, Widget frame (T8)
 settings/form.py            # skip new keys (T1); kind wording (T3); WidgetChoice, registry_widgets,
-                            #   text rows, required, disabled, widget sections (T7)
+                            #   text rows, required, disabled, widget sections, strict types (T7)
 settings/fields.py          # TextEditor (T7); disabled choices, no reset on required rows (T8)
 settings/view.py            # registry kinds (T3); config_form(registry_widgets()) (T7); TITLE_KEYS (T8)
 examples/*.toml             # converted (T2); examples/widget-props-test.toml NEW (T9)
@@ -104,17 +106,17 @@ tests/conftest.py and about 30 test files   # converted (T2), registry API (T3)
 
 | Task | Deliverable | `pytest -q` (tomlkit, display) | Keeps the suite green because |
 | --- | --- | --- | --- |
-| 1 | `panel`, `name`, widget keys in the model; validation rules | 1902 (+21) | the new keys are optional |
-| 2 | every example and test converted; `panel`, `name` required; window writes the new entry | 1918 (+16) | conversion and flip in one commit |
-| 3 | `register_widget`, per-kind defaults, props models, requests with name/props | 1944 (+26) | the old widgets keep their panel classes under the new decorator |
-| 4 | panel windows host `Widget`s; widgets ported; `summary` module | 1953 (+9) | `build_content` stays the one seam |
-| 5 | rebuild on name/props; build failures contained and notified | 1960 (+7) | a failure that used to raise is now contained |
-| 6 | clock `format` (token table), `font`, `font_size` | 1989 (+29) | new properties default to today's look |
-| 7 | form and values: name/panel rows, widget rows, compound edits, text rows | 2000 (+11) | the window builds the same pages plus the new rows |
-| 8 | panel list: titles by name, Panel type row, Widget frame, disabled float | 2009 (+9) | GTK details on top of Task 7 |
-| 9 | README, spec sections 6/19/20, `examples/widget-props-test.toml` | 2010 (+1) | the example test gains one file |
-| 10 | Gate (Phil, HDMI-A-1) | 2010 | no code |
-| 11 | gate results recorded | 2010 | docs only |
+| 1 | `panel`, `name`, widget keys in the model; validation rules | 1905 (+24) | the new keys are optional |
+| 2 | every example and test converted; `panel`, `name` required; bracket paths; window writes the new entry | 1922 (+17) | conversion and flip in one commit |
+| 3 | `register_widget`, per-kind defaults, props models and types, requests with name/props | 1960 (+38) | the old widgets keep their panel classes under the new decorator |
+| 4 | panel windows host `Widget`s; widgets ported; `summary` module | 1969 (+9) | `build_content` stays the one seam |
+| 5 | rebuild on name/props; build failures contained, notified, retried only on an entry change | 1977 (+8) | a failure that used to raise is now contained |
+| 6 | clock `format` (token table, quoted text), `font`, `font_size` (pt) | 2019 (+42) | new properties default to today's look |
+| 7 | form and values: name/panel rows, widget rows, compound edits, text rows, types in sync with the registry | 2043 (+24) | the window builds the same pages plus the new rows |
+| 8 | panel list: titles by name, Panel type row, Widget frame, disabled float | 2052 (+9) | GTK details on top of Task 7 |
+| 9 | README, spec sections 6/19/20, `examples/widget-props-test.toml` | 2053 (+1) | the example test gains one file |
+| 10 | Gate (Phil, HDMI-A-1) | 2053 | no code |
+| 11 | gate results recorded | 2053 | docs only |
 
 Every total above was measured in a scratch copy of the branch with every step of this plan applied in order (and `ruff check` / `ruff format --check` clean after each task).
 
@@ -132,7 +134,7 @@ The model learns the three new things a panel entry carries and `validate_widget
 
 **Interfaces:**
 - Consumes: `PanelConfig`, `_Strict`, `SHARED_KEYS`, `EDGE_ONLY_KEYS`, `CORNER_ONLY_KEYS` (`shell/config/models.py`); `registry._DEFAULTS`, `registry.widget_kind`, `registry._kind_problems` (still the old registry); fixtures `fake_registry`, `corner_registry`, `make_config` (`tests/conftest.py`).
-- Produces: `shell.config.models.SHARED_KEYS == ("panel", "name", "widget", "edge", "state", "handle", "interaction")`; `FRAMEWORK_KEYS: frozenset[str]` (every panel key); `PanelKind = Literal["edge", "corner", "float"]`; `PANEL_KINDS == ("edge", "corner", "float")`; `PanelName` (str, 1-40); `check_panel_name(value: str) -> str` (ValueError on a control character); `PanelConfig.panel: PanelKind | None`, `PanelConfig.name: PanelName | None` (required from Task 2), `PanelConfig.widget_props: dict[str, Any]` (every non-framework key). `registry.validate_widgets` reports, in `monitors.X.panels[i].<key>` form: `float panels are not implemented yet`, `<widget> cannot be shown in a(n) <kind> panel (it supports: <kind>)`, `<key>: unknown key for widget '<widget>'`, `names must be unique: '<name>' is used by panels[a] and panels[b]`, and the reworded kind-key messages.
+- Produces: `shell.config.models.SHARED_KEYS == ("panel", "name", "widget", "edge", "state", "handle", "interaction")`; `FRAMEWORK_KEYS: frozenset[str]` (every panel key); `PanelKind = Literal["edge", "corner", "float"]`; `PANEL_KINDS == ("edge", "corner", "float")`; `PanelName` (str, 1-40); `check_panel_name(value: str) -> str` (ValueError on a control character, or on whitespace at the start or end: `must not start or end with whitespace (a space, a no-break space, ...)`); `PanelConfig.panel: PanelKind | None`, `PanelConfig.name: PanelName | None` (required from Task 2), `PanelConfig.widget_props: dict[str, Any]` (every non-framework key). `registry.validate_widgets` reports, in `monitors.X.panels[i].<key>` form: `float panels are not implemented yet`, `<widget> cannot be shown in a(n) <kind> panel (it supports: <kind>)`, `<key>: unknown key for widget '<widget>'`, `names must be unique: '<name>' is used by panels[a] and panels[b]`, and the reworded kind-key messages.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -262,6 +264,9 @@ def test_a_name_may_be_any_text_of_1_to_40_characters(name):
         ("C" * 41, "at most 40 characters"),
         ("Clock\n", "control characters"),
         ("a\tb", "control characters"),
+        (" Clock", "must not start or end with whitespace"),
+        ("Clock ", "must not start or end with whitespace"),
+        ("\u00a0Clock", "must not start or end with whitespace"),  # a no-break space too
     ],
 )
 def test_a_bad_name_names_the_key_path(make_config, name, words):
@@ -498,6 +503,8 @@ def check_panel_name(value: str) -> str:
     """A panel's name: its label in logs, notifications and the settings window."""
     if any(unicodedata.category(c) == "Cc" for c in value):
         raise ValueError("must not contain control characters (tab, newline, ...)")
+    if value != value.strip():
+        raise ValueError("must not start or end with whitespace (a space, a no-break space, ...)")
     return value
 
 
@@ -663,18 +670,18 @@ with
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `scripts/py -m pytest -q tests/test_panel_entry.py tests/test_config_corner.py tests/test_corner_requests.py tests/test_settings_form.py`
-Expected: all pass (`tests/test_panel_entry.py`: 21 tests).
+Expected: all pass (`tests/test_panel_entry.py`: 24 tests).
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1902 passed`, `All checks passed!`.
+Run VERIFY. Expected: `1905 passed`, `All checks passed!`.
 
 ```bash
 git add shell/config/models.py shell/registry.py settings/form.py tests/test_panel_entry.py tests/test_config_corner.py tests/test_corner_requests.py tests/test_settings_form.py
 git commit -m "feat(config): panel, name and widget keys in a panel entry, with their checks" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-**Reviewer mutations** (each must turn a test red; all were checked on the finished prototype): a framework key (for example `edge`) left in the widget bag (`test_every_other_key_is_a_widget_key`); the control-character check removed (`test_a_bad_name_names_the_key_path`); names compared case-insensitively (`test_names_must_be_unique_per_monitor`); float let through (`test_float_panels_are_rejected_for_now`).
+**Reviewer mutations** (each must turn a test red; all were checked on the finished prototype): a framework key (for example `edge`) left in the widget bag (`test_every_other_key_is_a_widget_key`); the control-character check or the whitespace check removed (`test_a_bad_name_names_the_key_path`); names compared case-insensitively (`test_names_must_be_unique_per_monitor`); float let through (`test_float_panels_are_rejected_for_now`).
 
 ---
 
@@ -688,11 +695,11 @@ One commit flips the two keys to required and converts everything that builds a 
 - Modify: `widgets/widget_panel.py` (registered id `"summary"`, label `"summary"`)
 - Modify: every file in `examples/` that has panels (8 files; `hdmi-test.toml` has none)
 - Modify: about 20 test files (a one-off script, then about twenty hand fixes); `tests/test_settings_document.py` only its `add_panel` calls
-- Create: `tests/test_examples.py`; Modify: `tests/test_config_loader.py`, `tests/test_settings_document.py`, `tests/test_settings_values.py` (new tests appended)
+- Create: `tests/test_examples.py`; Modify: `tests/test_config_loader.py`, `tests/test_settings_document.py`, `tests/test_settings_values.py` (new tests appended), `tests/test_config_corner.py`, `tests/test_config_handle.py` (`panels[0]` in the expected paths)
 
 **Interfaces:**
 - Consumes: Task 1's `PanelConfig.panel` / `name`, `FRAMEWORK_KEYS`; `registry.widget_kind` (until Task 3); `settings.values.lookup`.
-- Produces: `PanelConfig.panel: PanelKind` and `PanelConfig.name: PanelName`, both required; `shell.config.loader.MISSING_PANEL`, `OLD_FORMAT`; `UserDocument.add_panel(monitor: str, entry: dict[str, Any]) -> int` (writes the keys in order, one per line); `settings.values.unique_name(base: str, taken: list[str]) -> str`; `settings.values.new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]` (`{"panel": kind, "name": free name, "widget": widget}`; the name base becomes the widget's title in Task 7); `panel_ops(entry, "widget", value)` adds `("set", "panel", kind)` when the kind changes. The widget id `widget_panel` is now `summary` everywhere.
+- Produces: `PanelConfig.panel: PanelKind` and `PanelConfig.name: PanelName`, both required; `shell.config.loader.key_path(loc: tuple) -> str` (a panel index in brackets: `monitors.X.panels[0].name`; other lists dotted; `"config"` for an empty location), used for every pydantic error; `shell.config.loader.MISSING_PANEL`, `OLD_FORMAT`; `UserDocument.add_panel(monitor: str, entry: dict[str, Any]) -> int` (writes the keys in order, one per line); `settings.values.unique_name(base: str, taken: list[str]) -> str`; `settings.values.new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]` (`{"panel": kind, "name": free name, "widget": widget}`; the name base becomes the widget's title in Task 7); `panel_ops(entry, "widget", value)` adds `("set", "panel", kind)` when the kind changes. The widget id `widget_panel` is now `summary` everywhere.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -732,6 +739,42 @@ def test_the_default_config_has_no_panels():
     assert all(not m.panels for m in load_config(None).monitors.values())
 ```
 
+In `tests/test_config_corner.py` replace
+
+```python
+    where = "monitors.HDMI-A-1.panels.0" + (f".{path}" if path else "")
+```
+
+with
+
+```python
+    where = "monitors.HDMI-A-1.panels[0]" + (f".{path}" if path else "")
+```
+
+In `tests/test_config_handle.py` replace
+
+```python
+"monitors.HDMI-A-1.panels.0.handle.shape: "
+```
+
+with
+
+```python
+"monitors.HDMI-A-1.panels[0].handle.shape: "
+```
+
+In `tests/test_config_loader.py` replace
+
+```python
+"monitors.HDMI-A-1.panels.0.length"
+```
+
+with
+
+```python
+"monitors.HDMI-A-1.panels[0].length"
+```
+
 Append to `tests/test_config_loader.py`:
 
 ```python
@@ -747,9 +790,9 @@ def test_an_entry_without_panel_names_the_new_format(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     lines = str(exc.value).splitlines()
-    assert 'monitors.HDMI-A-1.panels.0.panel: missing; use "edge", "corner" or "float"' in lines
-    assert 'monitors.HDMI-A-1.panels.1.panel: missing; use "edge", "corner" or "float"' in lines
-    assert "monitors.HDMI-A-1.panels.0.name: Field required" in lines
+    assert 'monitors.HDMI-A-1.panels[0].panel: missing; use "edge", "corner" or "float"' in lines
+    assert 'monitors.HDMI-A-1.panels[1].panel: missing; use "edge", "corner" or "float"' in lines
+    assert "monitors.HDMI-A-1.panels[0].name: Field required" in lines
     assert len([line for line in lines if "the old format" in line]) == 1  # once per file
 
 
@@ -758,6 +801,16 @@ def test_panel_name_and_widget_are_required():
 
     panel = Config.model_json_schema()["$defs"]["PanelConfig"]
     assert {"panel", "name", "widget"} <= set(panel["required"])
+
+
+def test_a_panel_index_is_written_in_brackets():
+    from shell.config.loader import key_path
+
+    assert key_path(("monitors", "X", "panels", 2, "handle", "size")) == (
+        "monitors.X.panels[2].handle.size"
+    )
+    assert key_path(("theme", "font", 0)) == "theme.font.0"  # other lists keep their dots
+    assert key_path(()) == "config"
 ```
 
 In `tests/test_settings_values.py` replace
@@ -831,8 +884,8 @@ def test_add_panel_writes_the_entry_keys_in_order_one_per_line():
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `scripts/py -m pytest -q tests/test_examples.py tests/test_config_loader.py tests/test_settings_document.py`
-Expected: `11 failed, 149 passed`: `test_every_example_is_valid` for the 8 example files with panels (their entries have no `panel`, so `p.panel` is None), `test_an_entry_without_panel_names_the_new_format` (no error is raised yet), `test_panel_name_and_widget_are_required` and `test_add_panel_writes_the_entry_keys_in_order_one_per_line` (`DocumentError: this edit cannot be written in place`).
+Run: `scripts/py -m pytest -q tests/test_examples.py tests/test_config_loader.py tests/test_settings_document.py tests/test_config_corner.py tests/test_config_handle.py`
+Expected: `22 failed, 174 passed`: `test_every_example_is_valid` for the 8 example files with panels (their entries have no `panel`, so `p.panel` is None); in `tests/test_config_loader.py` `test_panel_bound_reports_full_key_path`, `test_an_entry_without_panel_names_the_new_format`, `test_panel_name_and_widget_are_required` and `test_a_panel_index_is_written_in_brackets` (`ImportError: cannot import name 'key_path'`); `test_add_panel_writes_the_entry_keys_in_order_one_per_line` (`DocumentError: this edit cannot be written in place`); the 8 cases of `test_bad_corner_values_name_the_key_path` and `test_an_unknown_shape_lists_the_known_ones` (the loader still writes `panels.0`).
 Run: `scripts/py -m pytest -q tests/test_settings_values.py`
 Expected: a collection error, `ImportError: cannot import name 'new_panel_entry' from 'settings.values'`.
 
@@ -1140,6 +1193,18 @@ OLD_FORMAT = (
 )
 
 
+def key_path(loc: tuple) -> str:
+    """A pydantic error location as a key path. A panel entry's index is written in brackets,
+    as shell.registry.validate_widgets writes it: monitors.HDMI-A-1.panels[0].name."""
+    out = ""
+    for i, part in enumerate(loc):
+        if isinstance(part, int) and i > 0 and loc[i - 1] == "panels":
+            out += f"[{part}]"
+        else:
+            out += f".{part}" if out else str(part)
+    return out or "config"
+
+
 def _missing_panel(item: dict) -> bool:
     loc = item["loc"]
     return (
@@ -1151,7 +1216,7 @@ def format_validation_error(err: ValidationError) -> str:
     lines = []
     old_format = False
     for item in err.errors():
-        path = ".".join(str(p) for p in item["loc"]) or "config"
+        path = key_path(item["loc"])
         if _missing_panel(item):
             old_format = True
             lines.append(f"{path}: {MISSING_PANEL}")
@@ -1964,7 +2029,7 @@ Expected: all pass.
 
 - [ ] **Step 7: VERIFY and commit**
 
-Run VERIFY. Expected: `1918 passed`, `All checks passed!`. Also `grep -rn '"widget_panel"' shell settings widgets tests examples` prints nothing (the module keeps its file name until Task 4).
+Run VERIFY. Expected: `1922 passed`, `All checks passed!`. Also `grep -rn '"widget_panel"' shell settings widgets tests examples` prints nothing (the module keeps its file name until Task 4).
 
 ```bash
 git add shell/config/models.py shell/config/loader.py shell/registry.py settings/document.py settings/values.py settings/panels.py widgets/widget_panel.py examples/corner-test.toml examples/dock-test.toml examples/effects-test.toml examples/handles-test.toml examples/layout-sizes-test.toml examples/layout-test.toml examples/panels-test.toml examples/settings-test.toml tests/test_examples.py tests/test_app_sync.py tests/test_canvas_stats.py tests/test_config_corner.py tests/test_config_diff.py tests/test_config_handle.py tests/test_config_loader.py tests/test_config_models.py tests/test_config_store.py tests/test_corner_layout.py tests/test_corner_requests.py tests/test_handle_requests.py tests/test_monitor_shell.py tests/test_registry.py tests/test_settings_document.py tests/test_settings_panels.py tests/test_settings_session.py tests/test_settings_values.py tests/test_settings_view.py tests/test_widget_panel.py
@@ -1974,7 +2039,7 @@ git commit -m "feat(config): panel and name are required; examples and tests con
 
 `git status --short` must show nothing unstaged under `tests/`, `shell/`, `settings/`, `widgets/` or `examples/` before the commit (a file the script touched but the list missed: add it by name).
 
-**Reviewer mutations:** the old-format line repeated per entry or dropped (`test_an_entry_without_panel_names_the_new_format`); a widget switch that keeps the old `panel` (`test_panel_ops_keep_the_entry_valid`, `test_every_edge_only_key_goes_when_the_widget_becomes_a_corner_widget`); `unique_name` ignoring the taken names (`test_unique_name_numbers_a_taken_name`); an example that still lacks `panel` (`test_every_example_is_valid`).
+**Reviewer mutations:** the old-format line repeated per entry or dropped (`test_an_entry_without_panel_names_the_new_format`); `key_path` writing `panels.0` again (`test_a_panel_index_is_written_in_brackets`); a widget switch that keeps the old `panel` (`test_panel_ops_keep_the_entry_valid`, `test_every_edge_only_key_goes_when_the_widget_becomes_a_corner_widget`); `unique_name` ignoring the taken names (`test_unique_name_numbers_a_taken_name`); an example that still lacks `panel` (`test_every_example_is_valid`).
 
 ---
 
@@ -1992,7 +2057,7 @@ git commit -m "feat(config): panel and name are required; examples and tests con
 
 **Interfaces:**
 - Consumes: `FRAMEWORK_KEYS`, `check_panel_name` (Task 1); `PanelDefaults`, `CornerDefaults`, `PanelRequest`, `CornerRequest` (`shell/panel_spec.py`).
-- Produces: `shell.widget.WidgetProps` (pydantic, `extra="forbid"`, `frozen=True`), `shell.widget.NO_PROPS = WidgetProps()`, `shell.widget.Widget` (`build(self, props: WidgetProps) -> Gtk.Widget`, `destroy(self) -> None`). `shell.registry.register_widget(widget_id: str, *, title: str, props: type[WidgetProps] = WidgetProps, edge: PanelDefaults | None = None, corner: CornerDefaults | None = None) -> Callable[[type], type]` (ValueError at registration: no defaults, wrong defaults type, a title outside 1-40 characters or with a control character, a props model that is not a `WidgetProps`, a property named like a panel key or `widget_props`, a property without a default, bad defaults as before); `WidgetInfo(cls, title, props, edge, corner)`; `widget_names() -> list[str]`; `widget_class(id) -> type`; `widget_title(id) -> str`; `widget_props_model(id) -> type[WidgetProps]`; `supported_kinds(id) -> tuple[str, ...]` (edge before corner); `defaults(id, kind) -> PanelDefaults | CornerDefaults` (KeyError for an unknown widget or an unsupported kind); `widget_props(cfg: PanelConfig) -> WidgetProps` (ConfigError when invalid); `request_for(cfg)` (ConfigError for an unknown widget or an unsupported kind). `PanelRequest.name: str = ""`, `PanelRequest.props: WidgetProps = NO_PROPS`, the same two on `CornerRequest`. `registry.widget_kind` and `registry.register` are removed; `registry._DEFAULTS` is gone (`_WIDGETS: dict[str, WidgetInfo]`).
+- Produces: `shell.widget.WidgetProps` (pydantic, `extra="forbid"`, `frozen=True`), `shell.widget.NO_PROPS = WidgetProps()`, `shell.widget.Widget` (`build(self, props: WidgetProps) -> Gtk.Widget`, `destroy(self) -> None`). `shell.registry.register_widget(widget_id: str, *, title: str, props: type[WidgetProps] = WidgetProps, edge: PanelDefaults | None = None, corner: CornerDefaults | None = None) -> Callable[[type], type]` (ValueError at registration: no defaults, wrong defaults type, a title outside 1-40 characters or with a control character, a props model that is not a `WidgetProps`, a property named like a panel key or `widget_props`, a property without a default, a property of a type the settings window cannot show (anything but `str`, `int`, `bool`, a `Literal` of strings, or one of these `| None`: `widget 'odd': property 'odd' is of type float, which the settings window cannot show; use str, int, bool, a Literal of strings, or one of these | None`), bad defaults as before); `form_type_ok(annotation) -> bool`, `FORM_TYPES = (str, int, bool)`, `FORM_TYPES_TEXT`; `WidgetInfo(cls, title, props, edge, corner)`; `widget_names() -> list[str]`; `widget_class(id) -> type`; `widget_title(id) -> str`; `widget_props_model(id) -> type[WidgetProps]`; `supported_kinds(id) -> tuple[str, ...]` (edge before corner); `defaults(id, kind) -> PanelDefaults | CornerDefaults` (KeyError for an unknown widget or an unsupported kind); `widget_props(cfg: PanelConfig) -> WidgetProps` (ConfigError when invalid); `request_for(cfg)` (ConfigError for an unknown widget or an unsupported kind). `PanelRequest.name: str = ""`, `PanelRequest.props: WidgetProps = NO_PROPS`, the same two on `CornerRequest`. `registry.widget_kind` and `registry.register` are removed; `registry._DEFAULTS` is gone (`_WIDGETS: dict[str, WidgetInfo]`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2423,7 +2488,7 @@ with
     assert registry.widget_class("summary") is wp.WidgetPanel
     assert issubclass(wp.WidgetPanel, CornerPanel)
     assert registry.supported_kinds("summary") == ("corner",)
-    assert registry.widget_title("summary") == "Summary block"
+    assert registry.widget_title("summary") == "Summary"
     assert registry.defaults("summary", "corner") == CornerDefaults(
         corner="bottom-left", width=300, height=390, label="summary"
     )
@@ -2434,10 +2499,10 @@ Create (or replace entirely) `tests/test_widget_registry.py`:
 ```python
 """register_widget, per-kind defaults and widget properties (panel/widget spec 3.4-3.5)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import pytest
-from pydantic import Field
+from pydantic import Field, create_model
 
 from shell.config.diff import Change, diff_configs
 from shell.config.models import ConfigError, PanelConfig
@@ -2595,6 +2660,54 @@ def test_widget_props_are_frozen_and_strict():
         TileProps().text = "x"
     with pytest.raises(Exception, match="Extra inputs"):
         TileProps(colour="red")
+
+
+class Nested(WidgetProps):
+    size: int = 1
+
+
+@pytest.mark.parametrize(
+    ("annotation", "default", "words"),
+    [
+        (float, 1.0, "type float"),
+        (float | None, None, "type float | None"),
+        (list[str], [], "type list"),
+        (dict[str, int], {}, "type dict"),
+        (Literal[1, 2], 1, "Literal[1, 2]"),
+        (Nested, Nested(), "type Nested"),
+    ],
+)
+def test_a_property_the_settings_window_cannot_show_is_refused(
+    fake_registry, annotation, default, words
+):
+    model = create_model("Odd", __base__=WidgetProps, odd=(annotation, default))
+    with pytest.raises(ValueError) as exc:
+        fake_registry.register_widget("odd", title="Odd", props=model, edge=EDGE)
+    text = str(exc.value)
+    assert "widget 'odd': property 'odd'" in text and words in text
+    assert "str, int, bool, a Literal of strings" in text
+    assert "odd" not in fake_registry.widget_names()
+
+
+@pytest.mark.parametrize(
+    ("annotation", "default"),
+    [
+        (str, "x"),
+        (int, 1),
+        (bool, False),
+        (Literal["a", "b"], "a"),
+        (Annotated[int, Field(ge=1, le=9)] | None, None),
+        (str | None, None),
+    ],
+)
+def test_the_property_types_the_settings_window_shows_are_accepted(
+    fake_registry, annotation, default
+):
+    model = create_model("Fine", __base__=WidgetProps, fine=(annotation, default))
+    fake_registry.register_widget("fine", title="Fine", props=model, edge=EDGE)(
+        type("FineWidget", (Widget,), {})
+    )
+    assert fake_registry.widget_props_model("fine") is model
 ```
 
 
@@ -2980,7 +3093,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import get_args
+from types import UnionType
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 from pydantic import ValidationError
 
@@ -3023,6 +3137,10 @@ class WidgetInfo:
 
 
 _WIDGETS: dict[str, WidgetInfo] = {}
+# The property types the settings window has a row for (settings.form: a text row, a spin
+# button, a switch; a Literal of strings is a combo): anything else is refused at registration.
+FORM_TYPES = (str, int, bool)
+FORM_TYPES_TEXT = "str, int, bool, a Literal of strings, or one of these | None"
 _PLACEMENT = ("pos", "align", "offset")
 _KINDS = ("edge", "corner")  # the order supported_kinds lists them in
 
@@ -3051,6 +3169,19 @@ def register_widget(
     return decorate
 
 
+def form_type_ok(annotation: object) -> bool:
+    """True when the settings window can show a property of this type (FORM_TYPES_TEXT)."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return form_type_ok(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        options = [a for a in get_args(annotation) if a is not type(None)]
+        return len(options) == 1 and form_type_ok(options[0])
+    if origin is Literal:
+        return all(isinstance(v, str) for v in get_args(annotation))
+    return annotation in FORM_TYPES
+
+
 def _check_registration(
     widget_id: str,
     title: str,
@@ -3074,6 +3205,14 @@ def _check_registration(
         raise ValueError(
             f"widget {widget_id!r}: property {clash[0]!r} has the name of a panel key; rename it"
         )
+    for name, field in props.model_fields.items():
+        if not form_type_ok(field.annotation):
+            kind = field.annotation
+            kind = kind.__name__ if isinstance(kind, type) else repr(kind).replace("typing.", "")
+            raise ValueError(
+                f"widget {widget_id!r}: property {name!r} is of type {kind}, which the settings "
+                f"window cannot show; use {FORM_TYPES_TEXT}"
+            )
     try:
         props()
     except ValidationError as exc:
@@ -3574,7 +3713,7 @@ with
 
 @register_widget(
     "summary",
-    title="Summary block",
+    title="Summary",
     corner=CornerDefaults(corner="bottom-left", width=300, height=390, label="summary"),
 )
 class WidgetPanel(CornerPanel):
@@ -3584,18 +3723,18 @@ class WidgetPanel(CornerPanel):
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `scripts/py -m pytest -q tests/test_widget_registry.py tests/test_registry.py tests/test_corner_requests.py tests/test_handle_requests.py tests/test_widget_kinds.py tests/test_widget_panel.py`
-Expected: all pass (`tests/test_widget_registry.py`: 26 tests).
+Expected: all pass (`tests/test_widget_registry.py`: 38 tests).
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1944 passed`, `All checks passed!`. Also `grep -rn "widget_kind\|_DEFAULTS\|registry.register(" shell settings widgets tests` prints nothing.
+Run VERIFY. Expected: `1960 passed`, `All checks passed!`. Also `grep -rn "widget_kind\|_DEFAULTS\|registry.register(" shell settings widgets tests` prints nothing.
 
 ```bash
 git add shell/widget.py shell/registry.py shell/panel_spec.py widgets/dock.py widgets/clock.py widgets/system_bar.py widgets/widget_panel.py settings/values.py settings/panels.py settings/view.py settings/form.py tests/test_widget_registry.py tests/conftest.py tests/test_registry.py tests/test_corner_requests.py tests/test_handle_requests.py tests/test_widget_kinds.py tests/test_widget_panel.py
 git commit -m "feat(registry): register_widget with a title, a property model and per-kind defaults" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-**Reviewer mutations:** the kind taken from the widget's first registration instead of `cfg.panel` (`test_a_widget_for_both_kinds_takes_the_defaults_of_the_entrys_kind`); the property-name collision check removed (`test_a_bad_registration_fails_at_import`); `props` left off the request (`test_requests_carry_the_name_and_the_validated_properties`, `test_a_name_or_property_change_rebuilds_the_panel`); the widget-key errors dropped from `validate_widgets` (`test_widget_keys_are_checked_against_the_widgets_model`).
+**Reviewer mutations:** the kind taken from the widget's first registration instead of `cfg.panel` (`test_a_widget_for_both_kinds_takes_the_defaults_of_the_entrys_kind`); the property-name collision check removed (`test_a_bad_registration_fails_at_import`); `props` left off the request (`test_requests_carry_the_name_and_the_validated_properties`, `test_a_name_or_property_change_rebuilds_the_panel`); the widget-key errors dropped from `validate_widgets` (`test_widget_keys_are_checked_against_the_widgets_model`); the property-type check removed (`test_a_property_the_settings_window_cannot_show_is_refused`).
 
 ---
 
@@ -3611,7 +3750,7 @@ git commit -m "feat(registry): register_widget with a title, a property model an
 
 **Interfaces:**
 - Consumes: `Widget`, `WidgetProps`, `NO_PROPS` (`shell/widget.py`), `register_widget`, `widget_class`, `supported_kinds`, `widget_title` (Task 3), `PanelRequest.props` / `CornerRequest.props`.
-- Produces: `EdgePanel.__init__(..., on_settings=None, widget: Widget | None = None, props: WidgetProps = NO_PROPS)`; `EdgePanel.build_content() -> Gtk.Widget` (`widget.build(props)`, an empty `Box` without a widget); `EdgePanel._on_destroy(*args)` (calls `widget.destroy()` once); `shell.monitors.panel_class(geo: PanelGeometry | CornerGeometry) -> type[EdgePanel]`; widget classes `widgets.dock.DockWidget`, `widgets.clock.ClockWidget`, `widgets.system_bar.SystemBarWidget`, `widgets.summary.SummaryWidget` (each with `build(props)` and, where it has a timer, `destroy()`); the debug log line `building panel <i> '<name>' (<widget>) on <monitor>`.
+- Produces: `EdgePanel.__init__(..., on_settings=None, widget: Widget | None = None, props: WidgetProps = NO_PROPS)`; `EdgePanel.build_content() -> Gtk.Widget` (`widget.build(props)`, an empty `Box` without a widget); `EdgePanel._on_destroy(*args)` (calls `widget.destroy()` once); `shell.monitors.panel_class(geo: PanelGeometry | CornerGeometry) -> type[EdgePanel]`; widget classes `widgets.dock.DockWidget`, `widgets.clock.ClockWidget`, `widgets.system_bar.SystemBarWidget`, `widgets.summary.SummaryWidget` (title `"Summary"`; each with `build(props)` and, where it has a timer, `destroy()`); the debug log line `building panel <i> '<name>' (<widget>) on <monitor>`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3748,7 +3887,7 @@ def test_it_is_registered_as_the_spec_corner_widget():
     assert registry.widget_class("summary") is sm.SummaryWidget
     assert issubclass(sm.SummaryWidget, Widget)
     assert registry.supported_kinds("summary") == ("corner",)
-    assert registry.widget_title("summary") == "Summary block"
+    assert registry.widget_title("summary") == "Summary"
     assert registry.defaults("summary", "corner") == CornerDefaults(
         corner="bottom-left", width=300, height=390, label="summary"
     )
@@ -3825,7 +3964,7 @@ from shell.widget import NO_PROPS, Widget  # noqa: E402
 BUILT_IN = {
     "clock": ("Clock", ("edge",)),
     "dock": ("Dock", ("edge",)),
-    "summary": ("Summary block", ("corner",)),
+    "summary": ("Summary", ("corner",)),
     "system_bar": ("System bar", ("edge",)),
 }
 
@@ -4311,7 +4450,7 @@ Rename: `git mv widgets/widget_panel.py widgets/summary.py`
 Create (or replace entirely) `widgets/summary.py`:
 
 ```python
-"""Summary block: the spec's corner panel (spec 3 and 19) in the bottom-left corner, rising out
+"""Summary: the spec's corner panel (spec 3 and 19) in the bottom-left corner, rising out
 of the bottom edge, 300 x 390 px from the corner (both frame bands included): the time, the
 date, CPU and RAM in one column. (It was the `widget_panel` widget.)"""
 
@@ -4349,7 +4488,7 @@ def _set(label, text: str) -> None:
 
 @register_widget(
     "summary",
-    title="Summary block",
+    title="Summary",
     corner=CornerDefaults(corner="bottom-left", width=300, height=390, label="summary"),
 )
 class SummaryWidget(Widget):
@@ -4471,7 +4610,7 @@ Expected: all pass.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1953 passed`, `All checks passed!`. Also `scripts/py -m shell.canvas.simulate --config examples/corner-test.toml --frames 2` prints `simulated 2 frames ...` (the real widgets register; no window is created).
+Run VERIFY. Expected: `1969 passed`, `All checks passed!`. Also `scripts/py -m shell.canvas.simulate --config examples/corner-test.toml --frames 2` prints `simulated 2 frames ...` (the real widgets register; no window is created).
 
 ```bash
 git add shell/edge_panel.py shell/corner_panel.py shell/monitors.py shell/theme.py widgets/dock.py widgets/clock.py widgets/system_bar.py widgets/summary.py widgets/__init__.py tests/test_summary.py tests/test_widget_kinds.py tests/test_clock.py tests/test_monitor_shell.py
@@ -4486,7 +4625,7 @@ git commit -m "refactor(widgets): panels host Widget instances; widget_panel bec
 ---
 ### Task 5: Rebuild on a name or property change; contain a widget that fails to build
 
-`MonitorShell._sync_panels` compares the resolved geometry only, so a panel whose name or widget properties changed (the diff's `panel-rebuild`) kept its old window. It now also keeps each index's `(name, props)` and rebuilds when they differ. A panel window or widget that raises while it is built no longer takes the monitor down: `_new_panel` logs it, removes the canvas shape, records a message naming the panel in `build_failures` and returns None (the panel is not shown; the next sync tries again). `EdgePanel.__init__` destroys its own half-built window when `build_content` raises. The app notifies "Panel not shown" when a monitor's failure list changes.
+`MonitorShell._sync_panels` compares the resolved geometry only, so a panel whose name or widget properties changed (the diff's `panel-rebuild`) kept its old window. It now also keeps each index's `(name, props)` and rebuilds when they differ. A panel window or widget that raises while it is built no longer takes the monitor down: `_new_panel` logs it, removes the canvas shape, records a message naming the panel in `build_failures` and returns None (the panel is not shown; the next sync tries again). `EdgePanel.__init__` destroys its own half-built window when `build_content` raises. The app notifies "Panel not shown" when a monitor's failure list changes. A panel that failed is not tried again on every re-sync: `MonitorShell._failed` remembers the entry it failed for (kind, widget, name, props) and skips it, still listing its message, until a reload changes one of those.
 
 **Files:**
 - Modify: `shell/monitors.py` (`_contents`, `build_failures`, `_sync_panels`, `_new_panel`, `close`), `shell/edge_panel.py` (`build_content` failure), `shell/app.py` (`_report_layout` notifies the failures)
@@ -4494,7 +4633,7 @@ git commit -m "refactor(widgets): panels host Widget instances; widget_panel bec
 
 **Interfaces:**
 - Consumes: `PanelRequest.name` / `props`, `CornerRequest.name` / `props` (Task 3); `panel_class`, `widget_class` in `shell.monitors` (Task 4); `EdgeShellApp._notify`, `_report_layout`.
-- Produces: `MonitorShell.build_failures: list[str]` (reset by every sync; one entry per panel left out: `"<monitor>: panel '<name>' (<widget>) could not be built and is not shown: <error>"`); `MonitorShell._new_panel(...) -> EdgePanel | None`; `MonitorShell._contents: list[tuple[str, WidgetProps] | None]` (a test stand-in `bare_shell` sets it); `EdgeShellApp._failures_reported: dict[str, list[str]]`; notification title `"Panel not shown"`; log line `building panel <i> '<name>' (<widget>) on <monitor> failed` with the traceback.
+- Produces: `MonitorShell.build_failures: list[str]` (reset by every sync; one entry per panel left out: `"<monitor>: panel '<name>' (<widget>) could not be built and is not shown: <error>"`); `MonitorShell._new_panel(...) -> EdgePanel | None`; `MonitorShell._contents: list[tuple[str, WidgetProps] | None]` and `MonitorShell._failed: dict[int, tuple[tuple, str]]` (a test stand-in `bare_shell` sets both); `shell.monitors._entry_key(req) -> tuple` (`(type(req).__name__, req.widget, req.name, req.props)`); `EdgeShellApp._failures_reported: dict[str, list[str]]`; notification title `"Panel not shown"`; log line `building panel <i> '<name>' (<widget>) on <monitor> failed` with the traceback.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4599,6 +4738,7 @@ with
     shell._resolved = [None] * len(shell.panels)
     shell._handles = [None] * len(shell.panels)
     shell._contents = [None] * len(shell.panels)
+    shell._failed = {}
     shell.canvas = FakeCanvas()
     shell.strips = []
 ```
@@ -4659,16 +4799,18 @@ def test_a_panel_that_fails_to_build_is_left_out_and_named(build, make_config, m
     ]
     assert "building panel 1 'Top clock' (clock) on HDMI-A-1 failed" in caplog.text
     assert "RuntimeError: widget broke" in caplog.text  # with the traceback
-    monkeypatch.setattr(mon_mod, "widget_class", real)  # fixed: the next sync builds it
-    shell.apply(
-        make_config(
-            monitors=edge(
-                {"panel": "edge", "name": "Dock", "widget": "dock"},
-                {"panel": "edge", "name": "Top clock", "widget": "clock"},
-            )
-        ),
-        [],
+    monkeypatch.setattr(mon_mod, "widget_class", real)
+    same = edge(
+        {"panel": "edge", "name": "Dock", "widget": "dock"},
+        {"panel": "edge", "name": "Top clock", "widget": "clock"},
     )
+    shell.apply(make_config(monitors=same), [])  # the same entry: not tried again
+    assert shell.panels[1] is None and len(shell.build_failures) == 1
+    renamed = edge(
+        {"panel": "edge", "name": "Dock", "widget": "dock"},
+        {"panel": "edge", "name": "Clock", "widget": "clock"},
+    )
+    shell.apply(make_config(monitors=renamed), [])  # the entry changed: tried again
     assert shell.panels[1] is not None and shell.build_failures == []
 
 
@@ -4879,6 +5021,31 @@ def test_an_unchanged_entry_is_not_rebuilt(build, big, make_config):
     (old,) = shell.panels
     shell.apply(make_config(monitors=edge(entry)), [])
     assert shell.panels == [old] and not old.destroyed
+
+
+def test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change(
+    build, make_config, monkeypatch
+):
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    monitor = FakeMonitor()
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    entry = {"panel": "edge", "name": "Dock", "widget": "dock", "length": "content"}
+    shell, _, timers = build(edge(entry), monitor=monitor)
+    assert calls == [1] and shell.panels == [None]
+    ((_, handler),) = monitor.handlers.values()
+    monitor.width, monitor.height = 1280, 720  # a resolution change re-lays out the monitor
+    handler(monitor, None)
+    assert timers[-1][1]() is False
+    shell.apply(make_config(monitors=edge(entry)), [])  # an unrelated reload
+    assert calls == [1] and len(shell.build_failures) == 1  # never tried again
+    for change in ({"depth": 80}, {"widget": "clock"}, {"panel": "edge", "name": "Dock 2"}):
+        shell.apply(make_config(monitors=edge({**entry, **change})), [])
+    assert len(calls) == 3  # depth alone is a move: not retried; widget and name changes are
 ```
 
 In `tests/test_widget_kinds.py` replace
@@ -4910,7 +5077,7 @@ def test_a_build_that_fails_destroys_the_half_built_window():
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `scripts/py -m pytest -q tests/test_monitor_shell.py tests/test_app_sync.py tests/test_widget_kinds.py`
-Expected: `6 failed, 120 passed`: `test_panels_that_could_not_be_built_are_notified_by_name_once` (no notification yet), `test_a_panel_that_fails_to_build_is_left_out_and_named` and `test_a_failure_while_the_monitor_is_built_keeps_the_frame` (the RuntimeError escapes), both cases of `test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place` (the old window is kept), `test_a_build_that_fails_destroys_the_half_built_window`.
+Expected: `7 failed, 120 passed`: `test_panels_that_could_not_be_built_are_notified_by_name_once` (no notification yet), `test_a_panel_that_fails_to_build_is_left_out_and_named`, `test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change` and `test_a_failure_while_the_monitor_is_built_keeps_the_frame` (the RuntimeError escapes), both cases of `test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place` (the old window is kept), `test_a_build_that_fails_destroys_the_half_built_window`.
 
 - [ ] **Step 3: Implement**
 
@@ -5022,8 +5189,10 @@ with
         # Each index's (name, widget properties) as last built: a change rebuilds the panel.
         self._contents: list[tuple[str, WidgetProps] | None] = []
         self.layout_warnings: list[str] = []
-        # Panels whose window or widget could not be built in the last sync (not shown).
+        # Panels whose window or widget could not be built (not shown), as of the last sync.
         self.build_failures: list[str] = []
+        # index -> (the entry it failed for, the message): not tried again until it changes
+        self._failed: dict[int, tuple[tuple, str]] = {}
         self._keys = itertools.count()  # scene keys for the canvas
         self._config = config
 ```
@@ -5049,7 +5218,8 @@ with
         """Make the panels match the resolved layout: rebuild a panel whose resolved geometry,
         name or widget properties changed (also when a neighbour's change moved or hid it),
         retarget a state change. A panel that could not be built is left out (None) and
-        listed in `build_failures`; the next sync tries it again. Does nothing while the
+        listed in `build_failures`; it is tried again only when its entry (kind, widget, name
+        or properties) changes. Does nothing while the
         monitor reports no size (being unplugged: the hot-plug sync closes this shell), so no
         0 px layout hides every panel."""
         g = self.monitor.get_geometry()
@@ -5090,6 +5260,7 @@ with
             self._resolved.pop()
             self._handles.pop()
             self._contents.pop()
+            self._failed.pop(len(self.panels), None)
         for i, geo in enumerate(wanted):
             if i == len(self.panels):
 ```
@@ -5108,6 +5279,9 @@ In `shell/monitors.py` replace
             elif panel is None or old is None or replace(old, state=geo.state) != geo:
                 if panel is not None:
                     self._destroy_panel(i)
+                self.panels[i] = self._new_panel(i, geo, theme, raise_later=not startup)
+            else:  # same geometry: the live panel changes in place (spec 15: never a rebuild)
+                if self._handles[i] != handles:
 ```
 
 with
@@ -5131,6 +5305,14 @@ with
             ):
                 if panel is not None:
                     self._destroy_panel(i)
+                failed = self._failed.get(i)
+                if failed is not None and failed[0] == _entry_key(req):
+                    self.build_failures.append(failed[1])  # same entry: not tried again
+                else:
+                    self._failed.pop(i, None)
+                    self.panels[i] = self._new_panel(i, geo, theme, raise_later=not startup)
+            else:  # same geometry: the live panel changes in place (spec 15: never a rebuild)
+                if self._handles[i] != handles:
 ```
 
 In `shell/monitors.py` replace
@@ -5201,10 +5383,12 @@ with
             log.exception(
                 "building panel %d %r (%s) on %s failed", index, req.name, geo.widget, self.name
             )
-            self.build_failures.append(
+            message = (
                 f"{self.name}: panel {req.name!r} ({geo.widget}) could not be built and is not "
                 f"shown: {exc}"
             )
+            self.build_failures.append(message)
+            self._failed[index] = (_entry_key(req), message)
             return None
         panel.scene_key = key
         self._track(panel)
@@ -5225,6 +5409,13 @@ with
         self._resolved.clear()
         self._handles.clear()
         self._contents.clear()
+        self._failed.clear()
+
+
+def _entry_key(req: PanelRequest | CornerRequest) -> tuple:
+    """What a failed build is remembered by: the entry's kind, widget, name and properties.
+    A change of any of them (a reload) tries the panel again; a move does not."""
+    return type(req).__name__, req.widget, req.name, req.props
 
 
 ```
@@ -5237,20 +5428,20 @@ Expected: all pass.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1960 passed`, `All checks passed!`.
+Run VERIFY. Expected: `1977 passed`, `All checks passed!`.
 
 ```bash
 git add shell/monitors.py shell/edge_panel.py shell/app.py tests/test_monitor_shell.py tests/test_app_sync.py tests/test_widget_kinds.py
 git commit -m "fix(shell): rebuild a panel whose name or properties changed; skip a widget that fails to build" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-**Reviewer mutations:** the `(name, props)` comparison removed from `_sync_panels` (`test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place`); `_new_panel` re-raising instead of returning None (`test_a_panel_that_fails_to_build_is_left_out_and_named`); the notification dropped (`test_panels_that_could_not_be_built_are_notified_by_name_once`); `build_failures` not reset per sync (the fixed-widget half of `test_a_panel_that_fails_to_build_is_left_out_and_named`). Note for the reviewer: the three tests that used a raising `widget_class` to make a measurement or a re-layout fail now patch `layout_monitor` instead (a widget failure no longer escapes, which is the point of this task); `test_failed_construction_closes_everything_already_built` keeps its meaning with a raising layout.
+**Reviewer mutations:** the `(name, props)` comparison removed from `_sync_panels` (`test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place`); `_new_panel` re-raising instead of returning None (`test_a_panel_that_fails_to_build_is_left_out_and_named`); the notification dropped (`test_panels_that_could_not_be_built_are_notified_by_name_once`); `build_failures` not reset per sync, a failed panel retried on every sync, never retried, or retried on a move (`test_a_panel_that_fails_to_build_is_left_out_and_named`, `test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change`). Note for the reviewer: the three tests that used a raising `widget_class` to make a measurement or a re-layout fail now patch `layout_monitor` instead (a widget failure no longer escapes, which is the point of this task); `test_failed_construction_closes_everything_already_built` keeps its meaning with a raising layout.
 
 ---
 
 ### Task 6: The clock's `format`, `font` and `font_size`
 
-The clock gets a property model. `format` is tokenised by a pure, fixed table in `services/clock_format.py`; the widget formats per token and never hands user text to strftime. `font` (checked by the theme's font-name rule, now public) and `font_size` (px) become a CSS provider on the clock's label, above the app's stylesheet.
+The clock gets a property model. `format` is tokenised by a pure, fixed table in `services/clock_format.py`, with text in single quotes taken literally (`''` is one quote; an unclosed quote is an error); the widget formats per token and never hands user text to strftime. `font` (checked by the theme's font-name rule, now public) and `font_size` (points, emitted as `pt`) become a CSS provider on the clock's label, above the app's stylesheet.
 
 **Files:**
 - Create: `services/clock_format.py`, `tests/test_clock_format.py`
@@ -5259,7 +5450,7 @@ The clock gets a property model. `format` is tokenised by a pure, fixed table in
 
 **Interfaces:**
 - Consumes: `register_widget(..., props=)`, `WidgetProps` (Task 3); `Widget` (Task 4).
-- Produces: `services.clock_format.TOKENS` (the 11 tokens), `parse_clock_format(text: str) -> tuple[tuple[bool, str], ...]` (ValueError `unknown token 'Y' at position 2; use HH, mm, ...`), `format_clock(parts, now: datetime) -> str`; `shell.config.models.check_font_name(name: str) -> str`; `shell.theme.label_font_css(font: str | None, size: int | None) -> str` (`""` when both are None); `widgets.clock.ClockProps` (`format: str = "HH:mm"` 1-64 characters, `font: str | None` 1-100 characters, `font_size: int | None` 6-96, each with a `Field(description=...)` the settings window shows as the row's hint); `widgets.clock.FONT_PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_USER + 1`; `format_time(now)` stays (`HH:mm`, the summary block's time).
+- Produces: `services.clock_format.TOKENS` (the 11 tokens), `parse_clock_format(text: str) -> tuple[tuple[bool, str], ...]` (ValueError `unknown token 'Y' at position 2; use HH, mm, ..., or put text in single quotes` / `unterminated quote at position 4; close it with ' (write '' for a quote)`), `format_clock(parts, now: datetime) -> str`; `shell.config.models.check_font_name(name: str) -> str`; `shell.theme.label_font_css(font: str | None, size: int | None) -> str` (`font-size` in `pt`; `""` when both are None); `widgets.clock.ClockProps` (`format: str = "HH:mm"` 1-64 characters, `font: str | None` 1-100 characters, `font_size: int | None` 6-96 points, each with a `Field(description=...)` the settings window shows as the row's hint); `widgets.clock.FONT_PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_USER + 1`; `format_time(now)` stays (`HH:mm`, the summary block's time).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5338,8 +5529,8 @@ def test_bad_properties_name_the_key_path_in_a_config(make_config):
 def test_the_label_font_css():
     assert label_font_css(None, None) == ""
     assert label_font_css("Hack", None) == 'label { font-family: "Hack"; }'
-    assert label_font_css(None, 14) == "label { font-size: 14px; }"
-    assert label_font_css("monospace", 9) == "label { font-family: monospace; font-size: 9px; }"
+    assert label_font_css(None, 14) == "label { font-size: 14pt; }"  # points
+    assert label_font_css("monospace", 9) == "label { font-family: monospace; font-size: 9pt; }"
 
 
 def test_the_refresh_uses_the_format(monkeypatch):
@@ -5379,9 +5570,11 @@ def test_the_built_label_shows_the_format(gtk, monkeypatch):
 
 def test_font_and_size_reach_the_label(gtk, monkeypatch):
     _box, label = build(monkeypatch, ClockProps(font="Hack Nerd Font Mono", font_size=30))
-    style = label.get_style_context()
-    assert style.get_property("font-family", gtk.StateFlags.NORMAL) == ["Hack Nerd Font Mono"]
-    assert style.get_property("font-size", gtk.StateFlags.NORMAL) == 30.0
+    from gi.repository import Pango
+
+    font = label.get_style_context().get_property("font", gtk.StateFlags.NORMAL)
+    assert font.get_family() == "Hack Nerd Font Mono"
+    assert font.get_size() / Pango.SCALE == 30  # points
 
 
 def test_without_font_properties_the_label_keeps_the_theme_font(gtk, monkeypatch):
@@ -5453,17 +5646,43 @@ def test_strftime_sequences_are_plain_text():
         ("HH:m", "m", 4),  # one m is not a token
         ("yy", "y", 1),
         ("MMMM", "M", 4),  # MMM then a lone M
-        ("HH 'at' mm", "t", 6),  # quoting is not supported: 'a' is a token, then t
+        ("HH at mm", "t", 5),  # unquoted: a is a token, then a lone t
     ],
 )
 def test_any_other_letter_is_an_error_naming_it(text, letter, position):
     with pytest.raises(ValueError) as exc:
         parse_clock_format(text)
     assert f"unknown token {letter!r} at position {position}" in str(exc.value)
-    assert "HH, mm, ss" in str(exc.value)
+    assert "HH, mm, ss" in str(exc.value) and "single quotes" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("HH 'at' mm", "09 at 05"),
+        ("'Uhr' HH", "Uhr 09"),
+        ("'%Y %n' HH", "%Y %n 09"),  # quoted strftime codes stay text
+        ("HH''mm", "09'05"),  # two quotes outside quoted text: one quote
+        ("'it''s' HH", "it's 09"),  # two quotes inside quoted text: one quote
+        ("''", "'"),
+        ("HH ''", "09 '"),
+        ("'' HH '' mm", "' 09 ' 05"),
+        ("HH ''''", "09 ''"),
+        ("'' 'x'", "' x"),
+    ],
+)
+def test_quoted_text_is_shown_as_written(text, shown):
+    assert fmt(text) == shown
+
+
+@pytest.mark.parametrize(("text", "position"), [("HH 'at", 4), ("'", 1), ("HH 'it''s", 4)])
+def test_an_unterminated_quote_is_an_error(text, position):
+    with pytest.raises(ValueError, match=f"unterminated quote at position {position}"):
+        parse_clock_format(text)
 
 
 def test_literal_text_is_kept_together():
+    assert parse_clock_format("HH'h'' '") == ((True, "HH"), (False, "h' "))
     assert parse_clock_format("HH h:mm") == (
         (True, "HH"),
         (False, " "),
@@ -5489,9 +5708,11 @@ Pure.
 
 Tokens: HH (hour 00-23), H (0-23), h (1-12), a (AM/PM), mm (minute), ss (second), dd (day
 01-31), ddd (weekday, abbreviated), MM (month 01-12), MMM (month, abbreviated), yyyy (year).
+Text in single quotes is shown as written, letters included ('at', 'Uhr'); two single quotes
+('') are one quote, inside or outside quoted text; a quote that is never closed is an error.
 Every other letter is an error; any other character (digits, spaces, punctuation, `%`, other
 scripts) is shown as it is. The longest token wins: "MMM" is the month name, "MMMM" is MMM
-then an M on its own, which is an error.
+then an M on its own, which is an error. Literal text never goes through strftime.
 """
 
 from __future__ import annotations
@@ -5503,11 +5724,45 @@ _LONGEST_FIRST = sorted(TOKENS, key=len, reverse=True)
 Part = tuple[bool, str]  # (is a token, the token or the literal text)
 
 
+def _quoted(text: str, start: int) -> tuple[str, int]:
+    """The text of the quote opened at `start` and the index after its closing quote."""
+    out = []
+    i = start + 1
+    while i < len(text):
+        if text.startswith("''", i):  # a quote inside quoted text
+            out.append("'")
+            i += 2
+        elif text[i] == "'":
+            return "".join(out), i + 1
+        else:
+            out.append(text[i])
+            i += 1
+    raise ValueError(
+        f"unterminated quote at position {start + 1}; close it with ' (write '' for a quote)"
+    )
+
+
 def parse_clock_format(text: str) -> tuple[Part, ...]:
-    """The format as tokens and literal text; ValueError naming the first unknown letter."""
+    """The format as tokens and literal text; ValueError naming the first unknown letter or
+    an unterminated quote."""
     parts: list[Part] = []
+
+    def literal(chars: str) -> None:
+        if parts and not parts[-1][0]:
+            parts[-1] = (False, parts[-1][1] + chars)
+        elif chars:
+            parts.append((False, chars))
+
     i = 0
     while i < len(text):
+        if text.startswith("''", i):
+            literal("'")
+            i += 2
+            continue
+        if text[i] == "'":
+            chars, i = _quoted(text, i)
+            literal(chars)
+            continue
         token = next((t for t in _LONGEST_FIRST if text.startswith(t, i)), None)
         if token is not None:
             parts.append((True, token))
@@ -5516,13 +5771,10 @@ def parse_clock_format(text: str) -> tuple[Part, ...]:
         char = text[i]
         if char.isascii() and char.isalpha():
             raise ValueError(
-                f"unknown token {char!r} at position {i + 1}; use {', '.join(TOKENS)} "
-                "(other letters are not allowed)"
+                f"unknown token {char!r} at position {i + 1}; use {', '.join(TOKENS)}, or "
+                "put text in single quotes"
             )
-        if parts and not parts[-1][0]:
-            parts[-1] = (False, parts[-1][1] + char)
-        else:
-            parts.append((False, char))
+        literal(char)
         i += 1
     return tuple(parts)
 
@@ -5631,7 +5883,7 @@ def label_font_css(font: str | None, size: int | None) -> str:
     if font is not None:
         rules.append(f"font-family: {_font_stack([font])};")
     if size is not None:
-        rules.append(f"font-size: {size}px;")
+        rules.append(f"font-size: {size}pt;")
     return f"label {{ {' '.join(rules)} }}" if rules else ""
 
 
@@ -5678,13 +5930,13 @@ def format_time(now: datetime) -> str:
 
 class ClockProps(WidgetProps):
     format: Annotated[str, Field(min_length=1, max_length=64)] = Field(
-        "HH:mm", description="HH mm ss H h a ddd dd MMM MM yyyy; other letters are not allowed"
+        "HH:mm", description="HH mm ss H h a ddd dd MMM MM yyyy; other text in 'single quotes'"
     )
     font: Annotated[str, Field(min_length=1, max_length=100)] | None = Field(
         None, description="a font family; reset: the theme's font"
     )
     font_size: Annotated[int, Field(ge=6, le=96)] | None = Field(
-        None, description="px; reset: the theme's size"
+        None, description="pt; reset: the theme's size"
     )
 
     @field_validator("format")
@@ -5745,18 +5997,18 @@ class ClockWidget(Widget):
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `scripts/py -m pytest -q tests/test_clock_format.py tests/test_clock.py`
-Expected: `33 passed`.
+Expected: `46 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1989 passed`, `All checks passed!`.
+Run VERIFY. Expected: `2019 passed`, `All checks passed!`.
 
 ```bash
 git add services/clock_format.py widgets/clock.py shell/config/models.py shell/theme.py tests/test_clock_format.py tests/test_clock.py
 git commit -m "feat(clock): format from a fixed token table, font and font_size properties" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-**Reviewer mutations:** a lone letter accepted as text (`test_any_other_letter_is_an_error_naming_it`); `%` escaped or rewritten (`test_strftime_sequences_are_plain_text`); `h` at midnight giving 0 (`test_midnight_and_noon_on_the_12_hour_clock`); the font provider at APPLICATION priority, below the app's stylesheet (`test_without_font_properties_the_label_keeps_the_theme_font`); the font-name check dropped (`test_bad_properties_are_refused`).
+**Reviewer mutations:** a lone letter accepted as text (`test_any_other_letter_is_an_error_naming_it`); `%` escaped or rewritten (`test_strftime_sequences_are_plain_text`); `h` at midnight giving 0 (`test_midnight_and_noon_on_the_12_hour_clock`); the font provider at APPLICATION priority, below the app's stylesheet (`test_without_font_properties_the_label_keeps_the_theme_font`); the font-name check dropped (`test_bad_properties_are_refused`); an unclosed quote accepted, `''` kept as two quotes, or quoted letters read as tokens (`test_an_unterminated_quote_is_an_error`, `test_quoted_text_is_shown_as_written`); the size written in px (`test_the_label_font_css`, `test_font_and_size_reach_the_label`).
 
 ---
 
@@ -5770,7 +6022,7 @@ The form adds a `name` text row and the `panel` choice to both panel sections (n
 
 **Interfaces:**
 - Consumes: `registry.widget_names`, `widget_title`, `supported_kinds`, `widget_props_model`, `defaults(id, kind)` (Task 3); `PANEL_KINDS`, `FRAMEWORK_KEYS` (Task 1); `ClockProps` descriptions (Task 6); `PanelRequest.props` (Task 3).
-- Produces: `settings.form.WidgetChoice(id: str, title: str = "", kinds: tuple[str, ...] = ("edge",), props: type[BaseModel] | None = None)` with `.label`; `registry_widgets() -> tuple[WidgetChoice, ...]`; `config_form(widgets: tuple[WidgetChoice, ...] = ()) -> ConfigForm`; `ConfigForm.panel_for(kind: str, corner: str | None = None, kinds: tuple[str, ...] = ()) -> SectionSpec` (the panel type row only when `len(kinds) > 1`, with `disabled` = the kinds not in `kinds`); `ConfigForm.widget_props(widget_id: str) -> SectionSpec | None` (key `""`, label `"Widget"`); `props_section(model) -> SectionSpec | None`; `FieldSpec.disabled: tuple[str, ...]`, `FieldSpec.required: bool`; field kind `"text"`; `widget_choices(widgets) -> (ids, labels)` sorted by title; `KIND_LABELS`, `LEAD_ROWS`, `CORNER_ROWS`. `settings.values`: `field_value` for `name`, `panel` and widget properties (source `"widget default"` when unset, `default` = the model default); `panel_ops(entry, "panel", kind)`; `new_panel_entry` names a panel after `widget_title`. `settings.fields.TextEditor` (sends on Enter, focus-out or flush; None shows as empty).
+- Produces: `settings.form.WidgetChoice(id: str, title: str = "", kinds: tuple[str, ...] = ("edge",), props: type[BaseModel] | None = None)` with `.label`; `registry_widgets() -> tuple[WidgetChoice, ...]`; `config_form(widgets: tuple[WidgetChoice, ...] = ()) -> ConfigForm`; `ConfigForm.panel_for(kind: str, corner: str | None = None, kinds: tuple[str, ...] = ()) -> SectionSpec` (the panel type row only when `len(kinds) > 1`, with `disabled` = the kinds not in `kinds`); `ConfigForm.widget_props(widget_id: str) -> SectionSpec | None` (key `""`, label `"Widget"`); `props_section(model) -> SectionSpec | None`; `FieldSpec.disabled: tuple[str, ...]`, `FieldSpec.required: bool`; field kind `"text"`; `widget_choices(widgets) -> (ids, labels)` sorted by title; `KIND_LABELS`, `LEAD_ROWS`, `CORNER_ROWS`. `settings.values`: `field_value` for `name`, `panel` and widget properties (source `"widget default"` when unset, `default` = the model default); `panel_ops(entry, "panel", kind)`; `new_panel_entry` names a panel after `widget_title`. `settings.fields.TextEditor` (sends on Enter, focus-out or flush; None shows as empty). In a widget's section (`text=True`) the form refuses, with ValueError, exactly what `registry.form_type_ok` refuses: a union of two types, a Literal of non-strings, an array, an object, a nested model, a number.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5820,12 +6072,12 @@ with
 
 def test_choices_show_their_labels():
     form = config_form(
-        (WidgetChoice("summary", "Summary block", ("corner",)), WidgetChoice("clock", "Clock"))
+        (WidgetChoice("summary", "Summary", ("corner",)), WidgetChoice("clock", "Clock"))
     )
     row, _, _ = row_for(form.edge_panel.field("widget"), "clock")
-    assert [r[0] for r in row.editor.widget.get_model()] == ["Clock", "Summary block"]
+    assert [r[0] for r in row.editor.widget.get_model()] == ["Clock", "Summary"]
     row.editor.widget.set_active_id("summary")
-    assert row.editor.widget.get_active_text() == "Summary block"
+    assert row.editor.widget.get_active_text() == "Summary"
 
 
 ```
@@ -5881,7 +6133,7 @@ with
 from typing import Annotated, Literal
 
 import pytest
-from pydantic import Field
+from pydantic import Field, create_model
 
 from settings import form as form_module
 ```
@@ -5893,6 +6145,10 @@ In `tests/test_settings_form.py` replace
     MODE_HINTS,
     config_form,
     format_fonts,
+    join_length,
+    parse_fonts,
+    rgba_to_hex,
+    section_for,
 ```
 
 with
@@ -5903,6 +6159,11 @@ with
     WidgetChoice,
     config_form,
     format_fonts,
+    join_length,
+    parse_fonts,
+    props_section,
+    rgba_to_hex,
+    section_for,
 ```
 
 In `tests/test_settings_form.py` replace
@@ -6036,14 +6297,14 @@ def test_widgets_are_listed_by_their_display_name():
     form = config_form(
         (
             WidgetChoice("system_bar", "System bar"),
-            WidgetChoice("summary", "Summary block", ("corner",)),
+            WidgetChoice("summary", "Summary", ("corner",)),
             WidgetChoice("dock", "Dock"),
             WidgetChoice("x"),  # no title: its id
         )
     )
     widget = form.edge_panel.field("widget")
     assert widget.choices == ("dock", "summary", "system_bar", "x")
-    assert widget.labels == ("Dock", "Summary block", "System bar", "x")
+    assert widget.labels == ("Dock", "Summary", "System bar", "x")
     assert form.corner_panel.field("widget").choices == widget.choices
 
 ```
@@ -6143,6 +6404,43 @@ def test_the_registry_widgets_for_the_form(corner_registry):
     got = {w.id: (w.label, w.kinds, w.props) for w in registry_widgets()}
     assert got["box"] == ("Box", ("corner",), WidgetProps)
     assert got["dock"] == ("Dock", ("edge",), WidgetProps)
+
+
+class Inner(WidgetProps):
+    size: int = 1
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        str,
+        int,
+        bool,
+        Literal["a", "b"],
+        str | None,
+        Annotated[int, Field(ge=1, le=9)] | None,
+        float,
+        float | None,
+        list[str],
+        dict[str, int],
+        Literal[1, 2],
+        int | str,
+        Inner,
+    ],
+    ids=repr,
+)
+def test_the_registry_refuses_exactly_the_property_types_the_form_cannot_show(annotation):
+    """shell.registry.form_type_ok (checked at registration) and props_section (the settings
+    window) must agree, so a registered widget always gets its Widget rows."""
+    from shell.registry import form_type_ok
+
+    model = create_model("Props", __base__=WidgetProps, font=(annotation, None))
+    try:
+        props_section(model)
+        shown = True
+    except ValueError:
+        shown = False
+    assert form_type_ok(model.model_fields["font"].annotation) is shown
 ```
 
 In `tests/test_settings_panels.py` replace
@@ -6737,7 +7035,11 @@ def _field(
             return FieldSpec(kind="length", minimum=LENGTH_PX[0], maximum=LENGTH_PX[1], **common)
         if key in COLOR_KEYS:
             return FieldSpec(kind="color", **common)
+    if text and len(_options(prop)) != 1:
+        raise ValueError(f"no form field for {key!r}: one type (or that type | None) only")
     if "enum" in first:
+        if text and not all(isinstance(v, str) for v in first["enum"]):
+            raise ValueError(f"no form field for {key!r}: a Literal of strings only")
         return FieldSpec(kind="enum", choices=tuple(first["enum"]), **common)
     if first.get("type") == "boolean":
         return FieldSpec(kind="bool", **common)
@@ -6745,7 +7047,7 @@ def _field(
         return FieldSpec(
             kind="int", minimum=first.get("minimum"), maximum=first.get("maximum"), **common
         )
-    if key == "font" and first.get("type") == "array":
+    if not text and key == "font" and first.get("type") == "array":
         return FieldSpec(kind="fonts", **common)
     if first.get("type") == "string" and (text or key == "name"):
         return FieldSpec(kind="text", **common)
@@ -6775,6 +7077,8 @@ def section_for(
             continue
         ref = _options(prop)[0].get("$ref")
         if ref is not None:
+            if text:  # a widget property is one row, never a table
+                raise ValueError(f"no form field for {fkey!r}: a nested model")
             sub = ref.rsplit("/", 1)[-1]
             title = fkey.replace("_", " ").capitalize()
             sections.append(section_for(schema, sub, fkey, title, widgets, text=text))
@@ -7199,14 +7503,14 @@ Expected: all pass.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `2000 passed`, `All checks passed!`.
+Run VERIFY. Expected: `2043 passed`, `All checks passed!`.
 
 ```bash
 git add settings/form.py settings/values.py settings/fields.py settings/view.py tests/test_settings_form.py tests/test_settings_values.py tests/test_settings_fields.py tests/test_settings_panels.py
 git commit -m "feat(settings): name and panel type rows, widget property rows from the widget's model" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-**Reviewer mutations:** the old widget's keys kept on a widget switch (`test_a_new_widget_drops_the_old_widgets_keys`); the panel type row shown for a one-kind widget (`test_panel_fields`, `test_the_panel_type_row_shows_only_for_a_widget_of_several_kinds`); float not disabled (`test_the_panel_type_row_shows_only_for_a_widget_of_several_kinds`); the config's colour-by-name rule applied to widget properties (`test_a_widget_with_properties_gets_a_widget_section`: a property called `text` must be a text row).
+**Reviewer mutations:** the old widget's keys kept on a widget switch (`test_a_new_widget_drops_the_old_widgets_keys`); the panel type row shown for a one-kind widget (`test_panel_fields`, `test_the_panel_type_row_shows_only_for_a_widget_of_several_kinds`); float not disabled (`test_the_panel_type_row_shows_only_for_a_widget_of_several_kinds`); the config's colour-by-name rule applied to widget properties (`test_a_widget_with_properties_gets_a_widget_section`: a property called `text` must be a text row); the form or the registry accepting a type the other refuses (`test_the_registry_refuses_exactly_the_property_types_the_form_cannot_show`).
 
 ---
 
@@ -7243,7 +7547,7 @@ def test_the_real_widgets_make_a_form_and_the_clock_has_its_widget_rows():
 
     form = config_form(registry_widgets())
     widget = form.edge_panel.field("widget")
-    assert widget.labels == ("Clock", "Dock", "Summary block", "System bar")
+    assert widget.labels == ("Clock", "Dock", "Summary", "System bar")
     clock = form.widget_props("clock")
     assert [(f.key, f.kind) for f in clock.fields] == [
         ("format", "text"),
@@ -7252,6 +7556,7 @@ def test_the_real_widgets_make_a_form_and_the_clock_has_its_widget_rows():
     ]
     assert (clock.field("font_size").minimum, clock.field("font_size").maximum) == (6, 96)
     assert clock.field("format").hint.startswith("HH mm ss")
+    assert clock.field("font_size").hint.startswith("pt")  # the size is in points
     assert all(form.widget_props(w) is None for w in ("dock", "summary", "system_bar"))
 ```
 
@@ -7817,7 +8122,7 @@ with
     def add(self, widget: str | None) -> None:
         """A new entry with its widget's first kind, a name made from the widget's title that
         is unique on this monitor, and the widget (a summary block's entry is {"panel":
-        "corner", "name": "Summary block", "widget": "summary"}: its corner and size are the
+        "corner", "name": "Summary", "widget": "summary"}: its corner and size are the
         widget's)."""
         if widget:
             self._on_edit(
@@ -7856,7 +8161,7 @@ Expected: all pass.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `2009 passed`, `All checks passed!`.
+Run VERIFY. Expected: `2052 passed`, `All checks passed!`.
 
 ```bash
 git add settings/panels.py settings/fields.py settings/view.py tests/test_settings_fields.py tests/test_settings_panels.py tests/test_settings_view.py tests/test_settings_example.py
@@ -7901,13 +8206,13 @@ panel = "edge"
 name = "Dock"
 widget = "dock"
 
-[[monitors.HDMI-A-1.panels]]    # 2: clock, top centre: weekday and seconds, a larger font
+[[monitors.HDMI-A-1.panels]]    # 2: clock, top centre: weekday and seconds, 18 pt
 panel = "edge"
 name = "Clock"
 widget = "clock"
 length = "content"
 format = "ddd HH:mm:ss"
-font_size = 24
+font_size = 18
 
 [[monitors.HDMI-A-1.panels]]    # 3: system bar, right edge
 panel = "edge"
@@ -7980,8 +8285,8 @@ Each `[[monitors.NAME.panels]]` entry starts with three required keys:
 - `panel`: the panel type. `edge` panels sit on one screen edge, `corner` panels in a screen
   corner (see Corner panels). `float` is reserved for later and rejected ("float panels are not
   implemented yet").
-- `name`: 1-40 characters, no control characters, unique on its monitor (case-sensitive). It
-  names the panel in logs, notifications and the settings window; panels are still matched by
+- `name`: 1-40 characters, no control characters, no space (or other whitespace) at the
+  start or end, unique on its monitor (case-sensitive). It names the panel in logs, notifications and the settings window; panels are still matched by
   their place in the list, so a rename rebuilds the panel.
 - `widget`: what the panel shows: `dock`, `clock`, `system_bar` (edge panels) or `summary`
   (corner panels). A widget on a panel type it does not support is rejected
@@ -7995,19 +8300,23 @@ in the same table. The clock's properties:
 panel = "edge"
 name = "Clock"
 widget = "clock"
-format = "ddd HH:mm:ss"   # tokens: HH mm ss H h a ddd dd MMM MM yyyy; other text is kept
+format = "ddd HH:mm:ss"   # tokens: HH mm ss H h a ddd dd MMM MM yyyy; 'quoted text'
 font = "JetBrains Mono"   # a font family (default: the theme's font)
-font_size = 24            # px, 6-96 (default: the theme's size)
+font_size = 14            # points, 6-96 (default: the theme's size)
 ```
 
 The format takes only the tokens listed: `HH` hour 00-23, `H` 0-23, `h` 1-12, `a` AM/PM, `mm`
-minute, `ss` second, `dd` day, `ddd` weekday, `MM` month, `MMM` month name, `yyyy` year. Any
-other letter is an error naming its position; digits, spaces, punctuation and `%` are shown as
-written. A key the widget does not have (`format: unknown key for widget 'dock'`), a bad
+minute, `ss` second, `dd` day, `ddd` weekday, `MM` month, `MMM` month name, `yyyy` year.
+Text in single quotes is shown as written (`"HH 'h' mm"`), two single quotes (`''`) are one
+quote, and a quote that is not closed is an error. Any other letter is an error naming its
+position; digits, spaces, punctuation and `%` are shown as written (never through strftime).
+Errors name the entry's index in brackets (`monitors.HDMI-A-1.panels[2].format: ...`). A key
+the widget does not have (`format: unknown key for widget 'dock'`), a bad
 value, a duplicate name or a missing `panel` is reported with its key path; the shell keeps
 the previous layout and sends a "Config not applied" notification. A file in the old format
 (entries with only `widget`) gets one line saying what to add. A panel whose widget fails to
-build is left out (a "Panel not shown" notification names it); the monitor's other panels stay.
+build is left out (a "Panel not shown" notification names it); the monitor's other panels stay,
+and it is tried again only when its `panel`, `widget`, `name` or a widget property changes.
 Changing `panel`, `widget`, `name` or a widget property rebuilds that panel.
 ````
 
@@ -8081,7 +8390,7 @@ with
 
 ```markdown
 - Each panel is listed by its name. The add list shows the widgets by their display names
-  (Clock, Dock, Summary block, System bar); a new panel gets the widget's first panel type
+  (Clock, Dock, Summary, System bar); a new panel gets the widget's first panel type
   and a name made from its display name that is free on that monitor (`Clock`, `Clock 2`).
   The rows start with Name, Widget and, for a widget that can be shown in more than one panel
   type, Panel type (float is listed and greyed out). A widget with properties gets a
@@ -8108,7 +8417,9 @@ shells over it. New widgets go in `widgets/`: a `shell.widget.Widget` subclass (
 returns its Gtk content, `destroy()` stops its timers) registered with
 `@register_widget(id, title=..., props=..., edge=PanelDefaults(...), corner=CornerDefaults(...))`;
 the property model (a `WidgetProps` subclass) gives the config keys and the settings window's
-Widget rows. Widgets never call cairo or layer-shell directly.
+Widget rows. A property must be `str`, `int`, `bool`, a `Literal` of strings, or one of these
+`| None` (the types the settings window has a row for): any other type, or a property named like
+a panel key, is refused at import. Widgets never call cairo or layer-shell directly.
 ```
 
 In `README.md` replace
@@ -8145,9 +8456,8 @@ with
 
 ```markdown
 - Panel/widget model: float panels are reserved, not built; only the clock has properties so
-  far; a widget property of a type the settings form does not know (a list, a float) has no
-  row yet (the form raises when it is built: `test_the_real_widgets_make_a_form...` guards the
-  built-in widgets); a renamed panel is rebuilt, not renamed in place.
+  far; widget properties are limited to `str`, `int`, `bool` and string `Literal`s (no lists or
+  floats yet); a renamed panel is rebuilt, not renamed in place.
 - Moving a panel (a layout change on reload or a resolution change) rebuilds its window; there
 ```
 
@@ -8287,7 +8597,8 @@ Spec: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (sections
 `docs/superpowers/plans/2026-10-14-panel-widget-model.md`.
 
 - **Entries.** Every `[[monitors.X.panels]]` entry has `panel` (edge | corner | float; float is
-  reserved and rejected), `name` (1-40 characters, no control characters, unique per monitor)
+  reserved and rejected), `name` (1-40 characters, no control characters, no leading or
+  trailing whitespace, unique per monitor)
   and `widget`. Other keys are the panel kind's keys or the widget's properties, flat in the
   same table; `PanelConfig` collects the latter in `widget_props` and
   `registry.validate_widgets` checks them against the widget's model. No aliases, no migration
@@ -8297,11 +8608,14 @@ Spec: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (sections
   `request_for` picks the defaults by `cfg.panel`; requests carry `name` and the validated
   props. Built in: `dock`, `clock`, `system_bar` (edge) and `summary` (corner; was
   `widget_panel`). The clock's `format` uses a fixed token table (`services/clock_format.py`:
-  HH mm ss H h a ddd dd MMM MM yyyy), never strftime on user text; `font` (checked like the
-  theme fonts) and `font_size` (6-96 px) go into a provider on the clock's label.
+  HH mm ss H h a ddd dd MMM MM yyyy, plus 'quoted text'), never strftime on user text; `font`
+  (checked like the theme fonts) and `font_size` (6-96 pt) go into a provider on the clock's
+  label. A property type the settings window cannot show is refused at registration. Every
+  panel error writes the index in brackets (`monitors.X.panels[0].name: ...`).
 - **Shell.** `MonitorShell` builds `EdgePanel` or `CornerPanel` by kind with a new widget
   instance; a change of name or props rebuilds that panel; a widget that fails to build is
-  logged and left out, and the app sends "Panel not shown" naming it.
+  logged and left out, and the app sends "Panel not shown" naming it; it is tried again only
+  when its entry (kind, widget, name or props) changes.
 - **Settings window.** Panel titles use `name`; the add list shows widget titles and writes
   `{panel, name, widget}` with a free name; a Panel type row for widgets of several kinds
   (float greyed out); a Widget frame generated from the widget's property model; switching
@@ -8326,7 +8640,7 @@ spec, section 20. A single live gate: the converted examples run on HDMI-A-1
 
 - [ ] **Step 3: VERIFY and commit**
 
-Run VERIFY. Expected: `2010 passed`, `All checks passed!` (ruff skips the Markdown). Check that no old name is left in the README: `grep -n "widget_panel\|@register\b\|widget_kind" README.md` prints nothing (the main spec keeps `widget_panel` only in its history and in "(was `widget_panel`)" notes).
+Run VERIFY. Expected: `2053 passed`, `All checks passed!` (ruff skips the Markdown). Check that no old name is left in the README: `grep -n "widget_panel\|@register\b\|widget_kind" README.md` prints nothing (the main spec keeps `widget_panel` only in its history and in "(was `widget_panel`)" notes).
 
 ```bash
 git add examples/widget-props-test.toml README.md docs/superpowers/specs/2026-10-11-edge-shell-design.md docs/superpowers/specs/2026-10-14-panel-widget-model-design.md
@@ -8350,29 +8664,30 @@ Keep terminal 1 visible: each save prints `config reloaded: N change(s): <kinds>
 
 **Checklist** (Phil answers each with pass / what was seen):
 
-1. **Start.** On HDMI-A-1: the frame, the summary block in the bottom-left corner (time, date, CPU, RAM), the dock at the bottom, the clock at the top showing the weekday and seconds (for example `Wed 14:05:07`, ticking every second, larger than the old 20 px text) and the system bar on the right. Terminal 1 shows four `building panel` lines with the names `'Summary'`, `'Dock'`, `'Clock'`, `'System bar'`. DP-1 and its Plasma panel are unchanged. *On failure:* copy the first 30 lines of terminal 1; a missing panel with a "Panel not shown" notification means a widget failed to build (copy the traceback).
-2. **A property by hand.** Change the clock's `format = "ddd HH:mm:ss"` to `format = "h:mm a"`: one `config reloaded: 1 change(s): panel-rebuild`, exactly one new `building panel 2 'Clock' (clock)` line (no other panel rebuilt), the clock shows for example `2:05 PM`. Then add `font = "JetBrains Mono"`: the clock's font changes (one rebuild); set `font_size = 40`: the text grows and, because the clock's length is `content`, the panel widens after a moment. Remove the `font` and `font_size` lines: the theme's font and the default size come back. *On failure:* copy the reload line and the `building panel` lines; note what the clock showed.
+1. **Start.** On HDMI-A-1: the frame, the summary block in the bottom-left corner (time, date, CPU, RAM), the dock at the bottom, the clock at the top showing the weekday and seconds (for example `Wed 14:05:07`, ticking every second, at 18 pt: a little larger than the old 20 px, which is 15 pt) and the system bar on the right. Terminal 1 shows four `building panel` lines with the names `'Summary'`, `'Dock'`, `'Clock'`, `'System bar'`. DP-1 and its Plasma panel are unchanged. *On failure:* copy the first 30 lines of terminal 1; a missing panel with a "Panel not shown" notification means a widget failed to build (copy the traceback).
+2. **A property by hand.** Change the clock's `format = "ddd HH:mm:ss"` to `format = "h:mm a"`: one `config reloaded: 1 change(s): panel-rebuild`, exactly one new `building panel 2 'Clock' (clock)` line (no other panel rebuilt), the clock shows for example `2:05 PM`. Then `format = "HH 'Uhr' mm"`: the clock shows for example `14 Uhr 05` (quoted text is shown as written). Then add `font = "JetBrains Mono"`: the clock's font changes (one rebuild); set `font_size = 30` (points): the text grows and, because the clock's length is `content`, the panel widens after a moment. Remove the `font` and `font_size` lines: the theme's font and the default size come back. *On failure:* copy the reload line and the `building panel` lines; note what the clock showed.
 3. **A rename by hand.** Change the clock's `name = "Clock"` to `name = "Top clock"`: `panel-rebuild` of panel 2 only, the next `building panel 2 'Top clock' (clock)` line shows the new name. *On failure:* copy the lines.
 4. **Errors keep the previous layout.** Make each change below, save, check that a "Config not applied" notification shows the quoted text (terminal 1 logs `config not applied (keeping the previous config)` with the same text) and that nothing on screen changed, then undo that change and save again (the next reload applies normally):
    a. the dock's `name = "Dock"` to `name = "Top clock"`: `monitors.HDMI-A-1.panels[2].name: names must be unique: 'Top clock' is used by panels[1] and panels[2]`;
-   b. delete the dock's `panel = "edge"` line: `monitors.HDMI-A-1.panels.1.panel: missing; use "edge", "corner" or "float"` and the line `panel entries start with panel = "edge" | "corner" | "float", ...`;
+   b. delete the dock's `panel = "edge"` line: `monitors.HDMI-A-1.panels[1].panel: missing; use "edge", "corner" or "float"` and the line `panel entries start with panel = "edge" | "corner" | "float", ...`;
    c. the dock's `panel = "edge"` to `panel = "float"`: `monitors.HDMI-A-1.panels[1].panel: float panels are not implemented yet`;
    d. the clock's `panel = "edge"` to `panel = "corner"`: `monitors.HDMI-A-1.panels[2].panel: clock cannot be shown in a corner panel (it supports: edge)`;
-   e. the clock's `format` to `format = "%Y"`: `monitors.HDMI-A-1.panels[2].format: Value error, unknown token 'Y' at position 2; use HH, mm, ss, ...`;
+   e. the clock's `format` to `format = "%Y"`: `monitors.HDMI-A-1.panels[2].format: Value error, unknown token 'Y' at position 2; use HH, mm, ss, ..., or put text in single quotes`; then `format = "HH 'Uhr"`: `... unterminated quote at position 4; close it with ' (write '' for a quote)`;
    f. add `colour = "red"` to the dock: `monitors.HDMI-A-1.panels[1].colour: unknown key for widget 'dock'`;
-   g. add `font_size = 200` to the clock: `monitors.HDMI-A-1.panels[2].font_size: Input should be less than or equal to 96`.
+   g. add `font_size = 200` to the clock: `monitors.HDMI-A-1.panels[2].font_size: Input should be less than or equal to 96`;
+   h. change the dock's name to `name = "Dock "` (a trailing space): `monitors.HDMI-A-1.panels[1].name: Value error, must not start or end with whitespace (a space, a no-break space, ...)`.
    *On failure:* note which item applied (or crashed) and copy terminal 1's last lines.
-5. **The settings window.** `cp /tmp/edge-widgets.toml /tmp/edge-widgets.at-open.toml`, then in terminal 2: `scripts/py main.py --settings --config /tmp/edge-widgets.toml`. The HDMI-A-1 page lists `1. Summary: bottom-left, from bottom, 300x390`, `2. Dock: bottom, center`, `3. Top clock: top, center`, `4. System bar: right, end`. Open entry 3: the rows start with Name (`Top clock`, no reset button), Widget (`Clock`, no reset button), then edge, align, ...; there is no Panel type row (the clock has one panel type); a **Widget** frame holds Format (`h:mm a`), Font and Font size with their hints (`HH mm ss H h a ...`, `a font family; reset: the theme's font`, `px; reset: the theme's size`). The add list shows `Clock`, `Dock`, `Summary block`, `System bar`. *On failure:* note the rows or labels that differ (screenshot with `spectacle`).
+5. **The settings window.** `cp /tmp/edge-widgets.toml /tmp/edge-widgets.at-open.toml`, then in terminal 2: `scripts/py main.py --settings --config /tmp/edge-widgets.toml`. The HDMI-A-1 page lists `1. Summary: bottom-left, from bottom, 300x390`, `2. Dock: bottom, center`, `3. Top clock: top, center`, `4. System bar: right, end`. Open entry 3: the rows start with Name (`Top clock`, no reset button), Widget (`Clock`, no reset button), then edge, align, ...; there is no Panel type row (the clock has one panel type); a **Widget** frame holds Format (`h:mm a`), Font and Font size with their hints (`HH mm ss H h a ...`, `a font family; reset: the theme's font`, `pt; reset: the theme's size`, the size row reading `pt · ...`). The add list shows `Clock`, `Dock`, `Summary`, `System bar`. *On failure:* note the rows or labels that differ (screenshot with `spectacle`).
 6. **Add panels with free names.** Add `Clock`: entry `5. Clock: top, center` opens (the name `Clock` is free since item 3), a second clock appears at the top (`panel-add`). Add `Clock` again: `6. Clock 2: top, center`. Remove entry 6 (its clock disappears). *On failure:* note the names written (`grep -n 'name =' /tmp/edge-widgets.toml`).
 7. **Widget properties from the window.** In entry 5's Widget frame: Format `HH:mm:ss` + Enter (the new clock shows seconds, `panel-rebuild`), Font size 30 with the arrows (one rebuild 0.4 s after the last click), Font `JetBrains Mono` + Enter; then the Font row's reset button: the theme's font returns and `grep -n font /tmp/edge-widgets.toml` shows no `font =` line for entry 5 (only `font_size`). Type Format `%Y` + Enter: a red "Not saved: ... unknown token 'Y' ..." under the Format row, the file keeps `HH:mm:ss`. *On failure:* copy the message or the grep output.
 8. **Names in the window.** Set entry 5's Name to `Top clock` + Enter: a red "Not saved: ... names must be unique: 'Top clock' is used by panels[2] and panels[4]" under Name, nothing written. Set it to `Seconds` + Enter: the title becomes `5. Seconds: top, center` and the entry stays open; terminal 1 shows `building panel 4 'Seconds' (clock)`. *On failure:* note the title and the file's name line.
-9. **Switching the widget.** Set entry 5's Widget to `Dock`: one reload (`panel-rebuild`), the entry shows the dock's rows and no Widget frame, and `grep -n -A8 'name = "Seconds"' /tmp/edge-widgets.toml` shows `widget = "dock"` and no `format` or `font_size`. Then set its Widget to `Summary block`: the file shows `panel = "corner"` for it and no edge-only keys; its rows become corner, edge, width, height; the bottom-left corner is already taken by entry 1, so the window's preview shows "... the bottom-left corner already holds ...; not shown" and the shell sends "Panels adjusted". Remove entry 5. *On failure:* copy the grep output and the preview text.
+9. **Switching the widget.** Set entry 5's Widget to `Dock`: one reload (`panel-rebuild`), the entry shows the dock's rows and no Widget frame, and `grep -n -A8 'name = "Seconds"' /tmp/edge-widgets.toml` shows `widget = "dock"` and no `format` or `font_size`. Then set its Widget to `Summary`: the file shows `panel = "corner"` for it and no edge-only keys; its rows become corner, edge, width, height; the bottom-left corner is already taken by entry 1, so the window's preview shows "... the bottom-left corner already holds ...; not shown" and the shell sends "Panels adjusted". Remove entry 5. *On failure:* copy the grep output and the preview text.
 10. **Revert all** (the window's top bar) → OK: the file goes back to how it was when the window opened (the Top clock keeps `h:mm a`: that hand edit came before the window opened; the panels added in items 6-9 are already gone), and `cmp /tmp/edge-widgets.toml /tmp/edge-widgets.at-open.toml` prints nothing. *On failure:* run `diff` instead of `cmp` and copy it.
 11. **A hand edit while the window is open.** In the text editor change the dock's `name = "Dock"` to `name = "Bottom dock"` and save: the window shows the blue "changed outside" banner and the title `2. Bottom dock: bottom, center`; terminal 1 shows one `panel-rebuild` and `building panel 1 'Bottom dock' (dock)`. *On failure:* note which side missed it.
 12. **The other examples.** Close the window, stop the shell (Ctrl+C), then run `scripts/py main.py --config examples/corner-test.toml -v` for a few seconds: two summary blocks (bottom-left, and top-right collapsed), dock, clock, system bar as at the corner plan's Gate B, with `building panel` lines naming `'Summary'`, `'Dock'`, `'Clock'`, `'System bar'`, `'Summary top-right'`. Ctrl+C. *On failure:* copy the log.
 13. **DP-1.** Throughout, DP-1 kept its Plasma panel and no Edge Shell frame; the window's DP-1 page still shows `plasma`. *On failure:* stop everything; restore with `scripts/py main.py --restore-config --config /tmp/edge-widgets.toml` if the window wrote anything for DP-1, and report.
 
-Not checked live (covered by tests): a widget whose build raises (`test_a_panel_that_fails_to_build_is_left_out_and_named`), the Panel type row and the greyed-out float (no built-in widget supports two panel types yet: `test_the_panel_type_of_a_two_kind_widget_is_switched_in_one_write`).
+Not checked live (covered by tests): a widget whose build raises and is then not retried until its entry changes (`test_a_panel_that_fails_to_build_is_left_out_and_named`, `test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change`), a widget property type the window cannot show refused at import (`test_a_property_the_settings_window_cannot_show_is_refused`), the Panel type row and the greyed-out float (no built-in widget supports two panel types yet: `test_the_panel_type_of_a_two_kind_widget_is_switched_in_one_write`).
 
 ---
 
@@ -8393,7 +8708,7 @@ with a "**Results.**" paragraph: Gate (Phil, HDMI-A-1): for each of the 13 items
 
 - [ ] **Step 2: VERIFY and commit**
 
-Run VERIFY. Expected: `2010 passed` (more if a fix task added tests), `All checks passed!`.
+Run VERIFY. Expected: `2053 passed` (more if a fix task added tests), `All checks passed!`.
 
 ```bash
 git add docs/superpowers/specs/2026-10-11-edge-shell-design.md docs/superpowers/specs/2026-10-14-panel-widget-model-design.md
@@ -8408,17 +8723,17 @@ git commit -m "docs: record the panel/widget model gate results" -m "Co-Authored
 - **Placeholders.** None: every code step carries the full file or the exact text to replace; the two one-off scripts are given in full; every test is written out.
 - **Type consistency.** `WidgetProps` / `NO_PROPS` / `Widget` (Task 3) are what `PanelRequest.props`, `EdgePanel(widget=, props=)` (Task 4), `MonitorShell._contents` (Task 5), `ClockProps` (Task 6) and `WidgetChoice.props` (Task 7) use. `register_widget(id, *, title, props, edge, corner)` (Task 3) is the call in every widget (Tasks 3, 4, 6) and in `conftest.py`. `defaults(id, kind)` (Task 3) is what `settings.values` calls (Tasks 3, 7). `new_panel_entry(user, monitor, widget)` (Task 2) is what `PanelEditor.add` calls (Task 2) and what Task 7 renames by title. `ConfigForm.panel_for(kind, corner, kinds)` (Task 7) is what `panel_section` calls with `supported_kinds` (Task 8). `FieldSpec.disabled` / `required` (Task 7) feed `ChoiceEditor` and `FieldRow` (Task 8). `build_failures` (Task 5) is read by `EdgeShellApp._report_layout` (Task 5) and stubbed on `FakeShell`.
 - **Review Focus.** Five classes listed; each line's tests are in the owning task's Step 1 (Tasks 2, 3, 5, 6, 7, 8).
-- **Prototype.** Every task was applied in order to a scratch copy of this branch: the totals in the File Structure table are the measured ones, `ruff check` and `ruff format --check` were clean after each task, each task's Step 2 output is the measured red run, and every "replace" text and file in this plan was generated from that prototype and re-applied to the previous task's tree to check it reproduces the next one exactly (Task 2: the converter and the fix-up script reproduced the hand-converted tests byte for byte). The reviewer mutations listed per task were run against the finished prototype: all 31 turned their tests red.
+- **Prototype.** Every task was applied in order to a scratch copy of this branch: the totals in the File Structure table are the measured ones, `ruff check` and `ruff format --check` were clean after each task, each task's Step 2 output is the measured red run, and every "replace" text and file in this plan was generated from that prototype and re-applied to the previous task's tree to check it reproduces the next one exactly (Task 2: the converter and the fix-up script reproduced the hand-converted tests byte for byte). The reviewer mutations listed per task were run against the finished prototype: all 44 (31 from the first draft, 13 for Phil's answers) turned their tests red. After Phil's answers every task was re-applied and re-measured the same way; the totals, red outputs and code blocks above are the revised ones.
 
-## Open questions for Phil
+## Resolved by Phil
 
-Each has a default (used in this plan); answer only to change it.
+The first draft's eight open questions; Phil answered "all as recommended" (2026-10-14). Each answer is built into the tasks above.
 
-1. **Missing-`panel` path style** (decision 4): the loader keeps its dotted path (`monitors.X.panels.0.panel: missing; ...`) while the registry's messages use `panels[0]`. Unify both on `panels[0]`? Default: keep as is (smaller change; every pydantic message keeps its current shape).
-2. **Names** (decision 3): 1-40 characters, no control characters, case-sensitive unique per monitor; leading and trailing spaces are allowed. Trim or forbid them? Default: allowed.
-3. **Clock format grammar** (decision 8): letters outside the table are errors, everything else is literal, no quoting (so "at" cannot be written). Add `'quoted text'`? Default: no.
-4. **`font_size` in px, 6-96** (decision 9; the theme's CSS uses px, the old clock was 20 px). Points instead? Default: px.
-5. **Add list order and labels** (decision 10): widgets by title, alphabetically, without the "(corner panel)" suffix; the kind shows on the added entry. Group by panel type instead (that becomes the toolbar's panel type dropdown in plan 3)? Default: by title.
-6. **A panel whose widget fails to build** (decision 7) is retried on every re-sync and notified once per change of the failure list. Stop retrying until the entry changes? Default: retry.
-7. **New panel names come from the title**: a new summary block is named `Summary block`, a new system bar `System bar`. Shorter defaults (`Summary`)? Default: the title, as the spec says.
-8. **A widget property type the form cannot show** (a list, a float) makes the settings window fail to build its form (decision 10); only the built-in widgets are guarded by a test. Should `register_widget` refuse such a model at import instead? Default: no (the registry stays independent of the settings form); revisit with plan 4's input styles.
+1. **Path style:** every panel error, the loader's included, writes the entry's index in brackets (`monitors.HDMI-A-1.panels[0].panel: missing; ...`): `shell.config.loader.key_path` (Task 2, decision 4). Layout warnings and log lines keep their dotted paths.
+2. **Names:** a leading or trailing space (any whitespace) is rejected with "must not start or end with whitespace (a space, a no-break space, ...)", never trimmed silently (Task 1, decision 3).
+3. **Clock format:** text in single quotes is literal (`HH 'Uhr' mm`), `''` is one quote, an unclosed quote is a validation error naming its position; literal text never reaches strftime (Task 6, decision 8).
+4. **`font_size`:** points, 6-96, emitted as `pt`; the settings row's hint says "pt" (Task 6, decision 9).
+5. **Add list:** stays sorted by the widget's title, without the "(corner panel)" suffix (Task 7, decision 10).
+6. **A panel whose widget fails to build:** not tried again on every re-sync; skipped until its entry (`panel`, `widget`, `name` or a widget property) changes, and a reload that changes it retries (Task 5, decision 7).
+7. **Titles and new panel names:** the summary widget's title is "Summary"; new panels are named `Summary`, `System bar`, `Dock`, `Clock` (numbered when taken) (Tasks 3-4, decision 12).
+8. **Property types:** `register_widget` refuses, at import, a property whose type the settings window cannot show; the window shows `str`, `int`, `bool`, a `Literal` of strings, or one of these `| None` (no floats, lists, dicts, number literals, unions of two types or nested models). The ValueError names the widget, the property and its type (Task 3), and a test keeps the registry and the form in agreement (Task 7, decision 10).
