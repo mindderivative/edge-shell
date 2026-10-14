@@ -165,8 +165,18 @@ def test_with_every_depth_zero_the_path_is_the_plain_frame():
         outline_path(cr, W, H, T, R, [("top", 120, 140, 50, 28)], corners)
         return list(cr.copy_path_flat())
 
-    collapsed = [(c, e, ALONG, DEPTH, 0.0) for c, e in CORNER_EDGES[::2]]
-    assert ops(collapsed) == ops([])
+    for part in (CORNER_EDGES[::2], CORNER_EDGES[1::2]):  # one opener per corner each, all eight
+        collapsed = [(c, e, ALONG, DEPTH, 0.0) for c, e in part]
+        assert ops(collapsed) == ops([])
+
+
+def test_corners_none_is_the_same_as_no_corners():
+    def ops(corners):
+        cr = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H))
+        outline_path(cr, W, H, T, R, [("top", 120, 140, 50, 28)], corners)
+        return list(cr.copy_path_flat())
+
+    assert ops(None) == ops(())
 
 
 def test_the_outline_stays_one_closed_path_with_corner_panels():

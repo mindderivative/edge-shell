@@ -102,12 +102,13 @@ def outline_path(
     T: int,
     R: int,
     panels: list[Panel],
-    corners: Sequence[CornerSpan] = (),
+    corners: Sequence[CornerSpan] | None = (),
 ) -> None:
     """Append the inner desktop boundary as ONE closed clockwise path (from the top-left).
 
     `corners` are corner panels (spec 19), at most one per screen corner; shell.panel_layout
     guarantees that and the minimum geometry that keeps the path simple."""
+    corners = corners or ()
     first = True
     for edge in _ORDER:
         length = w if geometry.is_horizontal(edge) else h  # type: ignore[arg-type]
@@ -149,7 +150,7 @@ def fill_mass(
     R: int,
     panels: list[Panel],
     rgba: tuple[float, float, float, float],
-    corners: Sequence[CornerSpan] = (),
+    corners: Sequence[CornerSpan] | None = (),
 ) -> None:
     """Fill the dark mass: the whole screen minus the inner desktop region."""
     cr.save()
