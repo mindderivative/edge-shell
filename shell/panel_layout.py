@@ -23,10 +23,11 @@ Per edge (`layout_edge`):
    edge, clamped into its free span (warning); it takes no part in the slots or the fill
    (a `pos` panel with length "fill" runs to the end of its free span).
 
-Across the monitor (`layout_monitor`): panels are checked in config order; a panel whose body
-box (full depth, from the screen edge, grown by its `r`) overlaps an earlier panel's is not
-shown (warning). On one edge that is the minimum gap `r1 + r2`; it also catches deep panels on
-neighbouring edges (two panels meeting at a shared screen corner at offset 0 always collide:
+Across the monitor (`layout_monitor`): corner panels are checked first, then edge panels in
+config order; a panel whose body box (full depth, from the screen edge, grown by its `r`)
+overlaps an earlier panel's is not shown (warning). On one edge that is the minimum gap
+`r1 + r2`; it also catches deep panels on neighbouring edges (two panels meeting at a shared
+screen corner at offset 0 always collide:
 one needs an offset of at least the other's depth + r - R), and `pos` panels dropped onto
 slotted ones. Touching is allowed. A hidden panel keeps the slot space it was given: its
 neighbours do not close up.
@@ -75,13 +76,13 @@ Note = tuple[int, str]  # (config index, warning)
 
 # The screen corner at the start (left / top) and at the end (right / bottom) of each edge, in
 # the layout's screen-axis terms (`pos` grows left to right, top to bottom).
-AXIS_START: dict[str, Corner] = {
+AXIS_START: dict[Edge, Corner] = {
     "top": "top-left",
     "bottom": "bottom-left",
     "left": "top-left",
     "right": "top-right",
 }
-AXIS_END: dict[str, Corner] = {
+AXIS_END: dict[Edge, Corner] = {
     "top": "top-right",
     "bottom": "bottom-right",
     "left": "bottom-left",

@@ -159,6 +159,16 @@ def test_a_hidden_corner_panel_takes_no_clearance():
     assert len(warnings) == 1 and "panels.1 (box): overlaps monitors.X.panels.0" in warnings[0]
 
 
+def test_a_hidden_corner_panel_does_not_take_its_corner():
+    got, warnings = placed(
+        box(width=1200, height=700),
+        box("top-right", width=1200, height=700),
+        box("top-right", width=300, height=240, widget="small"),
+    )
+    assert got == [("bottom-left", "bottom", 1200, 690), None, ("top-right", "top", 300, 230)]
+    assert len(warnings) == 1
+
+
 # ---- edge panels beside corner panels ----------------------------------------------------
 
 
