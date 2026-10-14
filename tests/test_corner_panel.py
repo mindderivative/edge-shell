@@ -44,13 +44,52 @@ def test_a_corner_panel_is_an_edge_panel():
     assert issubclass(cp.CornerPanel, ep.EdgePanel)
 
 
-def test_the_edge_panel_surface_is_unchanged(make_config):
-    dock = PanelGeometry("dock", "bottom", 680, 560, 64, "extended", "dock")
-    assert ep.EdgePanel.surface_layout(dock, make_config().theme, MONITOR) == (
-        "bottom left",
-        "0px 0px 0px 666px",
-        (588, 74),
-    )
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (
+            PanelGeometry("dock", "bottom", 680, 560, 64, "extended", "dock"),
+            ("bottom left", "0px 0px 0px 666px", (588, 74)),
+        ),
+        (  # clamped: the surface (length + 2R) must stay on a 1920 px edge
+            PanelGeometry("dock", "bottom", 1800, 560, 64, "extended", "dock"),
+            ("bottom left", "0px 0px 0px 1332px", (588, 74)),
+        ),
+        (  # a vertical edge, measured on the 1080 px height
+            PanelGeometry("dock", "left", 100, 400, 50, "extended", "dock"),
+            ("left top", "86px 0px 0px 0px", (60, 428)),
+        ),
+        (  # a vertical edge, clamped
+            PanelGeometry("dock", "right", 1000, 400, 50, "extended", "dock"),
+            ("right top", "652px 0px 0px 0px", (60, 428)),
+        ),
+    ],
+    ids=["bottom", "bottom-clamped", "left", "right-clamped"],
+)
+def test_the_edge_panel_surface_is_unchanged(make_config, spec, expected):
+    assert ep.EdgePanel.surface_layout(spec, make_config().theme, MONITOR) == expected
+
+
+def test_init_takes_its_surface_from_the_subclass(make_config, monkeypatch):
+    """EdgePanel.__init__ must call type(self).surface_layout, not EdgePanel's own."""
+
+    class Stop(Exception):
+        pass
+
+    def fake_init(_self, **kwargs):
+        raise Stop(kwargs)
+
+    monkeypatch.setattr(ep.WaylandWindow, "__init__", fake_init)
+    monkeypatch.setattr(ep, "monitor_index", lambda _m: 0)
+    spec = CornerGeometry("w", "top-right", "right", 200, 190, 150, "collapsed", "w")
+    with pytest.raises(Stop) as caught:
+        cp.CornerPanel(spec, make_config().theme, MONITOR, 0, "s")
+    kwargs = caught.value.args[0]
+    assert kwargs["anchor"] == "top right"
+    assert kwargs["margin"] == "0px 0px 0px 0px"
+    assert kwargs["layer"] == "top"
+    assert kwargs["exclusivity"] == "none"
+    assert kwargs["keyboard_mode"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -123,5 +162,23 @@ def test_the_handle_size_follows_the_opening_edge(make_config):
     assert s._handle.set["size_request"] == (14, 44)
 
 
-def test_corner_panels_report_no_content_length(make_config):
+def test_corner_panels_report_their_spec_length(make_config):
     assert cp.CornerPanel.natural_length(stub(make_config)) == 290
+
+
+def test_the_corner_input_region_is_reapplied_after_the_parent_allocate(make_config, monkeypatch):
+    s = stub(make_config)
+    order = []
+
+    def parent(_self, _alloc):
+        order.append("parent")
+        s.regions.append(None)  # Fabric resets the shape to the whole surface
+
+    monkeypatch.setattr(ep.WaylandWindow, "do_size_allocate", parent)
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    s.regions.clear()
+    real = s.input_shape_combine_region
+    s.input_shape_combine_region = lambda region: (order.append("region"), real(region))
+    ep.EdgePanel.do_size_allocate(s, None)
+    assert order == ["parent", "region"]
+    assert s.regions[0] is None and rects_of(s.regions[-1]) == [(0, 364, 300, 26)]
