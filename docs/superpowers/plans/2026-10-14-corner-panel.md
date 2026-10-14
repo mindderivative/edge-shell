@@ -1,5 +1,7 @@
 # Corner Panel Implementation Plan
 
+> **Resolution:** Option A was chosen. The "default pending Phil" decisions were confirmed by Phil's instruction to execute. Gate A passed. Gate B passed, with the `--stats` p95 of 9.70 ms (target 8 ms) accepted.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A new kind of panel, the corner panel: one rectangular window in a screen corner that is connected to the frame along two of its sides. It is declared in the same `[[monitors.X.panels]]` list as edge panels, animates like an edge panel (collapse, hover peek, click, drag), and is drawn by the shape canvas as part of the one outline, with border and shadow. The first corner widget is the spec's `widget_panel`: bottom-left, 300 x 390 px, showing the time, date, CPU and RAM.

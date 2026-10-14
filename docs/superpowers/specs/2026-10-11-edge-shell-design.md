@@ -186,6 +186,7 @@ shell = "plasma"
   | Panel `state` | Retarget the tween |
   | Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |
   | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
+  | Panel `corner`, `edge`, `width` or `height` (corner panels) | Rebuild that panel, and any edge panel whose place changed (section 19) |
   | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
   | Monitor `shell` mode | Create or destroy that monitor's windows |
@@ -359,7 +360,7 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
 - `length` is a fixed pixel count. Depth grows only perpendicular to the edge, away from it.
 - If `pos + length` runs past the end of the edge, the surface is shifted inward to stay on screen. If the panel is longer than the edge, it overhangs the far end and the screen clips it (untested). The only length bound is absolute (4000 px), unrelated to the monitor.
 - Content is centred at its natural size; there is no fill, content-fit, percentage, or min/max.
-- Panels have no corner awareness: the frame's rounded corner pieces are separate R x R windows, and a panel placed within about R + T of a screen corner overlaps them. Corner-spanning (L-shaped) panels are not built.
+- Panels have no corner awareness: the frame's rounded corner pieces are separate R x R windows, and a panel placed within about R + T of a screen corner overlaps them. Corner-spanning (L-shaped) panels are not built (superseded: corner panels are rectangles, see section 19).
 
 **Decisions**
 
@@ -475,14 +476,24 @@ connects to two edges ... it is not an L shaped panel window"). Plan:
   draws median 6.04 ms, p95 9.70 ms, max 10.82 ms; one full draw 15.13 ms; every panel 531-535
   ticks in step with one skipped; CPU 0.57 of a core. **The p95 is above the 8 ms target by
   1.7 ms.** The run's config copy still had the sixth same-corner entry and, judging by the 6 ms
-  median (the headless run with border and shadow gave p95 6.5-7.1 ms, without effects 0.29
-  ms), border and shadow were probably still enabled. Phil accepted the result.
-- **Known limitations.** Corner shapes with border and shadow cost about 50 % more per damaged
-  draw than the edge-only example (headless 6.5 ms against 4.2 ms), and the p95 exceeded 8 ms
-  on Phil's machine in the effects configuration. The `widget_panel`'s first stats appear after
+  median (the headless run with border and shadow gave p95 6.5-7.1 ms; without effects the
+  median is 0.29 ms and the p95 0.33 ms), border and shadow were probably still enabled. Phil accepted the result.
+- **Performance attribution** (headless, 1920x1080, all panels toggling, border 2, elevation
+  50). `examples/corner-test.toml` animates five panels (two corner, three edge) against three
+  in `examples/panels-test.toml`: p95 6.5 against 4.2 ms. Its three edge panels alone give p95
+  4.4 ms and its two corner panels alone 2.1 ms, about 0.95 ms per corner shape against about
+  1.4 ms per edge panel. Per shape a corner panel costs no more than an edge panel; the p95
+  rose with the number of animating panels. Phil's live p95 was 9.70 ms, 1.7 ms over the 8 ms
+  target, accepted. Follow-up options, not done: the shadow strokes the whole outline path once
+  per reach level (about 24 strokes), so the cost is mostly fixed per draw; drawing each
+  damaged clip rectangle into its own small group, instead of one group over the bounding
+  extents, cut the effects run by about 13 % in a scratch test (median 6.18 to 5.39 ms) with
+  the damage contract holding; a tighter corner damage box alone gained only about 4 %, so it
+  is not worth doing first.
+- **Known limitations.** The `widget_panel`'s first stats appear after
   about 1 s (`invoke_repeater` initial call). Corner widgets read `/proc` per instance (no
   shared sysinfo service). Edge widgets (clock, dock) in corners are deferred. A corner request
-  with a height below T + 16 is hidden as "no room". The settings window must use the corner
+  with a height below T + 16 is hidden with a warning that names the height. The settings window must use the corner
   contract (`registry.widget_kind`, `registry.defaults`, `SHARED_KEYS`, `EDGE_ONLY_KEYS`,
   `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split('-')`, `default_edge`, `corner_has_edge`); the
   settings plan (branch `feat/settings-window`, plan commit 427b1cd) already depends on it.
