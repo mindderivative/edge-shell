@@ -124,3 +124,98 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     doc = UserDocument("")
     edits[0][0](doc)
     assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}} and edits[0][1] == 3
+
+
+THREE = ("dock", "clock", "bar")
+
+
+def three_panel_editor(make_config, form=FORM):
+    config = make_config(monitors={"M": {"panels": [{"widget": w} for w in THREE]}})
+    edits = []
+    ed = panels.PanelEditor(
+        form,
+        "M",
+        requests_for(config, "M"),
+        lambda *_a: Gtk.Box(),
+        lambda edit, open_index: edits.append((edit, open_index)),
+    )
+    return ed, edits
+
+
+def row_buttons(ed, i):
+    return ed.expanders[i].get_child().get_children()[0].get_children()
+
+
+def widgets_after(edit):
+    doc = UserDocument("".join(f'[[monitors.M.panels]]\nwidget = "{w}"\n' for w in THREE))
+    edit(doc)
+    return [p["widget"] for p in doc.data["monitors"]["M"].get("panels", [])]
+
+
+@pytest.mark.parametrize("i", [0, 1, 2])
+def test_each_rows_remove_button_removes_its_own_entry(make_config, fake_registry, i):
+    ed, edits = three_panel_editor(make_config)
+    row_buttons(ed, i)[2].clicked()
+    ((edit, open_index),) = edits
+    assert open_index is None
+    assert widgets_after(edit) == [w for k, w in enumerate(THREE) if k != i]
+
+
+@pytest.mark.parametrize("i", [1, 2])
+def test_each_rows_move_up_button_moves_its_own_entry_up(make_config, fake_registry, i):
+    ed, edits = three_panel_editor(make_config)
+    row_buttons(ed, i)[0].clicked()
+    ((edit, open_index),) = edits
+    assert open_index == i - 1
+    expected = list(THREE)
+    expected[i - 1], expected[i] = expected[i], expected[i - 1]
+    assert widgets_after(edit) == expected
+
+
+@pytest.mark.parametrize("i", [0, 1])
+def test_each_rows_move_down_button_moves_its_own_entry_down(make_config, fake_registry, i):
+    ed, edits = three_panel_editor(make_config)
+    row_buttons(ed, i)[1].clicked()
+    ((edit, open_index),) = edits
+    assert open_index == i + 1
+    expected = list(THREE)
+    expected[i], expected[i + 1] = expected[i + 1], expected[i]
+    assert widgets_after(edit) == expected
+
+
+def click_add(ed):
+    adder = ed.get_children()[-1]
+    next(c for c in adder.get_children() if isinstance(c, Gtk.Button)).clicked()
+
+
+def test_add_panel_button_writes_the_edge_widgets_id_and_opens_it(make_config, fake_registry):
+    ed, edits = three_panel_editor(make_config)
+    ed.widget_choice.set_active_id("clock")
+    click_add(ed)
+    ((edit, open_index),) = edits
+    assert open_index == 3  # len(requests): the new entry opens
+    assert widgets_after(edit) == [*THREE, "clock"]
+
+
+def test_add_panel_button_writes_a_corner_widgets_id_not_its_label(make_config, corner_registry):
+    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    ed, edits = three_panel_editor(make_config, form)
+    ed.widget_choice.set_active_id("box")
+    assert ed.widget_choice.get_active_text() == "box (corner panel)"
+    click_add(ed)
+    ((edit, open_index),) = edits
+    assert open_index == 3
+    doc = UserDocument("")
+    edit(doc)
+    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}}
+
+
+def test_the_wheel_over_the_add_combo_does_not_change_the_choice(make_config, fake_registry):
+    from gi.repository import Gdk
+
+    ed, _ = three_panel_editor(make_config)
+    ed.widget_choice.set_active(0)
+    event = Gdk.Event.new(Gdk.EventType.SCROLL)
+    event.scroll.direction = Gdk.ScrollDirection.DOWN
+    ed.widget_choice.emit("scroll-event", event)
+    assert ed.widget_choice.get_active() == 0
