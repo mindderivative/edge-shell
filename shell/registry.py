@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from shell.config.models import (
     CORNER_ONLY_KEYS,
+    CORNERS,
     EDGE_ONLY_KEYS,
     Config,
     ConfigError,
@@ -57,6 +58,14 @@ def _check_defaults(name: str, defaults: PanelDefaults | CornerDefaults) -> None
     except ValidationError as exc:
         raise ValueError(f"widget {name!r}: invalid handle or interaction default: {exc}") from exc
     if isinstance(defaults, CornerDefaults):
+        if defaults.corner not in CORNERS:
+            raise ValueError(
+                f"widget {name!r}: corner {defaults.corner!r} must be one of {', '.join(CORNERS)}"
+            )
+        if defaults.state not in ("collapsed", "extended"):
+            raise ValueError(
+                f"widget {name!r}: state {defaults.state!r} must be collapsed or extended"
+            )
         if defaults.edge is not None and not corner_has_edge(defaults.corner, defaults.edge):
             raise ValueError(
                 f"widget {name!r}: edge {defaults.edge!r} is not an edge of {defaults.corner}"

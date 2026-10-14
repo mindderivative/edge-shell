@@ -149,6 +149,10 @@ def test_a_valid_corner_entry_passes(corner_registry, make_config):
     [
         CornerDefaults(corner="bottom-left", width=300, height=390, label="x", edge="top"),
         CornerDefaults(corner="bottom-left", width=30, height=390, label="x"),
+        CornerDefaults(corner="bottom-left", width=4001, height=390, label="x"),
+        CornerDefaults(corner="bottom-left", width=300, height=59, label="x"),
+        CornerDefaults(corner="middle", width=300, height=390, label="x"),
+        CornerDefaults(corner="bottom-left", width=300, height=390, label="x", state="open"),
         CornerDefaults(
             corner="bottom-left", width=300, height=390, label="x", handle=HandleSpec(size=99)
         ),
