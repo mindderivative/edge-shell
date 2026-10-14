@@ -187,12 +187,13 @@ def test_a_draw_error_is_logged_not_raised(make_config, caplog):
 
 
 @pytest.mark.parametrize("thickness", [10, 64])
+@pytest.mark.parametrize(("shape", "weight"), [("dots", 3), ("chevron", 3), ("chevron", 8)])
 @pytest.mark.parametrize(
     ("edge", "d", "w", "h"), [("left", 32.0, 14, 44), ("bottom", 64.0, 44, 14)]
 )
-def test_the_draw_call_is_pinned(make_config, edge, d, w, h, thickness):
+def test_the_draw_call_is_pinned(make_config, edge, d, w, h, thickness, shape, weight):
     """_on_handle_draw must pass exactly the look, morph, centre and shape room to draw_handle."""
-    handle = HandleSpec(shape="chevron")
+    handle = HandleSpec(shape=shape, weight=weight)
     theme = make_config(theme={"thickness": thickness}).theme
     s = stub(make_config, edge=edge, handle=handle, _d=d, _theme=theme)
     got = draw(s, w, h)

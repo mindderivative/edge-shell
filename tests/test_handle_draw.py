@@ -141,7 +141,8 @@ def test_the_shape_never_touches_the_band_edges(shape, edge, size, weight, thick
     # box, wherever the box sits in the band (Gate B).
     box = hd.hit_size(thickness, size, 560)[1]
     for d in (0, 64):
-        first = d - hd.hit_inset(thickness, d, box)  # band's screen-side px in box px
+        # mass's last T px start in box px
+        first = d - hd.hit_inset(thickness, d, box)
         for m in MORPHS:
             profile = band_profile(shape, edge, m, size, weight, thickness, d)
             assert profile, (d, m)
