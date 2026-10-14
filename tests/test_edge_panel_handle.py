@@ -64,6 +64,7 @@ def stub(make_config, edge="bottom", interaction=ALL, handle=None, **extra):
     s._handle_area.queue_draw = lambda: setattr(s._handle_area, "draws", s._handle_area.draws + 1)
     s.input_shape_combine_region = s.regions.append
     s._hit = lambda: ep.EdgePanel._hit(s)
+    s._input_rects = lambda d: ep.EdgePanel._input_rects(s, d)
     for key, value in extra.items():
         setattr(s, key, value)
     return s

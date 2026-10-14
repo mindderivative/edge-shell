@@ -92,12 +92,8 @@ class EdgePanel(WaylandWindow):
         change later in place (set_handle)."""
         # resolved before the window exists: a bad look fails without leaving a half-built window
         look = hd.resolve_handle(handle, interaction, theme)
-        t, r = theme.thickness, theme.radius
-        mon = monitor.get_geometry()
-        extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
-        anchor, margin = geometry.anchor_and_margin(
-            spec.edge, spec.pos, spec.length + 2 * r, r, extent
-        )
+        # a classmethod: the GObject is not initialised yet (CornerPanel overrides it)
+        anchor, margin, size = type(self).surface_layout(spec, theme, monitor)
         super().__init__(
             layer="top",
             anchor=anchor,
@@ -146,8 +142,7 @@ class EdgePanel(WaylandWindow):
         self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
 
         # Allocated once at full size; animation never resizes the layer surface.
-        w, h = geometry.surface_size(spec.edge, spec.length, spec.depth, t, r)
-        self.set_size_request(w, h)
+        self.set_size_request(*size)
         self._place_content()
 
         self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
@@ -164,6 +159,21 @@ class EdgePanel(WaylandWindow):
     # ---- override in subclasses ------------------------------------------------
     def build_content(self) -> Gtk.Widget:
         return Box()
+
+    @classmethod
+    def surface_layout(
+        cls, spec: PanelGeometry, theme: Theme, monitor
+    ) -> tuple[str, str, tuple[int, int]]:
+        """Layer-shell anchor, margin and the surface size (allocated once, fully extended).
+        An edge panel: anchored to its edge, `(length + 2R) x (T + depth)`, moved along the
+        edge by the margin (geometry.anchor_and_margin)."""
+        t, r = theme.thickness, theme.radius
+        mon = monitor.get_geometry()
+        extent = mon.width if geometry.is_horizontal(spec.edge) else mon.height
+        anchor, margin = geometry.anchor_and_margin(
+            spec.edge, spec.pos, spec.length + 2 * r, r, extent
+        )
+        return anchor, margin, geometry.surface_size(spec.edge, spec.length, spec.depth, t, r)
 
     # ---- public ----------------------------------------------------------------
     def toggle(self, *_) -> None:
@@ -292,25 +302,27 @@ class EdgePanel(WaylandWindow):
     def _update_input_region(self, d: float) -> None:
         # The body (plus an invisible hover zone while collapsed, or only the handle's hit
         # target when hover is off) takes input: shell.handle.input_rects.
-        t, s = self._theme, self.spec
-        rects = tuple(
-            hd.input_rects(
-                s.edge,
-                s.length,
-                s.depth,
-                d,
-                t.thickness,
-                t.radius,
-                t.hover_zone,
-                self._interaction,
-                self._hit(),
-                self._look.offset,
-            )
-        )
+        rects = tuple(self._input_rects(d))
         if rects == self._last_rect:
             return
         self._last_rect = rects
         self.input_shape_combine_region(cairo.Region([cairo.RectangleInt(*r) for r in rects]))
+
+    def _input_rects(self, d: float) -> list[tuple[int, int, int, int]]:
+        """The input region at depth `d` in surface px (CornerPanel overrides it)."""
+        t, s = self._theme, self.spec
+        return hd.input_rects(
+            s.edge,
+            s.length,
+            s.depth,
+            d,
+            t.thickness,
+            t.radius,
+            t.hover_zone,
+            self._interaction,
+            self._hit(),
+            self._look.offset,
+        )
 
     # ---- handle ----------------------------------------------------------------
     def _build_handle(self) -> Button:
