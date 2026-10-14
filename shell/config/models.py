@@ -234,10 +234,23 @@ PANEL_KINDS: tuple[str, ...] = get_args(PanelKind)  # the settings window's choi
 PanelName = Annotated[str, Field(min_length=1, max_length=40)]
 
 
+_BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A)))
+
+
 def check_panel_name(value: str) -> str:
     """A panel's name: its label in logs, notifications and the settings window."""
     if any(unicodedata.category(c) == "Cc" for c in value):
         raise ValueError("must not contain control characters (tab, newline, ...)")
+    if any(unicodedata.category(c) in ("Zl", "Zp") for c in value):
+        raise ValueError("must not contain a line or paragraph separator (U+2028, U+2029)")
+    if any(c in _BIDI_CONTROLS for c in value):
+        raise ValueError(
+            "must not contain bidirectional control characters (U+202A-202E, U+2066-2069)"
+        )
+    if value and any(unicodedata.category(c) == "Cf" for c in (value[0], value[-1])):
+        raise ValueError(
+            "must not start or end with an invisible format character (zero-width space, BOM, ...)"
+        )
     if value != value.strip():
         raise ValueError("must not start or end with whitespace (a space, a no-break space, ...)")
     return value
@@ -249,7 +262,12 @@ class PanelConfig(_Strict):
     width / height. Every key that is not in FRAMEWORK_KEYS is a widget key: it is collected
     in `widget_props` and checked against the widget's property model by
     shell.registry.validate_widgets, which also checks the kind keys against `panel`; an entry
-    that mixes the two kinds' keys is rejected here already."""
+    that mixes the two kinds' keys is rejected here already.
+
+    The widget bag is built from file data only: dump-then-validate is not idempotent, because
+    a dumped `widget_props` would nest as a widget key of the next entry. The model is frozen
+    but the bag is a mutable, unhashable dict; requests that travel carry a frozen WidgetProps
+    instead."""
 
     panel: PanelKind | None = None
     name: PanelName | None = None

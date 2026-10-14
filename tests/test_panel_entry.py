@@ -38,13 +38,37 @@ def test_a_name_may_be_any_text_of_1_to_40_characters(name):
 @pytest.mark.parametrize(
     ("name", "words"),
     [
+        ("\u200bClock", "invisible"),  # zero-width space at the start
+        ("Clock\u200b", "invisible"),  # ... and at the end
+        ("\ufeffClock", "invisible"),  # a byte-order mark
+        ("Clock\u202e", "bidirectional"),  # right-to-left override
+        ("Cl\u202eock", "bidirectional"),  # ... anywhere
+        ("Cl\u2067ock", "bidirectional"),  # an isolate
+        ("Clock\u2028x", "line or paragraph separator"),
+        ("Clock\u2029x", "line or paragraph separator"),
+    ],
+)
+def test_a_name_rejects_invisible_format_characters(name, words):
+    with pytest.raises(ValidationError) as exc:
+        PanelConfig(panel="edge", name=name, widget="dock")
+    assert words in exc.value.errors()[0]["msg"]
+
+
+def test_a_zero_width_joiner_in_the_middle_is_fine():
+    name = "\U0001f468\u200d\U0001f469 home"  # an emoji sequence
+    assert PanelConfig(panel="edge", name=name, widget="dock").name == name
+
+
+@pytest.mark.parametrize(
+    ("name", "words"),
+    [
         ("", "at least 1 character"),
         ("C" * 41, "at most 40 characters"),
         ("Clock\n", "control characters"),
         ("a\tb", "control characters"),
         (" Clock", "must not start or end with whitespace"),
         ("Clock ", "must not start or end with whitespace"),
-        (" Clock", "must not start or end with whitespace"),  # a no-break space too
+        ("\u00a0Clock", "must not start or end with whitespace"),  # a no-break space too
     ],
 )
 def test_a_bad_name_names_the_key_path(make_config, name, words):
@@ -68,6 +92,15 @@ def test_a_key_called_widget_props_is_a_widget_key_too():
         {"panel": "edge", "name": "clock", "widget": "clock", "widget_props": {"format": "HH"}}
     )
     assert p.widget_props == {"widget_props": {"format": "HH"}}
+
+
+def test_the_widget_bag_is_not_nested_when_built_from_file_data():
+    file_shaped = {"panel": "edge", "name": "Clock", "widget": "clock", "format": "HH"}
+    p = PanelConfig.model_validate(file_shaped)
+    assert p.widget_props == {"format": "HH"}
+    # dump-then-validate is not idempotent: the dumped bag is a widget key of the next entry
+    again = PanelConfig.model_validate(p.model_dump(exclude_none=True))
+    assert "widget_props" in again.widget_props
 
 
 def test_the_framework_keys_are_the_model_fields():
