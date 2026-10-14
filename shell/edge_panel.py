@@ -85,11 +85,13 @@ class EdgePanel(WaylandWindow):
         on_depth: Callable[[float], None] | None = None,
         handle: HandleSpec = THEME_HANDLE,
         interaction: Interaction = ALL_INTERACTIONS,
+        on_settings: Callable[[], None] | None = None,
     ):
         """`spec` is resolved by shell.panel_layout (exact pos and length in px); `on_depth(d)`
         is called on every animation frame with the current depth (MonitorShell forwards it to
         the canvas). `handle` and `interaction` come from the PanelRequest (spec 15); both can
-        change later in place (set_handle)."""
+        change later in place (set_handle). `on_settings()` is called on a right-click on the
+        handle (EdgeShellApp.open_settings)."""
         # resolved before the window exists: a bad look fails without leaving a half-built window
         look = hd.resolve_handle(handle, interaction, theme)
         # a classmethod: the GObject is not initialised yet (CornerPanel overrides it)
@@ -114,6 +116,7 @@ class EdgePanel(WaylandWindow):
         self.spec = spec
         self._theme = theme
         self._on_depth = on_depth
+        self._on_settings = on_settings  # a right-click on the handle opens the settings
         self._handle_spec = handle
         self._interaction = interaction
         self._look = look
@@ -389,6 +392,9 @@ class EdgePanel(WaylandWindow):
 
     # ---- drag ------------------------------------------------------------------
     def _on_press(self, _widget, event) -> bool:
+        if event.button == 3 and self._on_settings is not None:
+            self._on_settings()  # right-click: open the settings window (spec 13)
+            return True
         if event.button != 1 or not self._interaction.drag:
             return False  # without drag a press is only ever a click
         self._press = (event.x_root, event.y_root)

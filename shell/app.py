@@ -9,6 +9,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
+from pathlib import Path
 
 import gi
 
@@ -31,6 +32,18 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "edge-shell"
 EXERCISE_MS = 300  # --stats toggles every panel this often: a 280 ms tween plus a frame
+
+
+MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+
+
+def settings_command(config_path: Path | None) -> list[str]:
+    """The command that opens the settings window on the shell's config file, with the
+    shell's own interpreter (the venv that has Fabric and tomlkit)."""
+    command = [sys.executable, str(MAIN_PATH), "--settings"]
+    if config_path is not None:
+        command += ["--config", str(config_path)]
+    return command
 
 
 def _already_running() -> bool:
@@ -100,6 +113,7 @@ class EdgeShellApp:
             self.unregister_window,
             on_layout=lambda shell, n=name: self._report_layout(n, shell),
             on_error=lambda shell, n=name: self._relayout_failed(n, shell),
+            on_settings=self.open_settings,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)
@@ -263,6 +277,27 @@ class EdgeShellApp:
         self._layout_reported[name] = warnings
         if warnings:
             self._notify("Panels adjusted", "\n".join(warnings))
+
+    def open_settings(self) -> None:
+        """Start the settings window in its own process on this shell's config file (a
+        right-click on a panel handle). A window that is already open is brought forward
+        (single instance per config file). Never raises into GTK. The child is reaped by a
+        GLib child watch when it exits (no zombie for the shell's lifetime)."""
+        command = settings_command(self.store.path)
+        log.info("opening the settings window: %s", " ".join(command))
+        try:
+            proc = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
+        except OSError as exc:
+            log.error("could not open the settings window: %s", exc)
+            self._notify("Settings not opened", str(exc))
+            return
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, proc.pid, self._settings_closed, proc)
+
+    @staticmethod
+    def _settings_closed(_pid: int, status: int, proc: subprocess.Popen) -> None:
+        """GLib reaped the settings process; tell its Popen so it never waits for it again."""
+        proc.returncode = status
+        log.debug("the settings window closed (status %d)", status)
 
     def _notify(self, title: str, message: str) -> None:
         try:

@@ -20,12 +20,21 @@ class FakeShell:
     fail_open: set = set()
 
     def __init__(
-        self, name, monitor, config, register, unregister=None, on_layout=None, on_error=None
+        self,
+        name,
+        monitor,
+        config,
+        register,
+        unregister=None,
+        on_layout=None,
+        on_error=None,
+        on_settings=None,
     ):
         self.name = name
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
+        self.on_settings = on_settings
         if name in FakeShell.fail_open:
             raise RuntimeError("cannot build")
         FakeShell.opened.append(name)
@@ -232,6 +241,13 @@ def test_sync_reports_what_it_opened_and_closed(env):
     mapping["HDMI-A-1"] = object()
     assert app.sync_monitors() == ({"HDMI-A-1"}, {"HDMI-A-1"})
     assert app.sync_monitors() == (set(), set())
+
+
+def test_opened_shells_get_the_settings_opener(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert app.shells["HDMI-A-1"].on_settings == app.open_settings
 
 
 def test_reload_rebuild_monitor_closes_and_reopens_without_apply(renv):
