@@ -2,8 +2,11 @@
 
 import pytest
 
+from settings import form as form_module
 from settings.form import (
     COLOR_KEYS,
+    HINTS,
+    LABELS,
     MODE_HINTS,
     config_form,
     format_fonts,
@@ -145,9 +148,53 @@ def test_labels_are_readable(form):
     assert form.theme.field("text_secondary").label == "Secondary text"
     assert form.theme.field("hover_zone").label == "Hover zone"
     assert form.edge_panel.field("min_length").label == "Minimum length"
-    for section in (form.theme, form.layout, form.edge_panel, form.corner_panel):
+    assert form.monitor.field("shell").label == "Mode"
+
+    def check(section):
         for spec in section.fields:
             assert "_" not in spec.label and spec.label[0].isupper(), spec.key
+        for sub in section.sections:
+            check(sub)
+
+    for section in (form.theme, form.layout, form.monitor, form.edge_panel, form.corner_panel):
+        check(section)
+
+
+def test_the_order_hint(form):
+    assert form.edge_panel.field("order").hint == (
+        "within its align slot; equal orders keep the config order"
+    )
+
+
+def test_a_new_corner_key_does_not_break_the_form(monkeypatch):
+    """A key that is neither in CORNER_ROWS nor edge-only follows the known rows."""
+    monkeypatch.setattr(
+        form_module, "EDGE_ONLY_KEYS", tuple(k for k in EDGE_ONLY_KEYS if k != "order")
+    )
+    rows = [f.key for f in config_form(WIDGETS).corner_panel.fields]
+    assert rows == ["widget", "corner", "edge", "width", "height", "state", "order"]
+
+
+def test_every_hint_and_label_names_a_schema_key():
+    defs = Config.model_json_schema()["$defs"]
+    for model, key in HINTS:
+        assert key in defs[model]["properties"], (model, key)
+    keys = {k for model in defs.values() for k in model["properties"]}
+    for key in LABELS:
+        assert key in keys, key
+
+
+def test_every_int_field_has_both_bounds():
+    # a deliberate choice, named here; length: the form bounds it itself (LENGTH_PX)
+    unbounded = {("PanelConfig", "length")}
+    defs = Config.model_json_schema()["$defs"]
+    for name, model in defs.items():
+        if name.endswith("Override"):  # create_model'd, bounds lost; the form never uses them
+            continue
+        for key, prop in model["properties"].items():
+            options = [o for o in prop.get("anyOf", [prop]) if o.get("type") != "null"]
+            if options[0].get("type") == "integer" and (name, key) not in unbounded:
+                assert "minimum" in options[0] and "maximum" in options[0], (name, key)
 
 
 def test_every_string_field_is_known_to_the_form():

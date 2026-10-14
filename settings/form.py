@@ -41,6 +41,7 @@ HINTS = {
     ("PanelConfig", "depth"): "px past the frame",
     ("PanelConfig", "min_length"): "px",
     ("PanelConfig", "max_length"): "px",
+    ("PanelConfig", "order"): "within its align slot; equal orders keep the config order",
     ("PanelConfig", "pos"): "deprecated: reset it and use align and offset",
     ("PanelConfig", "width"): "px from the screen corner, frame included",
     ("PanelConfig", "height"): "px from the screen corner, frame included",
@@ -56,6 +57,7 @@ LABELS = {
     "min_length": "Minimum length",
     "max_length": "Maximum length",
     "pos": "Position (deprecated)",
+    "shell": "Mode",
 }
 MODE_HINTS = {
     "edge": "Edge Shell frame and panels",
@@ -161,7 +163,9 @@ def section_for(
         if ref is not None:
             sub = ref.rsplit("/", 1)[-1]
             title = fkey.replace("_", " ").capitalize()
-            sections.append(section_for(schema, sub, fkey, title, widgets))
+            sections.append(
+                section_for(schema, sub, fkey, title, widgets, corner_widgets=corner_widgets)
+            )
         else:
             fields.append(_field(name, fkey, prop, widgets, corner_widgets))
     return SectionSpec(key, label or name, tuple(fields), tuple(sections))
@@ -207,7 +211,8 @@ def config_form(widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()) 
         return section_for(schema, "PanelConfig", "", "Panel", widgets, skip, corner_widgets)
 
     corner = panel(EDGE_ONLY_KEYS)
-    rows = tuple(sorted(corner.fields, key=lambda f: CORNER_ROWS.index(f.key)))
+    rank = {k: i for i, k in enumerate(CORNER_ROWS)}
+    rows = tuple(sorted(corner.fields, key=lambda f: rank.get(f.key, len(CORNER_ROWS))))
     return ConfigForm(
         theme=section_for(schema, "Theme", "theme", "Theme"),
         layout=section_for(schema, "LayoutSettings", "layout", "Layout"),
