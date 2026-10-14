@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -283,7 +284,7 @@ class EdgeShellApp:
         right-click on a panel handle). A window that is already open is brought forward
         (single instance per config file). Never raises into GTK. The child is reaped by a
         GLib child watch when it exits (no zombie for the shell's lifetime)."""
-        command = settings_command(self.store.path)
+        command = settings_command(None if self.store.path is None else self.store.path.absolute())
         log.info("opening the settings window: %s", " ".join(command))
         try:
             proc = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
@@ -296,8 +297,16 @@ class EdgeShellApp:
     @staticmethod
     def _settings_closed(_pid: int, status: int, proc: subprocess.Popen) -> None:
         """GLib reaped the settings process; tell its Popen so it never waits for it again."""
-        proc.returncode = status
-        log.debug("the settings window closed (status %d)", status)
+        code = os.waitstatus_to_exitcode(status)  # GLib passes the raw wait status
+        proc.returncode = code
+        if code == 0:
+            log.debug("the settings window closed (status 0)")
+        else:
+            log.warning(
+                "settings window exited with status %d; run `python main.py --settings` "
+                "in a terminal to see why",
+                code,
+            )
 
     def _notify(self, title: str, message: str) -> None:
         try:

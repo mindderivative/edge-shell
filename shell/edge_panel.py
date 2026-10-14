@@ -393,7 +393,10 @@ class EdgePanel(WaylandWindow):
     # ---- drag ------------------------------------------------------------------
     def _on_press(self, _widget, event) -> bool:
         if event.button == 3 and self._on_settings is not None:
-            self._on_settings()  # right-click: open the settings window (spec 13)
+            # GTK3 also sends 2BUTTON_PRESS / 3BUTTON_PRESS for a quick repeat: only the plain
+            # press opens the window, the repeats are swallowed
+            if event.type == Gdk.EventType.BUTTON_PRESS:
+                self._on_settings()  # right-click: open the settings window (spec 13)
             return True
         if event.button != 1 or not self._interaction.drag:
             return False  # without drag a press is only ever a click
