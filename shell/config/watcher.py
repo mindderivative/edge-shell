@@ -20,11 +20,24 @@ class ConfigWatcher:
         self._on_change = on_change
         self._debounce_ms = debounce_ms
         self._timer = 0
+        self._path = path
         self._monitor = self._watch(path)
         # A symlinked config (a dotfiles repo): a write to the file it points to (an atomic
         # replace by the settings window or an editor, or an in-place save) changes nothing at
-        # the link itself, so that file is watched too. The link stays watched (re-pointed).
-        self._target = self._watch(path.resolve()) if path.is_symlink() else None
+        # the link itself, so that file is watched too. The link stays watched, and when the
+        # link itself changes it is resolved again (it may point somewhere else now).
+        self._target_path: Path | None = None
+        self._target: Gio.FileMonitor | None = None
+        self._retarget()
+
+    def _retarget(self) -> None:
+        resolved = self._path.resolve() if self._path.is_symlink() else None
+        if resolved == self._target_path:
+            return
+        if self._target is not None:
+            self._target.cancel()
+        self._target_path = resolved
+        self._target = self._watch(resolved) if resolved is not None else None
 
     def _watch(self, path: Path) -> Gio.FileMonitor:
         gfile = Gio.File.new_for_path(str(path))
@@ -33,9 +46,11 @@ class ConfigWatcher:
         monitor.connect("changed", self._on_event)
         return monitor
 
-    def _on_event(self, _monitor, _file, _other, event) -> None:
+    def _on_event(self, monitor, _file, _other, event) -> None:
         if event not in _TRIGGERS:
             return
+        if monitor is self._monitor:
+            self._retarget()
         if self._timer:
             GLib.source_remove(self._timer)
         self._timer = GLib.timeout_add(self._debounce_ms, self._fire)
