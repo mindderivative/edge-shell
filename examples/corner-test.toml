@@ -1,0 +1,32 @@
+# Gate B (corner panel plan): corner panels next to edge panels, on HDMI-A-1 only (DP-1 is
+# left alone).
+#   cp examples/corner-test.toml /tmp/edge-corner.toml
+#   scripts/py main.py --config /tmp/edge-corner.toml -v      (edit the copy while it runs)
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: the widget panel: bottom-left, rising out of the bottom edge
+widget = "widget_panel"         #    (its defaults: 300 x 390 px from the corner, extended)
+
+[[monitors.HDMI-A-1.panels]]    # 1: dock, bottom centre
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]    # 2: clock at the start of the bottom edge: right of the widget panel
+widget = "clock"
+edge = "bottom"
+align = "start"
+
+[[monitors.HDMI-A-1.panels]]    # 3: system bar on the left edge, at its end: above the lifted corner
+widget = "system_bar"
+edge = "left"
+align = "end"
+
+[[monitors.HDMI-A-1.panels]]    # 4: a second widget panel, top-right, opening from the right
+widget = "widget_panel"         #    edge, collapsed, click only (auto shape: a chevron)
+corner = "top-right"
+edge = "right"
+width = 260
+height = 240
+state = "collapsed"
+interaction.hover = false
+interaction.drag = false
