@@ -26,11 +26,11 @@ class FakeLabel:
 
 
 def test_it_is_registered_as_the_spec_corner_panel():
-    assert registry.widget_class("widget_panel") is wp.WidgetPanel
+    assert registry.widget_class("summary") is wp.WidgetPanel
     assert issubclass(wp.WidgetPanel, CornerPanel)
-    assert registry.widget_kind("widget_panel") == "corner"
-    assert registry.defaults("widget_panel") == CornerDefaults(
-        corner="bottom-left", width=300, height=390, label="widget panel"
+    assert registry.widget_kind("summary") == "corner"
+    assert registry.defaults("summary") == CornerDefaults(
+        corner="bottom-left", width=300, height=390, label="summary"
     )
 
 

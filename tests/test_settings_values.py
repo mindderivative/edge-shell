@@ -10,7 +10,9 @@ from settings.values import (
     layout_preview,
     lookup,
     monitor_names,
+    new_panel_entry,
     panel_ops,
+    unique_name,
 )
 from shell.config.models import ConfigError
 from shell.outputs import Output
@@ -23,8 +25,14 @@ USER = {
             "shell": "edge",
             "theme": {"accent": "#d3a68f"},
             "panels": [
-                {"widget": "dock", "depth": 80, "handle": {"shape": "bar"}},
-                {"widget": "bar", "interaction": {"hover": False}},
+                {
+                    "panel": "edge",
+                    "name": "dock",
+                    "widget": "dock",
+                    "depth": 80,
+                    "handle": {"shape": "bar"},
+                },
+                {"panel": "edge", "name": "bar", "widget": "bar", "interaction": {"hover": False}},
             ],
         }
     },
@@ -90,7 +98,11 @@ def test_panel_keys_fall_back_to_the_widget_defaults(config):
 def test_placement_defaults_once_align_or_offset_is_set(make_config, fake_registry):
     """Placement is taken as a whole: setting align on the bar drops its default pos 600 (as
     setting align on system_bar drops its offset 142); the rows say why."""
-    user = {"monitors": {"M": {"panels": [{"widget": "bar", "align": "end"}]}}}
+    user = {
+        "monitors": {
+            "M": {"panels": [{"panel": "edge", "name": "bar", "widget": "bar", "align": "end"}]}
+        }
+    }
     config = make_config(monitors=user["monitors"])
     p = ("monitors", "M", "panels", 0)
     assert field_value(config, user, (*p, "align")) == FieldValue("end", True, "your config")
@@ -103,9 +115,16 @@ CORNERS_USER = {
     "monitors": {
         "M": {
             "panels": [
-                {"widget": "box"},
-                {"widget": "box", "corner": "top-right", "width": 200, "handle": {"size": 9}},
-                {"widget": "dock"},
+                {"panel": "corner", "name": "box", "widget": "box"},
+                {
+                    "panel": "corner",
+                    "name": "box 2",
+                    "widget": "box",
+                    "corner": "top-right",
+                    "width": 200,
+                    "handle": {"size": 9},
+                },
+                {"panel": "edge", "name": "dock", "widget": "dock"},
             ]
         }
     }
@@ -158,32 +177,62 @@ def test_every_panel_form_field_has_a_value(corners):
 @pytest.mark.parametrize(
     "entry, key, value, ops",
     [
-        ({"widget": "dock"}, "depth", 80, [("set", "depth", 80)]),
+        ({"panel": "edge", "name": "dock", "widget": "dock"}, "depth", 80, [("set", "depth", 80)]),
         (  # an edge widget becomes a corner widget: its edge-only keys go in the same edit
-            {"widget": "dock", "align": "end", "length": 300, "edge": "left", "state": "collapsed"},
+            {
+                "panel": "edge",
+                "name": "dock",
+                "widget": "dock",
+                "align": "end",
+                "length": 300,
+                "edge": "left",
+                "state": "collapsed",
+            },
             "widget",
             "box",
-            [("set", "widget", "box"), ("unset", "align", None), ("unset", "length", None)],
+            [
+                ("set", "widget", "box"),
+                ("set", "panel", "corner"),
+                ("unset", "align", None),
+                ("unset", "length", None),
+            ],
         ),
         (  # ... and its edge too, when that is not an edge of the corner it lands in
-            {"widget": "dock", "edge": "top"},
+            {"panel": "edge", "name": "dock", "widget": "dock", "edge": "top"},
             "widget",
             "box",
-            [("set", "widget", "box"), ("unset", "edge", None)],
+            [("set", "widget", "box"), ("set", "panel", "corner"), ("unset", "edge", None)],
         ),
         (  # a corner widget becomes an edge widget
-            {"widget": "box", "corner": "top-left", "width": 200, "edge": "left"},
+            {
+                "panel": "corner",
+                "name": "box",
+                "widget": "box",
+                "corner": "top-left",
+                "width": 200,
+                "edge": "left",
+            },
             "widget",
             "dock",
-            [("set", "widget", "dock"), ("unset", "corner", None), ("unset", "width", None)],
+            [
+                ("set", "widget", "dock"),
+                ("set", "panel", "edge"),
+                ("unset", "corner", None),
+                ("unset", "width", None),
+            ],
         ),
         (  # a new corner without the entry's edge
-            {"widget": "box", "edge": "left"},
+            {"panel": "corner", "name": "box", "widget": "box", "edge": "left"},
             "corner",
             "top-right",
             [("set", "corner", "top-right"), ("unset", "edge", None)],
         ),
-        ({"widget": "box", "edge": "left"}, "corner", "top-left", [("set", "corner", "top-left")]),
+        (
+            {"panel": "corner", "name": "box", "widget": "box", "edge": "left"},
+            "corner",
+            "top-left",
+            [("set", "corner", "top-left")],
+        ),
     ],
 )
 def test_panel_ops_keep_the_entry_valid(corner_registry, entry, key, value, ops):
@@ -191,10 +240,23 @@ def test_panel_ops_keep_the_entry_valid(corner_registry, entry, key, value, ops)
 
 
 def test_layout_preview_reports_corner_panels(make_config, corner_registry):
-    two = make_config(monitors={"M": {"panels": [{"widget": "box"}, {"widget": "box"}]}})
+    two = make_config(
+        monitors={
+            "M": {
+                "panels": [
+                    {"panel": "corner", "name": "box", "widget": "box"},
+                    {"panel": "corner", "name": "box 2", "widget": "box"},
+                ]
+            }
+        }
+    )
     (warning,) = layout_preview(two, "M", 1920, 1080)
     assert "the bottom-left corner already holds monitors.M.panels.0" in warning
-    wide = make_config(monitors={"M": {"panels": [{"widget": "box", "width": 2000}]}})
+    wide = make_config(
+        monitors={
+            "M": {"panels": [{"panel": "corner", "name": "box", "widget": "box", "width": 2000}]}
+        }
+    )
     (warning,) = layout_preview(wide, "M", 1920, 1080)
     assert "width 2000 px does not fit the bottom edge; shrunk to" in warning
 
@@ -241,10 +303,22 @@ def test_monitor_names_lists_connected_then_configured(make_config):
 
 
 def test_layout_preview_reports_what_the_shell_would(make_config, fake_registry):
-    clean = make_config(monitors={"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock"}]}})
+    clean = make_config(
+        monitors={
+            "HDMI-A-1": {
+                "shell": "edge",
+                "panels": [{"panel": "edge", "name": "dock", "widget": "dock"}],
+            }
+        }
+    )
     assert layout_preview(clean, "HDMI-A-1", 1920, 1080) == []
     too_long = make_config(
-        monitors={"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock", "length": 3000}]}}
+        monitors={
+            "HDMI-A-1": {
+                "shell": "edge",
+                "panels": [{"panel": "edge", "name": "dock", "widget": "dock", "length": 3000}],
+            }
+        }
     )
     warnings = layout_preview(too_long, "HDMI-A-1", 1920, 1080)
     assert len(warnings) == 1 and warnings[0].startswith("monitors.HDMI-A-1")
@@ -270,6 +344,8 @@ def test_every_edge_only_key_goes_when_the_widget_becomes_a_corner_widget(
     make_config, corner_registry
 ):
     full = {
+        "panel": "edge",
+        "name": "dock",
         "widget": "dock",
         "align": "end",
         "offset": 4,
@@ -280,25 +356,38 @@ def test_every_edge_only_key_goes_when_the_widget_becomes_a_corner_widget(
         "depth": 80,
     }
     result = _applied(full, panel_ops(full, "widget", "box"))
-    assert result == {"widget": "box"}
+    assert result == {"panel": "corner", "name": "dock", "widget": "box"}  # the name stays
     _valid(make_config, result)
-    pos = {"widget": "dock", "pos": 300, "edge": "left"}
+    pos = {"panel": "edge", "name": "dock", "widget": "dock", "pos": 300, "edge": "left"}
     result = _applied(pos, panel_ops(pos, "widget", "box"))
-    assert result == {"widget": "box", "edge": "left"}  # left is an edge of bottom-left
+    assert result == {
+        "panel": "corner",
+        "name": "dock",
+        "widget": "box",
+        "edge": "left",
+    }  # left is an edge of bottom-left
     _valid(make_config, result)
 
 
 def test_corner_keys_go_when_the_widget_becomes_an_edge_widget(make_config, corner_registry):
-    full = {"widget": "box", "corner": "top-left", "width": 200, "height": 100, "edge": "left"}
+    full = {
+        "panel": "corner",
+        "name": "box",
+        "widget": "box",
+        "corner": "top-left",
+        "width": 200,
+        "height": 100,
+        "edge": "left",
+    }
     result = _applied(full, panel_ops(full, "widget", "dock"))
-    assert result == {"widget": "dock", "edge": "left"}
+    assert result == {"panel": "edge", "name": "box", "widget": "dock", "edge": "left"}
     _valid(make_config, result)
 
 
 def test_an_unknown_widget_is_a_plain_set_for_the_session_to_reject(corner_registry):
-    assert panel_ops({"widget": "dock", "depth": 80}, "widget", "nope") == [
-        ("set", "widget", "nope")
-    ]
+    assert panel_ops(
+        {"panel": "edge", "name": "dock", "widget": "dock", "depth": 80}, "widget", "nope"
+    ) == [("set", "widget", "nope")]
 
 
 RESET = """\
@@ -306,6 +395,8 @@ RESET = """\
 shell = "edge"
 
 [[monitors.M.panels]]
+panel = "corner"
+name = "box"
 widget = "box"
 corner = "top-right"
 edge = "right"
@@ -330,7 +421,9 @@ def test_resetting_a_corner_keeps_the_entry_valid(tmp_path, corner_registry):
 
     config = session.apply(edit)
     assert len(session.history) == 1 and path.read_text() == session.text
-    assert session.user["monitors"]["M"]["panels"] == [{"widget": "box"}]
+    assert session.user["monitors"]["M"]["panels"] == [
+        {"panel": "corner", "name": "box", "widget": "box"}
+    ]
     assert field_value(config, session.user, (*base, "corner")) == FieldValue(
         "bottom-left", False, "widget default"
     )
@@ -339,9 +432,21 @@ def test_resetting_a_corner_keeps_the_entry_valid(tmp_path, corner_registry):
 
 
 def test_resetting_a_corner_that_holds_the_edge_unsets_only_the_corner(corner_registry):
-    entry = {"widget": "box", "corner": "top-right", "edge": "top"}
+    entry = {
+        "panel": "corner",
+        "name": "box",
+        "widget": "box",
+        "corner": "top-right",
+        "edge": "top",
+    }
     assert panel_ops(entry, "corner", None) == [("unset", "corner", None), ("unset", "edge", None)]
-    entry = {"widget": "box", "corner": "top-right", "edge": "left"}  # bottom-left has left
+    entry = {
+        "panel": "corner",
+        "name": "box",
+        "widget": "box",
+        "corner": "top-right",
+        "edge": "left",
+    }  # bottom-left has left
     assert panel_ops(entry, "corner", None) == [("unset", "corner", None)]
 
 
@@ -359,7 +464,9 @@ def test_an_unknown_widget_row_is_rejected_by_the_session(tmp_path, corner_regis
 
 
 def test_order_is_labelled_default_and_has_no_widget_default(make_config, fake_registry):
-    config = make_config(monitors={"M": {"panels": [{"widget": "dock"}]}})
+    config = make_config(
+        monitors={"M": {"panels": [{"panel": "edge", "name": "dock", "widget": "dock"}]}}
+    )
     p = ("monitors", "M", "panels", 0)
     assert field_value(config, {}, (*p, "order")) == FieldValue(0, False, "default")
     assert field_value(config, {}, (*p, "order")).default is None
@@ -371,6 +478,8 @@ def test_handle_shape_with_every_interaction_off_says_nothing_is_drawn(make_conf
             "M": {
                 "panels": [
                     {
+                        "panel": "edge",
+                        "name": "dock",
                         "widget": "dock",
                         "interaction": {"click": False, "hover": False, "drag": False},
                     }
@@ -387,7 +496,39 @@ def test_handle_shape_with_every_interaction_off_says_nothing_is_drawn(make_conf
 
 
 def test_pos_center_shows_what_the_file_says(make_config, fake_registry):
-    user = {"monitors": {"M": {"panels": [{"widget": "bar", "pos": "center"}]}}}
+    user = {
+        "monitors": {
+            "M": {"panels": [{"panel": "edge", "name": "bar", "widget": "bar", "pos": "center"}]}
+        }
+    }
     config = make_config(monitors=user["monitors"])
     p = ("monitors", "M", "panels", 0)
     assert field_value(config, user, (*p, "pos")) == FieldValue("center", True, "your config")
+
+
+def test_unique_name_numbers_a_taken_name():
+    assert unique_name("Clock", []) == "Clock"
+    assert unique_name("Clock", ["Clock"]) == "Clock 2"
+    assert unique_name("Clock", ["Clock", "Clock 2", "Clock 4"]) == "Clock 3"
+    assert unique_name("Clock", ["clock"]) == "Clock"  # names are case-sensitive
+
+
+def test_a_new_panel_entry_has_its_kind_and_a_free_name(corner_registry):
+    user = {
+        "monitors": {
+            "M": {
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "dock 2", "widget": "dock"},
+                ]
+            }
+        }
+    }
+    assert new_panel_entry(user, "M", "dock") == {
+        "panel": "edge",
+        "name": "dock 3",
+        "widget": "dock",
+    }
+    assert new_panel_entry(user, "M", "box") == {"panel": "corner", "name": "box", "widget": "box"}
+    assert new_panel_entry(user, "N", "dock")["name"] == "dock"  # another monitor: free
+    assert new_panel_entry({}, "M", "nope") == {"panel": "edge", "name": "nope", "widget": "nope"}

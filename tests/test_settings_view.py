@@ -26,6 +26,8 @@ USER = """\
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "dock"
 widget = "dock"
 """
 HDMI = Output("HDMI-A-1", 0, 0, 1920, 1080)
@@ -160,7 +162,7 @@ def test_the_visible_page_survives_a_rebuild(make):
 
 def test_a_hand_edit_is_reloaded_and_announced(make):
     view, path = make()
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     assert row(view, SHELL).editor.widget.get_active_id() == "both"
     assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
@@ -211,7 +213,11 @@ def test_a_dock_turned_into_a_corner_widget_is_one_edit(make, corner_registry):
     view._on_change((*P0, "widget"), "box")
     assert len(view.session.history) == 2  # align, then widget + unset align together
     text = path.read_text()
-    assert 'widget = "box"' in text and "align" not in text and "# gate config" in text
+    assert (
+        'panel = "corner"\nname = "dock"\nwidget = "box"' in text
+        and "align" not in text
+        and "# gate config" in text
+    )
     assert row(view, (*P0, "corner")).editor.widget.get_active_id() == "bottom-left"
     assert not any(r.path == (*P0, "align") for r in view.rows)
     expander = panel_editor(view).expanders[0]
@@ -300,7 +306,7 @@ def test_a_pending_value_is_written_before_undo_and_revert(make, pending):
 def test_a_pending_value_does_not_break_a_hand_edit_reload(make, pending):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     assert row(view, SHELL).editor.widget.get_active_id() == "both"
     assert "depth" not in path.read_text()
@@ -383,7 +389,7 @@ def test_flush_rebuilds_once_at_the_end(make, corner_registry, timers):
 def test_revert_after_a_hand_edit_with_a_pending_value_keeps_the_outside_warning(make, timers):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.revert()
     assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
     assert "depth" not in path.read_text() and 'shell = "both"' in path.read_text()
@@ -395,7 +401,7 @@ def test_file_changed_with_pending_rows_rebuilds_once(make, timers):
     original = view.rebuild
     view.rebuild = lambda: (rebuilds.append(1), original())
     row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     assert len(rebuilds) == 1 and "changed outside" in view.banner_label.get_text()
 
@@ -505,7 +511,7 @@ def test_a_rebuild_cancels_the_old_rows_pending_values_at_once(make, pending):
     old = row(view, DEPTH)
     old.editor.widget.set_value(120)
     assert old._timer
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()  # a hand edit: rebuild, pending values go with the old rows
     assert not old._timer
 
@@ -522,11 +528,13 @@ def test_the_revert_dialog_says_where_an_invalid_hand_edit_is_kept(make):
     assert "before-revert" not in view.revert_text()
 
 
-TWO_PANELS = USER + '\n[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\n'
+TWO_PANELS = (
+    USER + '\n[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
+)
 SWAPPED = (
     '# gate config\n[monitors.HDMI-A-1]\nshell = "edge"\n\n'
-    '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\n\n'
-    '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\n'
+    '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n\n'
+    '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
 )
 
 
@@ -536,9 +544,9 @@ def test_a_flush_that_met_a_hand_edit_applies_no_further_row(make, pending):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
     row(view, THICKNESS).editor.widget.set_value(17)
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.flush()
-    assert path.read_text() == USER.replace('"edge"', '"both"')
+    assert path.read_text() == USER.replace('shell = "edge"', 'shell = "both"')
     assert view.refused_outside and not view.save_failed
     assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
     view.flush()  # a later, clean flush forgets it
@@ -571,7 +579,7 @@ def test_close_stays_open_once_after_a_refused_flush(make, pending):
 
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     win = SimpleNamespace(view=view, _close_warned=False)
     assert SettingsWindow._on_delete(win) is True  # stays open once, the warning is on screen
     assert SettingsWindow._on_delete(win) is False  # closing again closes anyway
@@ -586,7 +594,7 @@ def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
     view, path = make()
     old = row(view, FONT)
     old.editor.widget.set_text("Typed Font")
-    path.write_text(USER.replace('"edge"', '"both"'))
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     old.editor.commit()  # the focus-out of the retired entry
     old.flush()

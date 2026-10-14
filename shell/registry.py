@@ -249,8 +249,6 @@ def _name_problems(where: str, panels: list[PanelConfig]) -> list[str]:
     first: dict[str, int] = {}
     problems = []
     for i, panel in enumerate(panels):
-        if panel.name is None:
-            continue
         if panel.name in first:
             problems.append(
                 f"{where}[{i}].name: names must be unique: {panel.name!r} is used by "
@@ -267,7 +265,7 @@ def _entry_problems(where: str, panel: PanelConfig) -> list[str]:
     if panel.widget not in _DEFAULTS:
         return [f"{where}.widget: unknown widget {panel.widget!r}"]
     kind = widget_kind(panel.widget)
-    if panel.panel is not None and panel.panel != kind:
+    if panel.panel != kind:
         article = "an" if panel.panel == "edge" else "a"
         return [
             f"{where}.panel: {panel.widget} cannot be shown in {article} {panel.panel} panel "

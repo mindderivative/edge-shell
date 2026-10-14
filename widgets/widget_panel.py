@@ -35,8 +35,8 @@ def _set(label, text: str) -> None:
 
 
 @register(
-    "widget_panel",
-    CornerDefaults(corner="bottom-left", width=300, height=390, label="widget panel"),
+    "summary",
+    CornerDefaults(corner="bottom-left", width=300, height=390, label="summary"),
 )
 class WidgetPanel(CornerPanel):
     def build_content(self):

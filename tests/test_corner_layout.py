@@ -259,7 +259,10 @@ def test_simulate_lays_out_corner_panels_from_a_config(corner_registry, make_con
         monitors={
             "HDMI-A-1": {
                 "shell": "edge",
-                "panels": [{"widget": "box"}, {"widget": "dock", "align": "start"}],
+                "panels": [
+                    {"panel": "corner", "name": "box", "widget": "box"},
+                    {"panel": "edge", "name": "dock", "widget": "dock", "align": "start"},
+                ],
             }
         }
     )

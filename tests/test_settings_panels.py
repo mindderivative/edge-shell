@@ -19,12 +19,24 @@ from settings.form import config_form  # noqa: E402
 from shell.registry import requests_for  # noqa: E402
 
 FORM = config_form(("bar", "clock", "dock"))
-USER = '[[monitors.M.panels]]\nwidget = "dock"\n[[monitors.M.panels]]\nwidget = "clock"\n'
+USER = (
+    '[[monitors.M.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+    '[[monitors.M.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
+)
 
 
 @pytest.fixture
 def editor(make_config, fake_registry):
-    config = make_config(monitors={"M": {"panels": [{"widget": "dock"}, {"widget": "clock"}]}})
+    config = make_config(
+        monitors={
+            "M": {
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                ]
+            }
+        }
+    )
     made, edits = [], []
 
     def make_rows(section, prefix):
@@ -93,7 +105,11 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     """Spec 19: a corner widget's entry shows corner, edge (only its corner's two), width and
     height, never align or length; its title names the corner, the edge and the size."""
     form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
-    entries = [{"widget": "dock"}, {"widget": "box"}, {"widget": "box", "corner": "top-right"}]
+    entries = [
+        {"panel": "edge", "name": "dock", "widget": "dock"},
+        {"panel": "corner", "name": "box", "widget": "box"},
+        {"panel": "corner", "name": "box 2", "widget": "box", "corner": "top-right"},
+    ]
     config = make_config(monitors={"M": {"panels": entries}})
     sections = []
 
@@ -123,14 +139,19 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     ed.add("box")
     doc = UserDocument("")
     edits[0][0](doc)
-    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}} and edits[0][1] == 3
+    assert (
+        doc.data
+        == {"monitors": {"M": {"panels": [{"panel": "corner", "name": "box", "widget": "box"}]}}}
+        and edits[0][1] == 3
+    )
 
 
 THREE = ("dock", "clock", "bar")
 
 
 def three_panel_editor(make_config, form=FORM):
-    config = make_config(monitors={"M": {"panels": [{"widget": w} for w in THREE]}})
+    panels_ = [{"panel": "edge", "name": w, "widget": w} for w in THREE]
+    config = make_config(monitors={"M": {"panels": panels_}})
     edits = []
     ed = panels.PanelEditor(
         form,
@@ -147,7 +168,8 @@ def row_buttons(ed, i):
 
 
 def widgets_after(edit):
-    doc = UserDocument("".join(f'[[monitors.M.panels]]\nwidget = "{w}"\n' for w in THREE))
+    entry = '[[monitors.M.panels]]\npanel = "edge"\nname = "{0}"\nwidget = "{0}"\n'
+    doc = UserDocument("".join(entry.format(w) for w in THREE))
     edit(doc)
     return [p["widget"] for p in doc.data["monitors"]["M"].get("panels", [])]
 
@@ -207,7 +229,9 @@ def test_add_panel_button_writes_a_corner_widgets_id_not_its_label(make_config, 
     assert open_index == 3
     doc = UserDocument("")
     edit(doc)
-    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}}
+    assert doc.data == {
+        "monitors": {"M": {"panels": [{"panel": "corner", "name": "box", "widget": "box"}]}}
+    }
 
 
 def test_the_wheel_over_the_add_combo_does_not_change_the_choice(make_config, fake_registry):

@@ -227,7 +227,11 @@ def renv(monkeypatch, make_config, fake_registry):
     monkeypatch.setattr(app_mod, "MonitorShell", FakeShell)
     errors = []
     monkeypatch.setattr(app_mod.EdgeShellApp, "_report_error", lambda self, m: errors.append(m))
-    store = ReloadStore(make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}))
+    store = ReloadStore(
+        make_config(
+            monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+        )
+    )
     app = app_mod.EdgeShellApp(store)
     app.sync_monitors()
     FakeShell.opened.clear()
@@ -253,7 +257,8 @@ def test_opened_shells_get_the_settings_opener(env):
 def test_reload_rebuild_monitor_closes_and_reopens_without_apply(renv):
     app, store, errors, _, make_config = renv
     store.pending = make_config(
-        theme={"thickness": 12}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+        theme={"thickness": 12},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
     )
     app.reload()
     assert FakeShell.closed == ["HDMI-A-1"]
@@ -266,7 +271,11 @@ def test_reload_applies_grouped_changes_to_existing_shell(renv):
     app, store, _, _, make_config = renv
     store.pending = make_config(
         theme={"accent": "#112233"},
-        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "state": "collapsed"}])},
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[{"panel": "edge", "name": "dock", "widget": "dock", "state": "collapsed"}]
+            )
+        },
     )
     app.reload()
     assert FakeShell.applied == [("HDMI-A-1", ["restyle", "panel-state"])]
@@ -277,7 +286,14 @@ def test_reload_does_not_apply_to_a_shell_opened_by_its_own_sync(renv):
     app, store, _, _, make_config = renv
     app.shells.pop("HDMI-A-1")  # e.g. a hot-plug sync has not run yet
     store.pending = make_config(
-        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "clock"}])}
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                ]
+            )
+        }
     )
     app.reload()
     assert FakeShell.opened == ["HDMI-A-1"]  # built from the new config
@@ -288,7 +304,8 @@ def test_reload_apply_failure_closes_reports_and_rebuilds(renv):
     app, store, errors, _, make_config = renv
     FakeShell.fail_apply = {"HDMI-A-1"}
     store.pending = make_config(
-        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
     )
     app.reload()
     assert FakeShell.closed == ["HDMI-A-1"]
@@ -406,7 +423,8 @@ def test_unrelated_reload_does_not_repeat_the_layout_notification(renv, monkeypa
     app.shells["HDMI-A-1"].layout_warnings = ["w"]
     app._report_layout("HDMI-A-1", app.shells["HDMI-A-1"])
     store.pending = make_config(
-        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
     )
     app.reload()
     assert len(notes) == 1
@@ -420,7 +438,8 @@ def test_a_reload_with_a_pending_measurement_reports_its_warnings_afterwards(ren
     monkeypatch.setattr(FakeShell, "measure_pending", True)
     monkeypatch.setattr(FakeShell, "layout_warnings", ["dock: shrunk"])
     store.pending = make_config(
-        theme={"accent": "#112233"}, monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])}
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
     )
     app.reload()
     assert notes == []  # provisional lengths: waits for the measurement
@@ -468,7 +487,13 @@ def test_recorder_is_attached_to_every_opened_canvas(env, monkeypatch):
 
 def test_deprecated_pos_is_logged_once_at_start(make_config, caplog):
     caplog.set_level("INFO", logger="shell.app")
-    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}])})
+    cfg = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[{"panel": "edge", "name": "dock", "widget": "dock", "pos": 100}]
+            )
+        }
+    )
     app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
     lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
     assert len(lines) == 1 and "monitors.HDMI-A-1.panels.0.pos" in lines[0]
@@ -478,10 +503,19 @@ def test_deprecated_pos_is_logged_once_per_reload(renv, caplog):
     app, store, _, _, make_config = renv
     caplog.set_level("INFO", logger="shell.app")
     store.pending = make_config(
-        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "pos": 100}, {"widget": "dock"}])}
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock", "pos": 100},
+                    {"panel": "edge", "name": "dock 2", "widget": "dock"},
+                ]
+            )
+        }
     )
     app.reload()
-    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
     app.reload()  # no pos left: no line
     lines = [r.getMessage() for r in caplog.records if "deprecated key pos" in r.getMessage()]
     assert len(lines) == 1 and lines[0].endswith("monitors.HDMI-A-1.panels.0.pos")
@@ -493,9 +527,20 @@ def test_a_moved_system_bar_default_is_logged_once_at_start(make_config, caplog)
         monitors={
             "HDMI-A-1": mon(
                 panels=[
-                    {"widget": "system_bar"},
-                    {"widget": "system_bar", "edge": "top"},
-                    {"widget": "system_bar", "length": 524, "pos": 600},
+                    {"panel": "edge", "name": "system_bar", "widget": "system_bar"},
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 2",
+                        "widget": "system_bar",
+                        "edge": "top",
+                    },
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 3",
+                        "widget": "system_bar",
+                        "length": 524,
+                        "pos": 600,
+                    },
                 ]
             )
         }
@@ -510,7 +555,13 @@ def test_a_moved_system_bar_default_is_logged_once_at_start(make_config, caplog)
 
 def test_no_moved_default_line_without_a_candidate(make_config, caplog):
     caplog.set_level("INFO", logger="shell.app")
-    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "system_bar"}])})
+    cfg = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[{"panel": "edge", "name": "system_bar", "widget": "system_bar"}]
+            )
+        }
+    )
     app_mod.EdgeShellApp(SimpleNamespace(config=cfg))
     assert not [r for r in caplog.records if "default placement" in r.getMessage()]
 
@@ -608,7 +659,13 @@ def test_a_reload_logs_its_change_kinds(renv, caplog):
     app, store, _, _, make_config = renv
     caplog.set_level("INFO", logger="shell.app")
     store.pending = make_config(
-        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "handle": {"shape": "bar"}}])}
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock", "handle": {"shape": "bar"}}
+                ]
+            )
+        }
     )
     app.reload()
     assert "config reloaded: 1 change(s): panel-handle" in caplog.text
@@ -620,11 +677,18 @@ def test_all_off_panels_are_logged_once_per_load(renv, caplog):
     off = {"click": False, "hover": False, "drag": False}
     store.pending = make_config(
         monitors={
-            "HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "dock", "interaction": off}])
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "dock 2", "widget": "dock", "interaction": off},
+                ]
+            )
         }
     )
     app.reload()
-    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    store.pending = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
     app.reload()  # none left: no line
     lines = [r.getMessage() for r in caplog.records if "open only through state" in r.getMessage()]
     assert lines == [

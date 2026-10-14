@@ -152,8 +152,9 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     """Setting one key of a panel entry (`entry`: its plain data in the user file), as steps
     (("set" | "unset", key, value)) applied as ONE edit: one write, one reload.
 
-    - A widget of the other kind also unsets the keys only the old kind takes (a dock turned
-      into a corner widget loses its align, length, ...; spec 19), else the shell rejects it.
+    - A widget of the other kind also sets `panel` to that kind and unsets the keys only the
+      old kind takes (a dock turned into a corner widget loses its align, length, ...; spec
+      19), else the shell rejects it. The entry keeps its name.
     - `value` None for "corner" is a reset: the key is unset and the widget's corner applies.
     - An unknown widget is a plain set (the session's check rejects it, ConfigError).
     - A corner (or a corner widget whose corner) that does not contain the entry's edge also
@@ -168,6 +169,8 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
             kind = widget_kind(value)
         except KeyError:  # unknown widget: the session's check rejects it with the shell's text
             return ops
+        if entry.get("panel") != kind:
+            ops.append(("set", "panel", kind))
         stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
         ops += [("unset", k, None) for k in stale if k in entry]
         if kind == "corner":
@@ -178,6 +181,30 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))
     return ops
+
+
+def unique_name(base: str, taken: list[str]) -> str:
+    """`base`, or "base 2", "base 3", ...: the first that is not in `taken`."""
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base} {n}" in taken:
+        n += 1
+    return f"{base} {n}"
+
+
+def new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]:
+    """The keys a new panel of `widget` on `monitor` is written with (`user`: the user file's
+    plain data): its kind, a name not used on that monitor yet and the widget; every other key
+    comes from the widget's defaults. An unknown widget is written as an edge panel (the
+    session's check rejects it with the shell's text)."""
+    try:
+        kind = widget_kind(widget)
+    except KeyError:
+        kind = "edge"
+    _, panels = lookup(user, ("monitors", monitor, "panels"))
+    taken = [p.get("name") for p in panels or () if isinstance(p, dict)]
+    return {"panel": kind, "name": unique_name(widget, taken), "widget": widget}
 
 
 def monitor_names(config: Config, outputs: list[Output]) -> list[tuple[str, bool]]:

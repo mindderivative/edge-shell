@@ -18,6 +18,8 @@ USER = """\
 shell = "edge"   # test monitor
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "dock"
 widget = "dock"
 """
 SHELL = ("monitors", "HDMI-A-1", "shell")
@@ -35,7 +37,9 @@ def test_opening_reads_and_checks_the_file(path):
     s = SettingsSession(path)
     assert s.text == USER and s.error is None
     assert s.config.monitor("HDMI-A-1").shell == "edge"
-    assert s.user["monitors"]["HDMI-A-1"]["panels"] == [{"widget": "dock"}]
+    assert s.user["monitors"]["HDMI-A-1"]["panels"] == [
+        {"panel": "edge", "name": "dock", "widget": "dock"}
+    ]
     assert not s.changed_outside()
 
 
@@ -70,7 +74,7 @@ def test_an_invalid_change_is_not_written(path):
 def test_an_unknown_widget_is_not_written(path):
     s = SettingsSession(path)
     with pytest.raises(ConfigError, match="unknown widget"):
-        s.apply(lambda d: d.add_panel("HDMI-A-1", "nope"))
+        s.apply(lambda d: d.add_panel("HDMI-A-1", {"panel": "edge", "name": "N", "widget": "nope"}))
     assert path.read_text() == USER
 
 
@@ -177,7 +181,7 @@ def test_an_edit_can_fix_an_invalid_file(path):
 
 def test_check_text_uses_the_registry(fake_registry):
     with pytest.raises(ConfigError, match="unknown widget"):
-        check_text('[[monitors.X.panels]]\nwidget = "nope"\n')
+        check_text('[[monitors.X.panels]]\npanel = "edge"\nname = "nope"\nwidget = "nope"\n')
 
 
 @pytest.mark.parametrize(
@@ -203,7 +207,9 @@ def test_a_written_change_reloads_in_the_shell_as_the_expected_kind(path, path_,
 
 def test_adding_a_panel_reloads_as_panel_add(path):
     store = ConfigStore(path)
-    SettingsSession(path).apply(lambda d: d.add_panel("HDMI-A-1", "clock"))
+    SettingsSession(path).apply(
+        lambda d: d.add_panel("HDMI-A-1", {"panel": "edge", "name": "C", "widget": "clock"})
+    )
     old, new = store.reload()
     assert diff_configs(old, new) == [Change("panel-add", "HDMI-A-1", 1)]
 

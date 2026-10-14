@@ -112,8 +112,13 @@ def test_config_shapes_lays_out_the_monitors_panels(fake_registry, make_config):
             "HDMI-A-1": {
                 "shell": "edge",
                 "panels": [
-                    {"widget": "dock", "align": "end"},
-                    {"widget": "dock", "pos": 1300},  # dropped onto the first: not shown
+                    {"panel": "edge", "name": "dock", "widget": "dock", "align": "end"},
+                    {
+                        "panel": "edge",
+                        "name": "dock 2",
+                        "widget": "dock",
+                        "pos": 1300,
+                    },  # dropped onto the first: not shown
                 ],
             }
         }
@@ -129,8 +134,10 @@ def test_cli_simulates_a_config(tmp_path, capsys):
     path = tmp_path / "layout.toml"
     path.write_text(
         '[theme.shadow]\nenabled = true\n[monitors.HDMI-A-1]\nshell = "edge"\n'
-        '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\nalign = "end"\n'
-        '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\nlength = "fill"\n'
+        '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+        'align = "end"\n'
+        '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
+        'length = "fill"\n'
     )
     assert main(["--config", str(path), "--frames", "20", "--size", "1280x720"]) == 0
     out = capsys.readouterr().out
@@ -142,7 +149,10 @@ def test_cli_reports_a_bad_config(tmp_path):
     pytest.importorskip("gi")
     pytest.importorskip("fabric")
     path = tmp_path / "bad.toml"
-    path.write_text('[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\nlength = "half"\n')
+    path.write_text(
+        '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+        'length = "half"\n'
+    )
     with pytest.raises(SystemExit) as exc:
         main(["--config", str(path), "--frames", "1"])
     assert exc.value.code == 2
@@ -153,7 +163,8 @@ def test_cli_reports_an_unknown_widget(tmp_path, capsys):
     pytest.importorskip("fabric")
     path = tmp_path / "unknown.toml"
     path.write_text(
-        '[monitors.HDMI-A-1]\nshell = "edge"\n[[monitors.HDMI-A-1.panels]]\nwidget = "nope"\n'
+        '[monitors.HDMI-A-1]\nshell = "edge"\n[[monitors.HDMI-A-1.panels]]\n'
+        'panel = "edge"\nname = "nope"\nwidget = "nope"\n'
     )
     with pytest.raises(SystemExit) as exc:  # a usage error, not a traceback
         main(["--config", str(path), "--frames", "1"])

@@ -28,8 +28,9 @@ def test_monitor_panels_load_in_order(tmp_path):
         write(
             tmp_path / "c.toml",
             '[monitors.HDMI-A-1]\nshell = "edge"\n'
-            '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\n'
-            '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\ndepth = 50\n',
+            '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+            '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
+            "depth = 50\n",
         )
     )
     panels = cfg.monitor("HDMI-A-1").panels
@@ -59,11 +60,11 @@ def test_bad_color_reports_path(tmp_path):
 def test_panel_bound_reports_full_key_path(tmp_path):
     text = (
         '[monitors.HDMI-A-1]\nshell = "edge"\n'
-        '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\nlength = 0\n'
+        '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\nlength = 0\n'
     )
     with pytest.raises(ConfigError) as exc:
         load_config(write(tmp_path / "c.toml", text))
-    assert "monitors.HDMI-A-1.panels.0.length" in str(exc.value)
+    assert "monitors.HDMI-A-1.panels[0].length" in str(exc.value)
 
 
 def test_unreadable_user_path_is_config_error(tmp_path):
@@ -100,3 +101,36 @@ def test_unreadable_user_file_is_an_error_not_defaults(tmp_path):
             load_config(path)  # exists() would have said False and used defaults
     finally:
         path.chmod(0o600)
+
+
+def test_an_entry_without_panel_names_the_new_format(tmp_path):
+    path = write(
+        tmp_path / "old.toml",
+        "# the old format: entries with only a widget\n"
+        '[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\n\n[[monitors.HDMI-A-1.panels]]\n'
+        'widget = "clock"\n',
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    lines = str(exc.value).splitlines()
+    assert 'monitors.HDMI-A-1.panels[0].panel: missing; use "edge", "corner" or "float"' in lines
+    assert 'monitors.HDMI-A-1.panels[1].panel: missing; use "edge", "corner" or "float"' in lines
+    assert "monitors.HDMI-A-1.panels[0].name: Field required" in lines
+    assert len([line for line in lines if "the old format" in line]) == 1  # once per file
+
+
+def test_panel_name_and_widget_are_required():
+    from shell.config.models import Config
+
+    panel = Config.model_json_schema()["$defs"]["PanelConfig"]
+    assert {"panel", "name", "widget"} <= set(panel["required"])
+
+
+def test_a_panel_index_is_written_in_brackets():
+    from shell.config.loader import key_path
+
+    assert key_path(("monitors", "X", "panels", 2, "handle", "size")) == (
+        "monitors.X.panels[2].handle.size"
+    )
+    assert key_path(("theme", "font", 0)) == "theme.font.0"  # other lists keep their dots
+    assert key_path(()) == "config"

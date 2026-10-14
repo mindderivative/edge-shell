@@ -192,7 +192,7 @@ def test_unset_of_a_missing_key_is_an_error_and_changes_nothing():
 
 def test_add_panel():
     doc = UserDocument(USER)
-    assert doc.add_panel("HDMI-A-1", "clock") == 3
+    assert doc.add_panel("HDMI-A-1", {"widget": "clock"}) == 3
     data = tomllib.loads(doc.text)
     assert widgets(data) == ["dock", "clock", "system_bar", "clock"]
     assert data["monitors"]["HDMI-A-1"]["panels"][3] == {"widget": "clock"}
@@ -200,13 +200,13 @@ def test_add_panel():
 
 def test_add_the_first_panel_of_a_monitor():
     doc = UserDocument(USER)
-    assert doc.add_panel("DP-1", "dock") == 0
+    assert doc.add_panel("DP-1", {"widget": "dock"}) == 0
     assert tomllib.loads(doc.text)["monitors"]["DP-1"] == {
         "shell": "plasma",
         "panels": [{"widget": "dock"}],
     }
     doc = UserDocument("")
-    assert doc.add_panel("HDMI-A-1", "dock") == 0
+    assert doc.add_panel("HDMI-A-1", {"widget": "dock"}) == 0
     assert tomllib.loads(doc.text) == {"monitors": {"HDMI-A-1": {"panels": [{"widget": "dock"}]}}}
 
 
@@ -278,7 +278,7 @@ def test_adding_to_an_inline_panel_array_is_refused():
     text = '[monitors.X]\npanels = [{ widget = "dock" }]\n'
     doc = UserDocument(text)
     with pytest.raises(DocumentError, match="inline array.*by hand"):
-        doc.add_panel("X", "clock")
+        doc.add_panel("X", {"widget": "clock"})
     assert doc.text == text
 
 
@@ -495,7 +495,7 @@ _TOP = '[monitors.HDMI-A-1]\nshell = "edge"\n\n'
         (lambda d: d.remove_panel("HDMI-A-1", 1), _TOP + _DOCK + "\n" + _DP1),
         (lambda d: d.move_panel("HDMI-A-1", 1, 0), _TOP + _CLOCK + "\n" + _DOCK + "\n" + _DP1),
         (
-            lambda d: d.add_panel("HDMI-A-1", "bar"),
+            lambda d: d.add_panel("HDMI-A-1", {"widget": "bar"}),
             _TOP
             + _DOCK
             + "\n"
@@ -518,7 +518,7 @@ def test_a_key_set_on_the_last_panel_keeps_the_next_label_through_panel_edits(ed
 @pytest.mark.parametrize(
     "edit",
     [
-        lambda d: d.add_panel("HDMI-A-1", "bar"),
+        lambda d: d.add_panel("HDMI-A-1", {"widget": "bar"}),
         lambda d: d.move_panel("HDMI-A-1", 1, 0),
         lambda d: d.remove_panel("HDMI-A-1", 1),
     ],
@@ -611,7 +611,7 @@ def test_a_removed_panel_takes_only_its_own_label(index):
 
 def test_an_added_panel_goes_below_the_last_one_not_below_the_next_label():
     doc = UserDocument(LABELLED)
-    assert doc.add_panel("HDMI-A-1", "clock") == 3
+    assert doc.add_panel("HDMI-A-1", {"widget": "clock"}) == 3
     assert labels(doc.text) == LABELS
     assert widgets(doc.data) == ["dock", "clock", "system_bar", "clock"]
     assert '[[monitors.HDMI-A-1.panels]]\nwidget = "clock"\n\n# DP-1' in doc.text
@@ -620,7 +620,7 @@ def test_an_added_panel_goes_below_the_last_one_not_below_the_next_label():
 def test_the_first_panel_of_a_monitor_goes_below_its_tables_not_below_the_next_label():
     text = '[monitors.DP-1]\nshell = "plasma"\n\n# the test monitor\n[monitors.HDMI-A-1]\n'
     doc = UserDocument(text + 'shell = "edge"\n')
-    doc.add_panel("DP-1", "dock")
+    doc.add_panel("DP-1", {"widget": "dock"})
     assert labels(doc.text) == {"# the test monitor": "[monitors.HDMI-A-1]"}
     assert doc.data["monitors"]["DP-1"] == {"shell": "plasma", "panels": [{"widget": "dock"}]}
 
@@ -677,7 +677,7 @@ def _entry(widget, label=None, note=""):
             + "\n"
             + _entry("dock"),
         ),
-        (lambda d: d.add_panel("DP-1", "bar"), HEAD_COMMENT + "\n" + _entry("bar")),
+        (lambda d: d.add_panel("DP-1", {"widget": "bar"}), HEAD_COMMENT + "\n" + _entry("bar")),
     ],
 )
 def test_the_comment_at_the_head_of_the_file_stays_there(edit, expected):
@@ -703,7 +703,7 @@ def test_the_comment_at_the_head_of_the_file_stays_there(edit, expected):
             + "\n"
             + _entry("dock", True, " # 0: dock"),
         ),
-        (lambda d: d.add_panel("DP-1", "clock"), BANNER + "\n" + _entry("clock")),
+        (lambda d: d.add_panel("DP-1", {"widget": "clock"}), BANNER + "\n" + _entry("clock")),
     ],
 )
 def test_a_banner_above_a_label_stays_in_place(edit, expected):
@@ -779,36 +779,36 @@ def test_an_emptied_inline_monitor_at_the_end_of_the_file_takes_its_label():
         ),
         (  # a file of only comments: the entry goes below them
             "# my config\n# nothing yet\n",
-            lambda d: d.add_panel("X", "dock"),
+            lambda d: d.add_panel("X", {"widget": "dock"}),
             '# my config\n# nothing yet\n\n[[monitors.X.panels]]\nwidget = "dock"\n',
         ),
         (  # the new entry copies the blank line above the last one, not the head comment
             '# my config\n\n[[monitors.X.panels]]\nwidget = "a"\n',
-            lambda d: d.add_panel("X", "b"),
+            lambda d: d.add_panel("X", {"widget": "b"}),
             '# my config\n\n[[monitors.X.panels]]\nwidget = "a"\n\n[[monitors.X.panels]]\n'
             'widget = "b"\n',
         ),
         (  # a spaced header is copied as written (tomlkit reads a file back only then)
             '[[ monitors.X.panels ]]\nwidget = "a"\n',
-            lambda d: d.add_panel("X", "b"),
+            lambda d: d.add_panel("X", {"widget": "b"}),
             '[[ monitors.X.panels ]]\nwidget = "a"\n[[ monitors.X.panels ]]\nwidget = "b"\n',
         ),
         (  # a comment directly under the last entry stays under it; the new one goes below
             '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[monitors.Y]\nshell = "e"\n',
-            lambda d: d.add_panel("X", "b"),
+            lambda d: d.add_panel("X", {"widget": "b"}),
             '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[[monitors.X.panels]]\n'
             'widget = "b"\n\n[monitors.Y]\nshell = "e"\n',
         ),
         (  # also at the end of the file
             '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# note\n',
-            lambda d: d.add_panel("X", "b"),
+            lambda d: d.add_panel("X", {"widget": "b"}),
             '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# note\n\n'
             '[[monitors.X.panels]]\nwidget = "b"\n',
         ),
         (  # no blank line after the last entry: none above the new one either
             '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# Y\n'
             '[monitors.Y]\nshell = "e"\n',
-            lambda d: d.add_panel("X", "b"),
+            lambda d: d.add_panel("X", {"widget": "b"}),
             '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n'
             '[[monitors.X.panels]]\nwidget = "b"\n# Y\n[monitors.Y]\nshell = "e"\n',
         ),
@@ -836,7 +836,7 @@ def test_panel_edits_leave_a_tidy_file(text, edit, expected):
 )
 def test_adding_then_removing_a_panel_restores_the_file(text, monitor):
     doc = UserDocument(text)
-    doc.add_panel(monitor, "bar")
+    doc.add_panel(monitor, {"widget": "bar"})
     doc.remove_panel(monitor, -1)
     assert doc.text == text
 
@@ -844,7 +844,7 @@ def test_adding_then_removing_a_panel_restores_the_file(text, monitor):
 def test_adding_then_removing_a_panel_below_a_comment_restores_the_file():
     text = '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[monitors.Y]\nshell = "e"\n'
     doc = UserDocument(text)
-    doc.add_panel("X", "b")
+    doc.add_panel("X", {"widget": "b"})
     doc.remove_panel("X", 1)
     assert doc.text == text
 
@@ -893,12 +893,12 @@ def test_a_table_split_across_the_file_takes_a_new_nested_key(path, part, expect
     "text, edit",
     [
         ('[theme]\naccent = "#111111"\n', lambda d: d.set(("theme", "accent", "x"), 1)),
-        ("[monitors.X]\npanels = 3\n", lambda d: d.add_panel("X", "dock")),
+        ("[monitors.X]\npanels = 3\n", lambda d: d.add_panel("X", {"widget": "dock"})),
         ("[monitors.X]\npanels = 3\n", lambda d: d.move_panel("X", 0, 1)),
         ("[monitors.X.panels]\na = 1\n", lambda d: d.move_panel("X", 0, 1)),
         ("[monitors.X.panels]\na = 1\n", lambda d: d.remove_panel("X", 0)),
-        ("[monitors.X.panels]\na = 1\n", lambda d: d.add_panel("X", "dock")),
-        ('monitors = { X = { shell = "edge" } }\n', lambda d: d.add_panel("Y", "dock")),
+        ("[monitors.X.panels]\na = 1\n", lambda d: d.add_panel("X", {"widget": "dock"})),
+        ('monitors = { X = { shell = "edge" } }\n', lambda d: d.add_panel("Y", {"widget": "dock"})),
         ('monitors = { X = { shell = "edge" } }\n', lambda d: d.set(("monitors", "Y", "a"), 1)),
     ],
 )
@@ -921,12 +921,12 @@ NESTED_ARRAY = (
     [
         (
             'monitors = { X = { shell = "edge" } }\n',
-            lambda d: d.add_panel("X", "dock"),
+            lambda d: d.add_panel("X", {"widget": "dock"}),
             WRITTEN_BY_HAND,
         ),
         (
             'monitors = { X = { shell = "edge" } }\n',
-            lambda d: d.add_panel("Y", "dock"),
+            lambda d: d.add_panel("Y", {"widget": "dock"}),
             WRITTEN_BY_HAND,
         ),
         (NESTED_ARRAY, lambda d: d.move_panel("X", 1, 0), WRITTEN_BY_HAND),
@@ -956,7 +956,7 @@ NESTED_ARRAY = (
         ),
         (
             "[monitors.X]\npanels = 3\n",
-            lambda d: d.add_panel("X", "dock"),
+            lambda d: d.add_panel("X", {"widget": "dock"}),
             "monitors.X.panels is a value, not a table: edit the file by hand",
         ),
         (
@@ -985,7 +985,7 @@ def test_refusals_say_what_to_do(text, edit, message):
     [
         lambda d: d.set(("layout", "gap"), 3),
         lambda d: d.set(("theme", "accent"), 2),
-        lambda d: d.add_panel("X", "dock"),
+        lambda d: d.add_panel("X", {"widget": "dock"}),
     ],
 )
 def test_a_crlf_file_without_a_trailing_newline_stays_so(edit):
@@ -1020,7 +1020,7 @@ NO_NEWLINE = '[[monitors.X.panels]]\nwidget = "dock"\n\n[[monitors.X.panels]]\nw
 @pytest.mark.parametrize(
     "edit, order",
     [
-        (lambda d: d.add_panel("X", "bar"), ["dock", "clock", "bar"]),
+        (lambda d: d.add_panel("X", {"widget": "bar"}), ["dock", "clock", "bar"]),
         (lambda d: d.move_panel("X", 1, 0), ["clock", "dock"]),
         (lambda d: d.move_panel("X", 0, 1), ["clock", "dock"]),
         (lambda d: d.remove_panel("X", 1), ["dock"]),
@@ -1045,7 +1045,7 @@ def test_the_guard_with_real_tomlkit_never_keeps_a_misplaced_panel():
     text = '[monitors]\nX.shell = "edge"\n'
     doc = UserDocument(text)
     try:
-        doc.add_panel("X", "dock")
+        doc.add_panel("X", {"widget": "dock"})
     except DocumentError:
         assert doc.text == text
     else:
@@ -1063,3 +1063,15 @@ def test_the_guard_compares_types(monkeypatch, wanted, written):
     with pytest.raises(DocumentError, match="changing other keys"):
         doc.set(("theme", "thickness"), wanted)
     assert doc.text == USER
+
+
+def test_add_panel_writes_the_entry_keys_in_order_one_per_line():
+    doc = UserDocument('[monitors.X]\nshell = "edge"\n')
+    doc.add_panel("X", {"panel": "edge", "name": 'Clock "big"', "widget": "clock"})
+    assert doc.text == (
+        '[monitors.X]\nshell = "edge"\n\n[[monitors.X.panels]]\npanel = "edge"\n'
+        'name = "Clock \\"big\\""\nwidget = "clock"\n'
+    )
+    assert doc.data["monitors"]["X"]["panels"] == [
+        {"panel": "edge", "name": 'Clock "big"', "widget": "clock"}
+    ]

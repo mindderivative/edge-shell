@@ -5,27 +5,39 @@
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]    # 0: centre of the bottom edge (the dock's default)
+panel = "edge"
+name = "Dock"
 widget = "dock"
 
 [[monitors.HDMI-A-1.panels]]    # 1: bottom-left, next to the corner
+panel = "edge"
+name = "Clock bottom-left"
 widget = "clock"
 edge = "bottom"
 align = "start"
 
 [[monitors.HDMI-A-1.panels]]    # 2: bottom-right, next to the corner
+panel = "edge"
+name = "Clock bottom-right"
 widget = "clock"
 edge = "bottom"
 align = "end"
 
 [[monitors.HDMI-A-1.panels]]    # 3: top centre slot, second (order 1)
+panel = "edge"
+name = "Clock top, second"
 widget = "clock"
 order = 1
 
 [[monitors.HDMI-A-1.panels]]    # 4: top centre slot, first (order 0), shorter
+panel = "edge"
+name = "Clock top, first"
 widget = "clock"
 length = 120
 
 [[monitors.HDMI-A-1.panels]]    # 5: right edge, 60 px up from the bottom end
+panel = "edge"
+name = "System bar"
 widget = "system_bar"
 align = "end"
 offset = 60

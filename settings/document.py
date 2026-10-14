@@ -124,12 +124,14 @@ class UserDocument:
             may_lose,
         )
 
-    def add_panel(self, monitor: str, widget: str) -> int:
-        """Append a panel entry with only its widget (every other key from the widget's
+    def add_panel(self, monitor: str, entry: dict[str, Any]) -> int:
+        """Append a panel entry with the keys of `entry`, in that order, one per line (the
+        settings window gives panel, name and widget; every other key comes from the widget's
         defaults); returns its index."""
+        entry = dict(entry)
         self._edit(
-            lambda text: _add_panel_text(text, self._data, monitor, widget),
-            lambda data: _plain_panels(data, monitor, create=True).append({"widget": widget}),
+            lambda text: _add_panel_text(text, self._data, monitor, entry),
+            lambda data: _plain_panels(data, monitor, create=True).append(dict(entry)),
             (*_panel_path(monitor), 0),
         )
         return len(self._data["monitors"][monitor]["panels"]) - 1
@@ -569,13 +571,16 @@ def _bracket(line: str) -> str:
     return s
 
 
-def _new_entry(text: str, header: str, widget: str, blank: bool) -> list[str]:
+def _new_entry(text: str, header: str, entry: dict[str, Any], blank: bool) -> list[str]:
     newline = "\r\n" if "\r\n" in text else "\n"
-    body = "widget = " + tomlkit.item(widget).as_string()
-    return ([newline] if blank else []) + [header + newline, body + newline]
+    body = [
+        f"{tomlkit.key(key).as_string()} = {tomlkit.item(value).as_string()}{newline}"
+        for key, value in entry.items()
+    ]
+    return ([newline] if blank else []) + [header + newline, *body]
 
 
-def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
+def _add_panel_text(text: str, data: dict, monitor: str, entry: dict[str, Any]) -> str:
     lines = _lines(text)
     monitors = data.get("monitors", {})
     if monitor in monitors and "panels" in monitors[monitor]:
@@ -601,8 +606,8 @@ def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
         gap = lines[above : s.start[-1]] if at == len(lines) or not lines[at].strip() else []
         # never directly below a comment (it would read as the new entry's label)
         blank = at > s.end[-1] and not gap
-        entry = _new_entry(text, _bracket(lines[s.head[-1]]), widget, blank)
-        return "".join(lines[:at] + gap + entry + lines[at:])
+        new = _new_entry(text, _bracket(lines[s.head[-1]]), entry, blank)
+        return "".join(lines[:at] + gap + new + lines[at:])
     tail = len(lines)
     while tail > 0 and _blank_or_comment(lines[tail - 1]):
         tail -= 1
@@ -619,9 +624,9 @@ def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
         at = tail or len(lines)  # a file of only comments: below them
         header = "[[" + tomlkit.key(list(_panel_path(monitor))).as_string() + "]]"
     else:  # a monitor known only from dotted keys or an inline table
-        return _in_doc(lambda doc: _add_panel(doc, monitor, widget))(text)
+        return _in_doc(lambda doc: _add_panel(doc, monitor, entry))(text)
     blank = at > 0 and bool(lines[at - 1].strip())
-    return "".join(lines[:at] + _new_entry(text, header, widget, blank) + lines[at:])
+    return "".join(lines[:at] + _new_entry(text, header, entry, blank) + lines[at:])
 
 
 # ---- tomlkit side ------------------------------------------------------------------------
@@ -713,11 +718,12 @@ def _monitor_table(doc, monitor: str):
     return doc["monitors"][monitor]
 
 
-def _add_panel(doc, monitor: str, widget: str) -> None:
+def _add_panel(doc, monitor: str, keys: dict[str, Any]) -> None:
     """Only for a monitor without any header of its own (the text side handles the rest)."""
     table = _monitor_table(doc, monitor)
     entry = tomlkit.table()
-    entry["widget"] = widget
+    for key, value in keys.items():
+        entry[key] = value
     if "panels" not in table:
         table["panels"] = tomlkit.aot()
     elif not isinstance(table["panels"], AoT):

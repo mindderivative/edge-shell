@@ -16,6 +16,7 @@ from gi.repository import Gtk
 from settings.document import UserDocument
 from settings.fields import wheel_scrolls_the_page
 from settings.form import ConfigForm, SectionSpec
+from settings.values import new_panel_entry
 from shell.panel_spec import CornerRequest, PanelRequest
 from shell.registry import widget_kind
 
@@ -91,10 +92,14 @@ class PanelEditor(Gtk.Box):
         self.pack_start(adder, False, False, 0)
 
     def add(self, widget: str | None) -> None:
-        """A new entry with only its widget, edge or corner kind alike (a corner widget's
-        entry is {"widget": "widget_panel"}: its corner and size are the widget's)."""
+        """A new entry with its kind, a name unique on this monitor and its widget, edge or
+        corner kind alike (a corner widget's entry is {"panel": "corner", "name": "summary",
+        "widget": "summary"}: its corner and size are the widget's)."""
         if widget:
-            self._on_edit(lambda d: d.add_panel(self.monitor, widget), self._count)
+            self._on_edit(
+                lambda d: d.add_panel(self.monitor, new_panel_entry(d.data, self.monitor, widget)),
+                self._count,
+            )
 
     def remove(self, index: int) -> None:
         self._on_edit(lambda d: d.remove_panel(self.monitor, index), None)

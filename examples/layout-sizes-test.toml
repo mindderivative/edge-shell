@@ -5,27 +5,37 @@
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]    # 0: bottom, fills the span between the two clocks
+panel = "edge"
+name = "Dock"
 widget = "dock"
 length = "fill"
 
 [[monitors.HDMI-A-1.panels]]    # 1: bottom-left, as long as its content
+panel = "edge"
+name = "Clock bottom-left"
 widget = "clock"
 edge = "bottom"
 align = "start"
 length = "content"
 
 [[monitors.HDMI-A-1.panels]]    # 2: bottom-right, as long as its content
+panel = "edge"
+name = "Clock bottom-right"
 widget = "clock"
 edge = "bottom"
 align = "end"
 length = "content"
 
 [[monitors.HDMI-A-1.panels]]    # 3: top, half of the free span but at most 700 px
+panel = "edge"
+name = "Clock top"
 widget = "clock"
 length = "50%"
 max_length = 700
 
 [[monitors.HDMI-A-1.panels]]    # 4: right, as long as its content, centred
+panel = "edge"
+name = "System bar"
 widget = "system_bar"
 align = "center"
 length = "content"

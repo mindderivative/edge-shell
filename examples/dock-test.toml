@@ -2,4 +2,6 @@
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Dock"
 widget = "dock"

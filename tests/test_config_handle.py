@@ -15,14 +15,19 @@ from shell.config.models import (
 
 
 def one_panel(**entry):
-    return {"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock", **entry}]}}
+    return {
+        "HDMI-A-1": {
+            "shell": "edge",
+            "panels": [{"panel": "edge", "name": "dock", "widget": "dock", **entry}],
+        }
+    }
 
 
 def test_defaults_change_nothing(make_config):
     cfg = make_config()
     style = cfg.theme.handle_style
     assert (style.shape, style.size, style.weight) == ("auto", 15, 3)
-    panel = PanelConfig(widget="dock")
+    panel = PanelConfig(panel="edge", name="dock", widget="dock")
     assert panel.handle == HandleConfig() and panel.interaction == InteractionConfig()
     assert all(v is None for v in panel.handle.model_dump().values())
     assert all(v is None for v in panel.interaction.model_dump().values())
@@ -93,7 +98,7 @@ def test_an_unknown_shape_lists_the_known_ones(make_config):
     with pytest.raises(ConfigError) as exc:
         parse_config(data)
     assert str(exc.value) == (
-        "monitors.HDMI-A-1.panels.0.handle.shape: "
+        "monitors.HDMI-A-1.panels[0].handle.shape: "
         "Input should be 'auto', 'dots', 'bar', 'chevron' or 'none'"
     )
 
@@ -116,7 +121,7 @@ def test_toml_dotted_keys_and_the_default_file(tmp_path):
         "[monitors.HDMI-A-1]\n"
         'shell = "edge"\n'
         "[[monitors.HDMI-A-1.panels]]\n"
-        'widget = "dock"\n'
+        'panel = "edge"\nname = "dock"\nwidget = "dock"\n'
         'handle.shape = "bar"\n'
         'handle.color = "#8fd3b6"\n'
         "interaction.hover = false\n",

@@ -269,8 +269,8 @@ class PanelConfig(_Strict):
     but the bag is a mutable, unhashable dict; requests that travel carry a frozen WidgetProps
     instead."""
 
-    panel: PanelKind | None = None
-    name: PanelName | None = None
+    panel: PanelKind
+    name: PanelName
     widget: str
     edge: Edge | None = None
     pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
@@ -301,8 +301,8 @@ class PanelConfig(_Strict):
 
     @field_validator("name")
     @classmethod
-    def _name(cls, value: str | None) -> str | None:
-        return None if value is None else check_panel_name(value)
+    def _name(cls, value: str) -> str:
+        return check_panel_name(value)
 
     @field_validator("length")
     @classmethod

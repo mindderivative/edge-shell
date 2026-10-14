@@ -211,9 +211,15 @@ def test_every_panel_gets_the_settings_opener(build):
     def opener():
         return None
 
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "clock"}), on_settings=opener)
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "clock", "widget": "clock"},
+        ),
+        on_settings=opener,
+    )
     assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     assert shell.panels[0].kwargs["on_settings"] is None
 
 
@@ -221,19 +227,30 @@ def test_a_corner_panel_gets_the_settings_opener(build, corner_registry):
     def opener():
         return None
 
-    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock"}), on_settings=opener)
+    shell, _, _ = build(
+        edge(
+            {"panel": "corner", "name": "box", "widget": "box"},
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+        ),
+        on_settings=opener,
+    )
     assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
 
 
 def test_canvas_first_then_strips_then_panels(build):
-    shell, tracked, _ = build(edge({"widget": "dock"}))
+    shell, tracked, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     assert tracked[0] is shell.canvas
     assert [type(w) for w in tracked[1:5]] == [FakeWindow] * 4
     assert tracked[5] is shell.panels[0]
 
 
 def test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback(build):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "bar"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "bar", "widget": "bar"},
+        )
+    )
     dock, bar = shell.panels
     assert dock.args[0].pos == 680 and bar.args[0].pos == 600  # centred dock resolved to 680
     assert {s.edge for s in shell.canvas.shapes.values()} == {"bottom", "right"}
@@ -242,20 +259,30 @@ def test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback(build):
 
 
 def test_two_centred_panels_on_one_edge_are_both_shown(build):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "length": 300}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "dock 2", "widget": "dock", "length": 300},
+        )
+    )
     a, b = shell.panels
     assert a.args[0].pos + 560 + 14 + 14 + 8 == b.args[0].pos  # packed: joins + default gap
     assert shell.layout_warnings == [] and len(shell.canvas.shapes) == 2
 
 
 def test_panel_that_breaks_the_layout_rules_is_hidden_and_reported(build):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "pos": 700}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "dock 2", "widget": "dock", "pos": 700},
+        )
+    )
     assert shell.panels[1] is None and len(shell.canvas.shapes) == 1
     assert "monitors.HDMI-A-1.panels.1 (dock): overlaps" in shell.layout_warnings[0]
 
 
 def test_init_schedules_primary_and_fallback_raise(build):
-    shell, _, timers = build(edge({"widget": "dock"}))
+    shell, _, timers = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     assert [ms for ms, _, _ in timers] == [mon_mod.RAISE_DELAY_MS, mon_mod.RAISE_FALLBACK_MS]
     panel = shell.panels[0]
     for _, fn, a in timers:
@@ -274,7 +301,7 @@ def test_init_without_panels_schedules_no_raise(build):
 
 def test_raise_switch_off_schedules_nothing(build, monkeypatch):
     monkeypatch.setenv("EDGE_SHELL_RAISE_MS", "0")
-    _, _, timers = build(edge({"widget": "dock"}))
+    _, _, timers = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     assert timers == []
 
 
@@ -294,10 +321,12 @@ def test_raise_delays_switch(env, expected):
 
 
 def test_restyle_redraws_the_canvas_with_the_monitor_theme(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     new = make_config(
         theme={"shadow": {"enabled": True}},
-        monitors=edge({"widget": "dock"}, theme={"shadow": {"elevation": 90}}),
+        monitors=edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"}, theme={"shadow": {"elevation": 90}}
+        ),
     )
     shell.apply(new, [Change("restyle", "HDMI-A-1")])
     (theme,) = shell.canvas.themes
@@ -306,12 +335,14 @@ def test_restyle_redraws_the_canvas_with_the_monitor_theme(build, make_config):
 
 
 def test_restyle_resizes_the_strips_in_place_with_the_monitor_theme(build, make_config):
-    shell, tracked, _ = build(edge({"widget": "dock"}))
+    shell, tracked, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     strips = list(shell.strips)
     assert len(strips) == 4 and all(s in tracked for s in strips)
     new = make_config(
         theme={"border": {"enabled": True, "width": 3}},
-        monitors=edge({"widget": "dock"}, theme={"border": {"width": 4}}),
+        monitors=edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"}, theme={"border": {"width": 4}}
+        ),
     )
     shell.apply(new, [Change("restyle", "HDMI-A-1")])
     assert shell.strips == strips and not any(s.destroyed for s in strips)  # no rebuild
@@ -319,20 +350,24 @@ def test_restyle_resizes_the_strips_in_place_with_the_monitor_theme(build, make_
 
 
 def test_state_change_retargets_without_rebuilding(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     dock = shell.panels[0]
     shell.apply(
-        make_config(monitors=edge({"widget": "dock", "state": "collapsed"})),
+        make_config(
+            monitors=edge({"panel": "edge", "name": "dock", "widget": "dock", "state": "collapsed"})
+        ),
         [Change("panel-state", "HDMI-A-1", 0)],
     )
     assert shell.panels[0] is dock and dock.states == ["collapsed"] and not dock.destroyed
 
 
 def test_geometry_change_rebuilds_and_moves_the_scene_shape(build, make_config):
-    shell, _, timers = build(edge({"widget": "dock"}))
+    shell, _, timers = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     old = shell.panels[0]
     shell.apply(
-        make_config(monitors=edge({"widget": "dock", "length": 300})),
+        make_config(
+            monitors=edge({"panel": "edge", "name": "dock", "widget": "dock", "length": 300})
+        ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
     new = shell.panels[0]
@@ -343,21 +378,37 @@ def test_geometry_change_rebuilds_and_moves_the_scene_shape(build, make_config):
 
 
 def test_add_and_remove_keep_canvas_and_panels_in_step(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
-    shell.apply(make_config(monitors=edge({"widget": "dock"}, {"widget": "clock"})), [])
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
+    shell.apply(
+        make_config(
+            monitors=edge(
+                {"panel": "edge", "name": "dock", "widget": "dock"},
+                {"panel": "edge", "name": "clock", "widget": "clock"},
+            )
+        ),
+        [],
+    )
     assert [p.args[0].widget for p in shell.panels] == ["dock", "clock"]
     assert len(shell.canvas.shapes) == 2
     clock = shell.panels[1]
-    shell.apply(make_config(monitors=edge({"widget": "dock"})), [])
+    shell.apply(make_config(monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"})), [])
     assert clock.destroyed and len(shell.panels) == 1 and len(shell.canvas.shapes) == 1
 
 
 def test_a_neighbour_change_rebuilds_the_panel_it_unhides(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "dock", "pos": 700}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "dock 2", "widget": "dock", "pos": 700},
+        )
+    )
     assert shell.panels[1] is None
     shell.apply(
         make_config(
-            monitors=edge({"widget": "dock", "align": "end"}, {"widget": "dock", "pos": 700})
+            monitors=edge(
+                {"panel": "edge", "name": "dock", "widget": "dock", "align": "end"},
+                {"panel": "edge", "name": "dock 2", "widget": "dock", "pos": 700},
+            )
         ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
@@ -373,7 +424,9 @@ def test_failed_panel_construction_leaves_no_scene_shape(build, make_config, mon
 
     monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
     with pytest.raises(RuntimeError):
-        shell.apply(make_config(monitors=edge({"widget": "dock"})), [])
+        shell.apply(
+            make_config(monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"})), []
+        )
     assert shell.canvas.shapes == {}
 
 
@@ -390,7 +443,7 @@ def test_failed_construction_closes_everything_already_built(
     monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
     monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda *a: 1)
     registered, unregistered = [], []
-    cfg = make_config(monitors=edge({"widget": "dock"}))
+    cfg = make_config(monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     with pytest.raises(RuntimeError, match="panel broke"):
         mon_mod.MonitorShell("HDMI-A-1", MONITOR, cfg, registered.append, unregistered.append)
     assert len(registered) == 5  # canvas + 4 strips were on screen
@@ -433,7 +486,10 @@ def test_raise_to_top_never_interrupts_a_drag():
 
 
 def test_the_monitor_gap_spaces_slotted_panels(build):
-    mons = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    mons = edge(
+        {"panel": "edge", "name": "clock", "widget": "clock", "align": "start"},
+        {"panel": "edge", "name": "clock 2", "widget": "clock", "align": "start"},
+    )
     mons["HDMI-A-1"]["layout"] = {"gap": 30}
     shell, _, _ = build(mons)
     a, b = (p.args[0] for p in shell.panels)
@@ -441,10 +497,16 @@ def test_the_monitor_gap_spaces_slotted_panels(build):
 
 
 def test_a_gap_change_moves_the_neighbours(build, make_config):
-    two = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    two = edge(
+        {"panel": "edge", "name": "clock", "widget": "clock", "align": "start"},
+        {"panel": "edge", "name": "clock 2", "widget": "clock", "align": "start"},
+    )
     shell, _, _ = build(two)
     first, second = shell.panels
-    wider = edge({"widget": "clock", "align": "start"}, {"widget": "clock", "align": "start"})
+    wider = edge(
+        {"panel": "edge", "name": "clock", "widget": "clock", "align": "start"},
+        {"panel": "edge", "name": "clock 2", "widget": "clock", "align": "start"},
+    )
     wider["HDMI-A-1"]["layout"] = {"gap": 40}
     shell.apply(make_config(monitors=wider), [Change("relayout", "HDMI-A-1")])
     assert shell.panels[0] is first and not first.destroyed  # did not move: kept
@@ -456,7 +518,10 @@ def test_a_gap_change_moves_the_neighbours(build, make_config):
 
 def test_content_panels_are_measured_when_idle_then_laid_out_again(build):
     reports = []
-    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_layout=reports.append)
+    shell, _, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}),
+        on_layout=reports.append,
+    )
     first = shell.panels[0]
     assert first.args[0].length == 560  # the widget's default until measured
     assert len(shell.test_idles) == 1 and reports == []
@@ -473,20 +538,36 @@ def test_content_panels_are_measured_when_idle_then_laid_out_again(build):
 
 
 def test_no_measurement_without_content_panels(build):
-    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "clock", "length": "fill"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "clock", "widget": "clock", "length": "fill"},
+        )
+    )
     assert shell.test_idles == []
 
 
 def test_a_measurement_belongs_to_its_widget(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock", "length": "content"}))
+    shell, _, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"})
+    )
     shell.panels[0].natural = 300
     shell.test_idles[0]()
-    shell.apply(make_config(monitors=edge({"widget": "clock", "length": "content"})), [])
+    shell.apply(
+        make_config(
+            monitors=edge(
+                {"panel": "edge", "name": "clock", "widget": "clock", "length": "content"}
+            )
+        ),
+        [],
+    )
     assert shell.panels[0].args[0].length == 168  # the clock's default, not the dock's 300
 
 
 def test_measuring_after_close_does_nothing(build):
-    shell, _, _ = build(edge({"widget": "dock", "length": "content"}))
+    shell, _, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"})
+    )
     pending = shell.test_idles[0]
     shell.close()
     assert 101 in shell.test_removed  # the pending idle was cancelled
@@ -494,8 +575,8 @@ def test_measuring_after_close_does_nothing(build):
 
 
 def test_only_panels_built_since_the_last_measurement_are_measured(build, make_config):
-    dock = {"widget": "dock", "length": "content"}
-    clock = {"widget": "clock", "length": "content"}
+    dock = {"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}
+    clock = {"panel": "edge", "name": "clock", "widget": "clock", "length": "content"}
     shell, _, _ = build(edge(dock, clock))
     shell.test_idles[0]()  # both measured at 200 px: both rebuilt
     shell.test_idles[1]()  # the rebuilt pair is measured once: nothing changes
@@ -512,7 +593,10 @@ def test_only_panels_built_since_the_last_measurement_are_measured(build, make_c
 
 
 def test_a_restyle_measures_every_content_panel_again(build, make_config):
-    panels = ({"widget": "dock", "length": "content"}, {"widget": "clock"})
+    panels = (
+        {"panel": "edge", "name": "dock", "widget": "dock", "length": "content"},
+        {"panel": "edge", "name": "clock", "widget": "clock"},
+    )
     shell, _, _ = build(edge(*panels))
     shell.test_idles[0]()  # measured: rebuilt at 200 px
     shell.test_idles[1]()  # settled
@@ -528,7 +612,10 @@ def test_a_restyle_measures_every_content_panel_again(build, make_config):
 
 
 def test_a_measurement_that_changes_nothing_still_reports_the_layout(build, make_config):
-    panels = ({"widget": "dock", "length": "content"}, {"widget": "clock"})
+    panels = (
+        {"panel": "edge", "name": "dock", "widget": "dock", "length": "content"},
+        {"panel": "edge", "name": "clock", "widget": "clock"},
+    )
     reports = []
     shell, _, _ = build(edge(*panels), on_layout=reports.append)
     shell.test_idles[0]()  # measured: rebuilt
@@ -546,7 +633,10 @@ def test_a_measurement_that_changes_nothing_still_reports_the_layout(build, make
 
 def test_a_measurement_with_nothing_to_measure_still_reports_the_layout(build):
     reports = []
-    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_layout=reports.append)
+    shell, _, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}),
+        on_layout=reports.append,
+    )
     shell._to_measure = lambda: []  # e.g. the panels were hidden in between
     assert shell._measure() is False
     assert reports == [shell]
@@ -555,7 +645,7 @@ def test_a_measurement_with_nothing_to_measure_still_reports_the_layout(build):
 def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog):
     errors, reports = [], []
     shell, _, _ = build(
-        edge({"widget": "dock", "length": "content"}),
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}),
         on_layout=reports.append,
         on_error=errors.append,
     )
@@ -574,7 +664,10 @@ def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypa
     def bad_handler(_shell):
         raise RuntimeError("handler broke")
 
-    shell, _, _ = build(edge({"widget": "dock", "length": "content"}), on_error=bad_handler)
+    shell, _, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}),
+        on_error=bad_handler,
+    )
     shell.panels[0].natural = 300
 
     def explode(*a, **k):
@@ -592,7 +685,11 @@ def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypa
 def test_a_resolution_change_relayouts_once_it_settles(build):
     reports = []
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}),
+        monitor=monitor,
+        on_layout=reports.append,
+    )
     dock = shell.panels[0]
     assert dock.args[0].pos == 680
     ((signal, handler),) = monitor.handlers.values()
@@ -610,7 +707,9 @@ def test_a_resolution_change_relayouts_once_it_settles(build):
 def test_a_relayout_is_logged(build, caplog):
     caplog.set_level("DEBUG")
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}), monitor=monitor
+    )
     ((_, handler),) = monitor.handlers.values()
     monitor.width, monitor.height = 1280, 720
     handler(monitor, None)
@@ -620,7 +719,7 @@ def test_a_relayout_is_logged(build, caplog):
 
 def test_close_disconnects_from_the_monitor(build):
     monitor = FakeMonitor()
-    shell, _, _ = build(edge({"widget": "dock"}), monitor=monitor)
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}), monitor=monitor)
     assert len(monitor.handlers) == 1
     shell.close()
     assert monitor.handlers == {}
@@ -629,7 +728,11 @@ def test_close_disconnects_from_the_monitor(build):
 def test_close_cancels_a_pending_relayout(build):
     reports = []
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}),
+        monitor=monitor,
+        on_layout=reports.append,
+    )
     dock = shell.panels[0]
     ((_, handler),) = monitor.handlers.values()
     monitor.width, monitor.height = 1280, 720
@@ -644,7 +747,9 @@ def test_close_cancels_a_pending_relayout(build):
 
 def test_close_destroys_every_window_even_if_the_monitor_disconnect_raises(build):
     monitor = FakeMonitor()
-    shell, tracked, _ = build(edge({"widget": "dock"}), monitor=monitor)
+    shell, tracked, _ = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}), monitor=monitor
+    )
     monitor.disconnect_raises = True
     shell.close()
     assert tracked and all(w.destroyed for w in tracked)
@@ -654,7 +759,11 @@ def test_a_zero_geometry_is_ignored(build, caplog):
     caplog.set_level("DEBUG")
     reports = []
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor, on_layout=reports.append)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}),
+        monitor=monitor,
+        on_layout=reports.append,
+    )
     dock = shell.panels[0]
     ((_, handler),) = monitor.handlers.values()
     monitor.width = monitor.height = 0  # what an unplugged monitor reports
@@ -669,7 +778,10 @@ def test_a_zero_geometry_blocks_every_layout_path(build, make_config):
     reports = []
     monitor = FakeMonitor()
     shell, _, _ = build(
-        edge({"widget": "dock", "length": "content"}, {"widget": "clock"}),
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock", "length": "content"},
+            {"panel": "edge", "name": "clock", "widget": "clock"},
+        ),
         monitor=monitor,
         on_layout=reports.append,
     )
@@ -677,7 +789,15 @@ def test_a_zero_geometry_blocks_every_layout_path(build, make_config):
     monitor.width = monitor.height = 0  # unplugged, the hot-plug sync has not closed us yet
     shell.panels[0].natural = 300
     assert shell.test_idles[0]() is False  # a pending measurement
-    shell.apply(make_config(monitors=edge({"widget": "dock"}, {"widget": "clock"})), [])
+    shell.apply(
+        make_config(
+            monitors=edge(
+                {"panel": "edge", "name": "dock", "widget": "dock"},
+                {"panel": "edge", "name": "clock", "widget": "clock"},
+            )
+        ),
+        [],
+    )
     assert shell.panels == before and not any(p.destroyed for p in before)
     assert shell.layout_warnings == []
 
@@ -686,7 +806,7 @@ def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
     errors, reports = [], []
     monitor = FakeMonitor()
     shell, _, timers = build(
-        edge({"widget": "dock"}),
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}),
         monitor=monitor,
         on_layout=reports.append,
         on_error=errors.append,
@@ -714,7 +834,10 @@ def test_shrinking_hides_a_panel_and_growing_brings_it_back(build):
     reports = []
     monitor = FakeMonitor()
     shell, _, timers = build(
-        edge({"widget": "dock"}, {"widget": "dock", "pos": 1300}),
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "dock 2", "widget": "dock", "pos": 1300},
+        ),
         monitor=monitor,
         on_layout=reports.append,
     )
@@ -732,7 +855,16 @@ def test_shrinking_hides_a_panel_and_growing_brings_it_back(build):
 def test_a_start_aligned_panel_is_not_rebuilt_by_a_resize(build):
     monitor = FakeMonitor()
     shell, _, timers = build(
-        edge({"widget": "dock", "edge": "top", "align": "start", "length": 400}),
+        edge(
+            {
+                "panel": "edge",
+                "name": "dock",
+                "widget": "dock",
+                "edge": "top",
+                "align": "start",
+                "length": 400,
+            }
+        ),
         monitor=monitor,
     )
     ((_, handler),) = monitor.handlers.values()
@@ -745,7 +877,9 @@ def test_a_resize_during_a_measurement_does_not_report_before_it(build):
     reports = []
     monitor = FakeMonitor()
     shell, _, timers = build(
-        edge({"widget": "dock", "length": "content"}), monitor=monitor, on_layout=reports.append
+        edge({"panel": "edge", "name": "dock", "widget": "dock", "length": "content"}),
+        monitor=monitor,
+        on_layout=reports.append,
     )
     ((_, handler),) = monitor.handlers.values()
     assert shell.measure_pending
@@ -757,7 +891,9 @@ def test_a_resize_during_a_measurement_does_not_report_before_it(build):
 
 def test_a_scaled_monitor_warns_once_per_shell(build, caplog):
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}), monitor=monitor
+    )
     ((_, handler),) = monitor.handlers.values()
     monitor.scale = 2
     _resize(monitor, handler, timers, 1280, 720)()
@@ -767,7 +903,9 @@ def test_a_scaled_monitor_warns_once_per_shell(build, caplog):
 
 def test_a_geometry_signal_on_a_closed_shell_is_ignored(build):
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "dock"}), monitor=monitor)
+    shell, _, timers = build(
+        edge({"panel": "edge", "name": "dock", "widget": "dock"}), monitor=monitor
+    )
     before = len(timers)
     shell._closed = True
     shell._on_geometry()
@@ -782,8 +920,13 @@ def test_panels_get_their_handle_and_interaction(build):
 
     shell, _, _ = build(
         edge(
-            {"widget": "dock", "handle": {"shape": "bar", "offset": 20}},
-            {"widget": "clock", "interaction": {"hover": False}},
+            {
+                "panel": "edge",
+                "name": "dock",
+                "widget": "dock",
+                "handle": {"shape": "bar", "offset": 20},
+            },
+            {"panel": "edge", "name": "clock", "widget": "clock", "interaction": {"hover": False}},
         )
     )
     dock, clock = shell.panels
@@ -796,13 +939,24 @@ def test_panels_get_their_handle_and_interaction(build):
 def test_a_handle_change_updates_the_live_panel(build, make_config):
     from shell.panel_spec import HandleSpec, Interaction
 
-    shell, _, timers = build(edge({"widget": "dock"}, {"widget": "clock"}))
+    shell, _, timers = build(
+        edge(
+            {"panel": "edge", "name": "dock", "widget": "dock"},
+            {"panel": "edge", "name": "clock", "widget": "clock"},
+        )
+    )
     dock, clock = shell.panels
     before = len(timers)
     new = make_config(
         monitors=edge(
-            {"widget": "dock", "handle": {"shape": "chevron"}, "interaction": {"drag": False}},
-            {"widget": "clock"},
+            {
+                "panel": "edge",
+                "name": "dock",
+                "widget": "dock",
+                "handle": {"shape": "chevron"},
+                "interaction": {"drag": False},
+            },
+            {"panel": "edge", "name": "clock", "widget": "clock"},
         )
     )
     shell.apply(new, [Change("panel-handle", "HDMI-A-1", 0)])
@@ -815,10 +969,18 @@ def test_a_handle_change_updates_the_live_panel(build, make_config):
 
 
 def test_a_handle_and_state_change_does_both_in_place(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     dock = shell.panels[0]
     new = make_config(
-        monitors=edge({"widget": "dock", "state": "collapsed", "handle": {"size": 30}})
+        monitors=edge(
+            {
+                "panel": "edge",
+                "name": "dock",
+                "widget": "dock",
+                "state": "collapsed",
+                "handle": {"size": 30},
+            }
+        )
     )
     shell.apply(new, [Change("panel-handle", "HDMI-A-1", 0)])
     assert shell.panels[0] is dock and dock.states == ["collapsed"]
@@ -826,10 +988,20 @@ def test_a_handle_and_state_change_does_both_in_place(build, make_config):
 
 
 def test_a_rebuilt_panel_gets_the_new_handle(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     old = shell.panels[0]
     shell.apply(
-        make_config(monitors=edge({"widget": "dock", "depth": 80, "handle": {"shape": "bar"}})),
+        make_config(
+            monitors=edge(
+                {
+                    "panel": "edge",
+                    "name": "dock",
+                    "widget": "dock",
+                    "depth": 80,
+                    "handle": {"shape": "bar"},
+                }
+            )
+        ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
     new = shell.panels[0]
@@ -838,9 +1010,12 @@ def test_a_rebuilt_panel_gets_the_new_handle(build, make_config):
 
 
 def test_a_theme_handle_style_change_restyles_in_place(build, make_config):
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     dock = shell.panels[0]
-    new = make_config(theme={"handle_style": {"shape": "bar"}}, monitors=edge({"widget": "dock"}))
+    new = make_config(
+        theme={"handle_style": {"shape": "bar"}},
+        monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"}),
+    )
     shell.apply(new, [Change("restyle", "HDMI-A-1")])
     assert shell.panels[0] is dock and not dock.destroyed
     assert dock.themes[0].handle_style.shape == "bar" and dock.handles == []
@@ -848,17 +1023,23 @@ def test_a_theme_handle_style_change_restyles_in_place(build, make_config):
 
 def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
     caplog.set_level("DEBUG", logger="shell.monitors")
-    shell, _, _ = build(edge({"widget": "dock"}))
+    shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     built = [r.getMessage() for r in caplog.records if "building panel" in r.getMessage()]
     assert built == ["building panel 0 (dock) on HDMI-A-1"]
     caplog.clear()
     shell.apply(
-        make_config(monitors=edge({"widget": "dock", "handle": {"shape": "bar"}})),
+        make_config(
+            monitors=edge(
+                {"panel": "edge", "name": "dock", "widget": "dock", "handle": {"shape": "bar"}}
+            )
+        ),
         [Change("panel-handle", "HDMI-A-1", 0)],
     )
     assert "building panel" not in caplog.text  # in place (Gate B item 6 reads this line)
     shell.apply(
-        make_config(monitors=edge({"widget": "dock", "depth": 80})),
+        make_config(
+            monitors=edge({"panel": "edge", "name": "dock", "widget": "dock", "depth": 80})
+        ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
     assert "building panel 0 (dock) on HDMI-A-1" in caplog.text
@@ -873,7 +1054,7 @@ def test_a_corner_panel_gets_its_geometry_a_corner_shape_and_a_depth_callback(
     from shell.canvas.scene import CornerShape
     from shell.panel_spec import CornerGeometry
 
-    shell, _, _ = build(edge({"widget": "box"}))
+    shell, _, _ = build(edge({"panel": "corner", "name": "box", "widget": "box"}))
     (box,) = shell.panels
     assert box.args[0] == CornerGeometry(
         "box", "bottom-left", "bottom", 300, 290, 380, "extended", "box"
@@ -884,26 +1065,41 @@ def test_a_corner_panel_gets_its_geometry_a_corner_shape_and_a_depth_callback(
 
 
 def test_edge_panels_keep_clear_of_a_corner_panel(build, corner_registry):
-    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock", "align": "start"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "corner", "name": "box", "widget": "box"},
+            {"panel": "edge", "name": "dock", "widget": "dock", "align": "start"},
+        )
+    )
     assert shell.panels[1].args[0].pos == 336  # 300 + 14 + 8 + 14
     assert shell.layout_warnings == []
 
 
 def test_a_second_corner_panel_in_one_corner_is_hidden_and_reported(build, corner_registry):
-    shell, _, _ = build(edge({"widget": "box"}, {"widget": "box", "edge": "left"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "corner", "name": "box", "widget": "box"},
+            {"panel": "corner", "name": "box 2", "widget": "box", "edge": "left"},
+        )
+    )
     assert shell.panels[1] is None and len(shell.canvas.shapes) == 1
     assert "the bottom-left corner already holds" in shell.layout_warnings[0]
 
 
 def test_corner_panels_are_raised_like_edge_panels(build, corner_registry):
-    shell, _, timers = build(edge({"widget": "box"}))
+    shell, _, timers = build(edge({"panel": "corner", "name": "box", "widget": "box"}))
     for _, fn, a in timers:
         fn(*a)
     assert shell.panels[0].raised == 2
 
 
 def test_corner_panels_are_never_measured(build, corner_registry):
-    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock", "length": "content"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "corner", "name": "box", "widget": "box"},
+            {"panel": "edge", "name": "dock", "widget": "dock", "length": "content"},
+        )
+    )
     box, dock = shell.panels
     shell.test_idles[-1]()  # the idle measurement
     assert dock.measured == 1 and box.measured == 0
@@ -911,10 +1107,20 @@ def test_corner_panels_are_never_measured(build, corner_registry):
 
 
 def test_a_corner_size_change_rebuilds_only_that_panel(build, corner_registry, make_config):
-    shell, _, _ = build(edge({"widget": "box"}, {"widget": "clock"}))
+    shell, _, _ = build(
+        edge(
+            {"panel": "corner", "name": "box", "widget": "box"},
+            {"panel": "edge", "name": "clock", "widget": "clock"},
+        )
+    )
     box, clock = shell.panels
     shell.apply(
-        make_config(monitors=edge({"widget": "box", "width": 320}, {"widget": "clock"})),
+        make_config(
+            monitors=edge(
+                {"panel": "corner", "name": "box", "widget": "box", "width": 320},
+                {"panel": "edge", "name": "clock", "widget": "clock"},
+            )
+        ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
     assert box.destroyed and shell.panels[0].args[0].along == 320
@@ -924,11 +1130,15 @@ def test_a_corner_size_change_rebuilds_only_that_panel(build, corner_registry, m
 def test_a_corner_handle_change_is_applied_in_place(build, corner_registry, make_config):
     from shell.panel_spec import HandleSpec, Interaction
 
-    shell, _, timers = build(edge({"widget": "box"}))
+    shell, _, timers = build(edge({"panel": "corner", "name": "box", "widget": "box"}))
     (box,) = shell.panels
     before = len(timers)
     shell.apply(
-        make_config(monitors=edge({"widget": "box", "handle": {"shape": "bar"}})),
+        make_config(
+            monitors=edge(
+                {"panel": "corner", "name": "box", "widget": "box", "handle": {"shape": "bar"}}
+            )
+        ),
         [Change("panel-handle", "HDMI-A-1", 0)],
     )
     assert shell.panels == [box] and not box.destroyed
@@ -937,10 +1147,12 @@ def test_a_corner_handle_change_is_applied_in_place(build, corner_registry, make
 
 
 def test_a_corner_state_change_retargets_in_place(build, corner_registry, make_config):
-    shell, _, _ = build(edge({"widget": "box"}))
+    shell, _, _ = build(edge({"panel": "corner", "name": "box", "widget": "box"}))
     (box,) = shell.panels
     shell.apply(
-        make_config(monitors=edge({"widget": "box", "state": "collapsed"})),
+        make_config(
+            monitors=edge({"panel": "corner", "name": "box", "widget": "box", "state": "collapsed"})
+        ),
         [Change("panel-state", "HDMI-A-1", 0)],
     )
     assert shell.panels == [box] and box.states == ["collapsed"]
@@ -948,7 +1160,9 @@ def test_a_corner_state_change_retargets_in_place(build, corner_registry, make_c
 
 def test_a_smaller_monitor_shrinks_the_corner_panel(build, corner_registry):
     monitor = FakeMonitor()
-    shell, _, timers = build(edge({"widget": "box"}), monitor=monitor)
+    shell, _, timers = build(
+        edge({"panel": "corner", "name": "box", "widget": "box"}), monitor=monitor
+    )
     (box,) = shell.panels
     monitor.width, monitor.height = 320, 720
     ((_signal, handler),) = monitor.handlers.values()

@@ -4,7 +4,10 @@ import pytest
 from shell.config.models import ConfigError
 from shell.config.store import ConfigStore
 
-GOOD = '[monitors.HDMI-A-1]\nshell = "edge"\n[[monitors.HDMI-A-1.panels]]\nwidget = "dock"\n'
+GOOD = (
+    '[monitors.HDMI-A-1]\nshell = "edge"\n'
+    '[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+)
 
 
 def test_initial_load_and_failure(tmp_path, fake_registry):
@@ -39,7 +42,8 @@ def test_reload_unchanged_returns_none(tmp_path, fake_registry):
         "[theme\n",  # invalid TOML (editor saved mid-edit)
         "[theme]\nbogus = 1\n",  # unknown key
         '[theme]\nframe = "red"\n',  # bad color
-        '[monitors.HDMI-A-1]\n[[monitors.HDMI-A-1.panels]]\nwidget = "ghost"\n',  # unknown widget
+        '[monitors.HDMI-A-1]\n[[monitors.HDMI-A-1.panels]]\npanel = "edge"\nname = "ghost"\n'
+        'widget = "ghost"\n',  # unknown widget
     ],
 )
 def test_bad_edit_keeps_last_good_config(tmp_path, fake_registry, bad):
