@@ -1,4 +1,4 @@
-"""Every registered widget builds the panel class its registration kind promises."""
+"""Every registered widget builds the panel class of the kind it supports."""
 
 import pytest
 
@@ -14,4 +14,4 @@ def test_every_corner_widget_builds_a_corner_panel():
     assert registry.widget_names()
     for name in registry.widget_names():
         is_corner = issubclass(registry.widget_class(name), CornerPanel)
-        assert is_corner == (registry.widget_kind(name) == "corner"), name
+        assert is_corner == (registry.supported_kinds(name) == ("corner",)), name

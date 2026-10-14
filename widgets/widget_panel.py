@@ -14,7 +14,7 @@ from gi.repository import GLib
 from services.sysinfo import cpu_percent, read_cpu_times, read_meminfo_percent
 from shell.corner_panel import CornerPanel
 from shell.panel_spec import CornerDefaults
-from shell.registry import register
+from shell.registry import register_widget
 from widgets.clock import format_time
 
 REFRESH_MS = 1000  # the minute rolls over within a second of the real change
@@ -34,9 +34,10 @@ def _set(label, text: str) -> None:
         label.set_label(text)
 
 
-@register(
+@register_widget(
     "summary",
-    CornerDefaults(corner="bottom-left", width=300, height=390, label="summary"),
+    title="Summary",
+    corner=CornerDefaults(corner="bottom-left", width=300, height=390, label="summary"),
 )
 class WidgetPanel(CornerPanel):
     def build_content(self):

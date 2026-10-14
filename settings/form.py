@@ -181,8 +181,8 @@ class ConfigForm:
     corner_panel: SectionSpec  # ... of a corner widget (spec 19)
 
     def panel_for(self, kind: str, corner: str | None = None) -> SectionSpec:
-        """The section of a panel entry whose widget is of `kind` (registry.widget_kind:
-        "edge" or "corner"). Given the `corner` in effect, a corner panel's edge row offers
+        """The section of a panel entry of `kind` (its `panel` key: "edge" or
+        "corner"). Given the `corner` in effect, a corner panel's edge row offers
         only that corner's two edges (corner.split("-"))."""
         if kind == "edge":
             return self.edge_panel
@@ -199,7 +199,7 @@ class ConfigForm:
 
 def config_form(widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()) -> ConfigForm:
     """Every section the settings window shows; `widgets` is registry.widget_names() and
-    `corner_widgets` those whose registry.widget_kind is "corner".
+    `corner_widgets` those shown in a corner panel (registry.supported_kinds).
 
     Per-monitor overrides use the base models (Theme, LayoutSettings), not ThemeOverride /
     LayoutOverride: those are built with create_model from the bare annotations and lose the

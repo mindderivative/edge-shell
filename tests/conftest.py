@@ -31,22 +31,26 @@ def make_config():
 
 from shell import registry
 from shell.panel_spec import PanelDefaults
+from shell.widget import Widget
 
 
 @pytest.fixture
 def fake_registry(monkeypatch):
+    """Three edge widgets: dock (bottom), clock (top) and bar (right, pos 600, collapsed)."""
     monkeypatch.setattr(registry, "_WIDGETS", {})
-    monkeypatch.setattr(registry, "_DEFAULTS", {})
-    registry.register("dock", PanelDefaults(edge="bottom", length=560, depth=64, label="dock"))(
-        type("Dock", (), {})
-    )
-    registry.register("clock", PanelDefaults(edge="top", length=168, depth=46, label="clock"))(
-        type("Clock", (), {})
-    )
-    registry.register(
+    registry.register_widget(
+        "dock", title="Dock", edge=PanelDefaults(edge="bottom", length=560, depth=64, label="dock")
+    )(type("Dock", (Widget,), {}))
+    registry.register_widget(
+        "clock", title="Clock", edge=PanelDefaults(edge="top", length=168, depth=46, label="clock")
+    )(type("Clock", (Widget,), {}))
+    registry.register_widget(
         "bar",
-        PanelDefaults(edge="right", length=300, depth=56, pos=600, label="bar", state="collapsed"),
-    )(type("Bar", (), {}))
+        title="Bar",
+        edge=PanelDefaults(
+            edge="right", length=300, depth=56, pos=600, label="bar", state="collapsed"
+        ),
+    )(type("Bar", (Widget,), {}))
     return registry
 
 
@@ -56,7 +60,9 @@ def corner_registry(fake_registry):
     the bottom edge (its default), extended."""
     from shell.panel_spec import CornerDefaults
 
-    fake_registry.register(
-        "box", CornerDefaults(corner="bottom-left", width=300, height=390, label="box")
-    )(type("Box", (), {}))
+    fake_registry.register_widget(
+        "box",
+        title="Box",
+        corner=CornerDefaults(corner="bottom-left", width=300, height=390, label="box"),
+    )(type("Box", (Widget,), {}))
     return fake_registry

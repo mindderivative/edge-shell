@@ -599,3 +599,15 @@ def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
     old.editor.commit()  # the focus-out of the retired entry
     old.flush()
     assert "Typed Font" not in path.read_text() and not view.session.history
+
+
+def test_the_widget_list_labels_only_corner_widgets(tmp_path, corner_registry):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = SettingsView(SettingsSession(path), [HDMI])
+    assert view.form.edge_panel.field("widget").labels == (
+        "bar",
+        "clock",
+        "dock",
+        "box (corner panel)",
+    )

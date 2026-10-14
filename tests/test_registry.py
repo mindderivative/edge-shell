@@ -3,11 +3,14 @@ import pytest
 from shell import registry
 from shell.config.models import ConfigError, PanelConfig
 from shell.panel_spec import PanelDefaults, PanelRequest
+from shell.widget import Widget
 
 
 def test_duplicate_registration_rejected(fake_registry):
     with pytest.raises(ValueError):
-        registry.register("dock", PanelDefaults("top", 100, 40, "x"))(type("X", (), {}))
+        registry.register_widget("dock", title="X", edge=PanelDefaults("top", 100, 40, "x"))(
+            type("X", (Widget,), {})
+        )
 
 
 def test_widget_names_sorted(fake_registry):
@@ -50,6 +53,7 @@ def test_request_uses_widget_defaults(fake_registry):
         state="extended",
         label="dock",
         fallback_length=560,
+        name="dock",
     )
 
 

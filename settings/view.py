@@ -24,7 +24,7 @@ from settings.session import ChangedOutside, SettingsSession, check_text
 from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
-from shell.registry import requests_for, widget_kind, widget_names
+from shell.registry import requests_for, supported_kinds, widget_names
 
 Edit = Callable[[UserDocument], Any]
 # shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind;
@@ -38,7 +38,7 @@ class SettingsView(Gtk.Box):
         self.session = session
         self.outputs = {o.name: o for o in outputs}
         names = tuple(widget_names())
-        corner = tuple(n for n in names if widget_kind(n) == "corner")
+        corner = tuple(n for n in names if supported_kinds(n)[0] == "corner")
         self.form = config_form(names, corner)
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}

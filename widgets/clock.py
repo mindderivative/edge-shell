@@ -11,7 +11,7 @@ from gi.repository import GLib
 
 from shell.edge_panel import EdgePanel
 from shell.panel_spec import PanelDefaults
-from shell.registry import register
+from shell.registry import register_widget
 
 REFRESH_MS = 1000  # the minute rolls over within a second of the real change
 
@@ -20,7 +20,9 @@ def format_time(now: datetime) -> str:
     return now.strftime("%H:%M")
 
 
-@register("clock", PanelDefaults(edge="top", length=168, depth=46, label="clock"))
+@register_widget(
+    "clock", title="Clock", edge=PanelDefaults(edge="top", length=168, depth=46, label="clock")
+)
 class ClockPanel(EdgePanel):
     def build_content(self):
         self._destroyed = False

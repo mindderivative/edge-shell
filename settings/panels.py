@@ -18,7 +18,6 @@ from settings.fields import wheel_scrolls_the_page
 from settings.form import ConfigForm, SectionSpec
 from settings.values import new_panel_entry
 from shell.panel_spec import CornerRequest, PanelRequest
-from shell.registry import widget_kind
 
 Edit = Callable[[UserDocument], Any]
 
@@ -36,7 +35,7 @@ def panel_section(form: ConfigForm, req: PanelRequest | CornerRequest) -> Sectio
     """The rows of one entry: its widget's kind; a corner panel's edge row offers only the two
     edges of the corner it is in."""
     corner = req.corner if isinstance(req, CornerRequest) else None
-    return form.panel_for(widget_kind(req.widget), corner)
+    return form.panel_for("edge" if corner is None else "corner", corner)
 
 
 class PanelEditor(Gtk.Box):

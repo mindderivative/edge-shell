@@ -10,16 +10,19 @@ from gi.repository import GLib
 from services.sysinfo import cpu_percent, read_cpu_times, read_meminfo_percent
 from shell.edge_panel import EdgePanel
 from shell.panel_spec import PanelDefaults
-from shell.registry import register
+from shell.registry import register_widget
 
 
-@register(
+@register_widget(
     "system_bar",
+    title="System bar",
     # y = 600 on a 1080 px tall monitor (free span ends at 1042: 1042 - 142 - 300 = 600).
     # Same as the old pos = 600 only with edge right (or left), length 300, depth >= 28 and
     # the default thickness/radius; an entry overriding edge, length or depth moves (the app
     # logs those entries).
-    PanelDefaults(edge="right", length=300, depth=56, label="system bar", align="end", offset=142),
+    edge=PanelDefaults(
+        edge="right", length=300, depth=56, label="system bar", align="end", offset=142
+    ),
 )
 class SystemBarPanel(EdgePanel):
     def build_content(self):

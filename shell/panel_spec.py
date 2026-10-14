@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from shell.config.models import Align, Corner, Edge, HandleShape, PanelState
+from shell.widget import NO_PROPS, WidgetProps
 
 LengthSpec = int | str  # px, "fill", "content" or "NN%" (validated by shell.config.models)
 
@@ -77,6 +78,9 @@ class PanelRequest:
     # Not part of the layout (PanelGeometry): a change is applied to the live panel in place.
     handle: HandleSpec = HandleSpec()
     interaction: Interaction = Interaction()
+    # Not part of the layout either; a change rebuilds the panel (shell.config.diff).
+    name: str = ""
+    props: WidgetProps = NO_PROPS
 
 
 @dataclass(frozen=True)
@@ -94,7 +98,7 @@ class PanelGeometry:
 
 def default_edge(corner: Corner) -> Edge:
     """The edge a corner panel opens from unless told otherwise: the corner's top or bottom
-    edge (the spec's summary panel rises out of the bottom edge)."""
+    edge (the summary block rises out of the bottom edge)."""
     return corner.split("-")[0]  # type: ignore[return-value]
 
 
@@ -132,6 +136,8 @@ class CornerRequest:
     label: str
     handle: HandleSpec = HandleSpec()
     interaction: Interaction = Interaction()
+    name: str = ""  # as PanelRequest: a change rebuilds the panel
+    props: WidgetProps = NO_PROPS
 
 
 @dataclass(frozen=True)

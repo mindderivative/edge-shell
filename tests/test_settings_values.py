@@ -239,6 +239,23 @@ def test_panel_ops_keep_the_entry_valid(corner_registry, entry, key, value, ops)
     assert panel_ops(entry, key, value) == ops
 
 
+def test_a_widget_for_both_kinds_keeps_the_entrys_kind(corner_registry):
+    from shell.panel_spec import CornerDefaults, PanelDefaults
+    from shell.widget import Widget
+
+    corner_registry.register_widget(
+        "both",
+        title="Both",
+        edge=PanelDefaults(edge="top", length=100, depth=40, label="both"),
+        corner=CornerDefaults(corner="top-left", width=200, height=100, label="both"),
+    )(type("Both", (Widget,), {}))
+    corner = {"panel": "corner", "name": "x", "widget": "box"}
+    edge = {"panel": "edge", "name": "x", "widget": "dock"}
+    assert panel_ops(corner, "widget", "both") == [("set", "widget", "both")]
+    assert panel_ops(edge, "widget", "both") == [("set", "widget", "both")]
+    assert new_panel_entry({}, "M", "both")["panel"] == "edge"  # edge before corner
+
+
 def test_layout_preview_reports_corner_panels(make_config, corner_registry):
     two = make_config(
         monitors={

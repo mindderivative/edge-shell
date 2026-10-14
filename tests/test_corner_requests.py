@@ -14,6 +14,7 @@ from shell.panel_spec import (
     corner_has_edge,
     default_edge,
 )
+from shell.widget import Widget
 
 
 def mon(*panels):
@@ -44,20 +45,30 @@ def test_a_corner_widget_gives_a_corner_request(corner_registry, make_config):
         corner_registry, make_config, {"panel": "corner", "name": "box", "widget": "box"}
     )
     assert req == CornerRequest(
-        "box", "bottom-left", "bottom", 300, 390, "extended", "box", HandleSpec(), Interaction()
+        "box",
+        "bottom-left",
+        "bottom",
+        300,
+        390,
+        "extended",
+        "box",
+        HandleSpec(),
+        Interaction(),
+        name="box",
     )
-    assert corner_registry.widget_kind("box") == "corner"
-    assert corner_registry.widget_kind("dock") == "edge"
+    assert corner_registry.supported_kinds("box") == ("corner",)
+    assert corner_registry.supported_kinds("dock") == ("edge",)
 
 
 def test_a_widgets_defaults_are_public(corner_registry):
-    """The settings window reads defaults(name), never _DEFAULTS."""
-    assert corner_registry.defaults("box") == CornerDefaults(
+    """The settings window reads defaults(name, kind), never _WIDGETS."""
+    assert corner_registry.defaults("box", "corner") == CornerDefaults(
         corner="bottom-left", width=300, height=390, label="box"
     )
-    assert corner_registry.defaults("dock").edge == "bottom"
-    with pytest.raises(KeyError):
-        corner_registry.defaults("nope")
+    assert corner_registry.defaults("dock", "edge").edge == "bottom"
+    for name, kind in (("nope", "edge"), ("dock", "corner"), ("box", "edge"), ("box", "x")):
+        with pytest.raises(KeyError):
+            corner_registry.defaults(name, kind)
 
 
 def test_entry_keys_override_the_corner_defaults(corner_registry, make_config):
@@ -97,9 +108,11 @@ def test_a_new_corner_without_an_edge_opens_from_its_top_or_bottom(corner_regist
 
 
 def test_a_widget_edge_that_fits_the_new_corner_is_kept(corner_registry, make_config):
-    corner_registry.register(
-        "side", CornerDefaults(corner="bottom-left", width=200, height=300, label="s", edge="left")
-    )(type("Side", (), {}))
+    corner_registry.register_widget(
+        "side",
+        title="Side",
+        corner=CornerDefaults(corner="bottom-left", width=200, height=300, label="s", edge="left"),
+    )(type("Side", (Widget,), {}))
     a, b = requests(
         corner_registry,
         make_config,
@@ -192,7 +205,7 @@ def test_a_valid_corner_entry_passes(corner_registry, make_config):
 )
 def test_bad_corner_defaults_fail_at_registration(corner_registry, defaults, message):
     with pytest.raises(ValueError, match=message):
-        corner_registry.register("bad", defaults)
+        corner_registry.register_widget("bad", title="Bad", corner=defaults)
     assert "bad" not in corner_registry.widget_names()
 
 

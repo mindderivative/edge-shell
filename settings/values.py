@@ -2,8 +2,8 @@
 
 A field is addressed by its TOML key path (settings.document.Path_). `is_set` says the user
 file sets that key (the row's reset button removes it); `source` names where an unset value
-is inherited from. Panel entries are edge or corner panels (spec 19): the kind comes from the
-widget (registry.widget_kind) and decides which keys the entry takes.
+is inherited from. Panel entries are edge or corner panels (spec 19): the entry's `panel`
+key is its kind and decides which keys the entry takes.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from shell.config.models import CORNER_ONLY_KEYS, EDGE_ONLY_KEYS, Config
 from shell.outputs import Output
 from shell.panel_layout import layout_monitor
 from shell.panel_spec import CornerDefaults, CornerRequest, corner_has_edge, default_edge
-from shell.registry import defaults, request_for, requests_for, widget_kind
+from shell.registry import defaults, request_for, requests_for, supported_kinds
 
 # keys whose value in effect is the request's (the entry's, else the widget's default)
 PANEL_REQUEST_KEYS = (
@@ -93,7 +93,7 @@ def _src(is_set: bool, inherited: str) -> str:
 def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: bool) -> FieldValue:
     entry = config.monitor(name).panels[index]
     req = request_for(entry)
-    d = defaults(entry.widget)  # public registry API: never registry._DEFAULTS
+    d = defaults(entry.widget, entry.panel)  # public registry API: never _WIDGETS
     key = keys[0]
     if key == "interaction":
         # always "default": no widget registers interaction defaults today (if one does, the
@@ -152,9 +152,10 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     """Setting one key of a panel entry (`entry`: its plain data in the user file), as steps
     (("set" | "unset", key, value)) applied as ONE edit: one write, one reload.
 
-    - A widget of the other kind also sets `panel` to that kind and unsets the keys only the
-      old kind takes (a dock turned into a corner widget loses its align, length, ...; spec
-      19), else the shell rejects it. The entry keeps its name.
+    - A widget that cannot be shown in the entry's kind also sets `panel` to the first kind
+      it supports and unsets the keys only the old kind takes (a dock turned into a corner
+      widget loses its align, length, ...; spec 19), else the shell rejects it. The entry
+      keeps its name.
     - `value` None for "corner" is a reset: the key is unset and the widget's corner applies.
     - An unknown widget is a plain set (the session's check rejects it, ConfigError).
     - A corner (or a corner widget whose corner) that does not contain the entry's edge also
@@ -166,17 +167,18 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     corner = None
     if key == "widget":
         try:
-            kind = widget_kind(value)
+            kinds = supported_kinds(value)
         except KeyError:  # unknown widget: the session's check rejects it with the shell's text
             return ops
+        kind = entry.get("panel") if entry.get("panel") in kinds else kinds[0]
         if entry.get("panel") != kind:
             ops.append(("set", "panel", kind))
         stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
         ops += [("unset", k, None) for k in stale if k in entry]
         if kind == "corner":
-            corner = entry.get("corner", defaults(value).corner)
+            corner = entry.get("corner", defaults(value, "corner").corner)
     elif key == "corner":
-        corner = value or defaults(entry["widget"]).corner
+        corner = value or defaults(entry["widget"], "corner").corner
     edge = entry.get("edge")
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))
@@ -199,7 +201,7 @@ def new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]:
     comes from the widget's defaults. An unknown widget is written as an edge panel (the
     session's check rejects it with the shell's text)."""
     try:
-        kind = widget_kind(widget)
+        kind = supported_kinds(widget)[0]
     except KeyError:
         kind = "edge"
     _, panels = lookup(user, ("monitors", monitor, "panels"))

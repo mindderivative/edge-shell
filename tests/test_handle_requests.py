@@ -7,14 +7,16 @@ from shell.config.diff import Change, diff_configs
 from shell.config.models import PanelConfig
 from shell.panel_layout import layout_monitor
 from shell.panel_spec import HandleSpec, Interaction, PanelDefaults
+from shell.widget import Widget
 
 
 @pytest.fixture
 def grip(fake_registry):
     """A widget whose defaults set a handle and turn hover off."""
-    fake_registry.register(
+    fake_registry.register_widget(
         "grip",
-        PanelDefaults(
+        title="Grip",
+        edge=PanelDefaults(
             edge="left",
             length=200,
             depth=40,
@@ -22,7 +24,7 @@ def grip(fake_registry):
             handle=HandleSpec(shape="bar", size=30, color="#112233"),
             interaction=Interaction(hover=False),
         ),
-    )(type("Grip", (), {}))
+    )(type("Grip", (Widget,), {}))
     return fake_registry
 
 
@@ -147,7 +149,7 @@ def test_theme_handle_changes_are_a_restyle(fake_registry, make_config, theme):
 def test_bad_widget_defaults_fail_at_registration(fake_registry, bad):
     defaults = PanelDefaults(edge="left", length=200, depth=40, label="bad", **bad)
     with pytest.raises(ValueError, match="widget 'bad': invalid handle or interaction default"):
-        fake_registry.register("bad", defaults)
+        fake_registry.register_widget("bad", title="Bad", edge=defaults)
     assert "bad" not in fake_registry.widget_names()
 
 
@@ -183,16 +185,17 @@ def test_all_off_paths_list_the_panels_only_state_opens(grip, make_config):
 @pytest.fixture
 def mute(fake_registry):
     """A widget whose defaults turn every interaction off."""
-    fake_registry.register(
+    fake_registry.register_widget(
         "mute",
-        PanelDefaults(
+        title="Mute",
+        edge=PanelDefaults(
             edge="left",
             length=200,
             depth=40,
             label="mute",
             interaction=Interaction(click=False, hover=False, drag=False),
         ),
-    )(type("Mute", (), {}))
+    )(type("Mute", (Widget,), {}))
     return fake_registry
 
 
