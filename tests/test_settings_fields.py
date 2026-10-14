@@ -6,7 +6,7 @@ gi = pytest.importorskip("gi")
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
@@ -16,6 +16,7 @@ from settings.form import FieldSpec, config_form  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
 
 FORM = config_form(("clock", "dock", "system_bar"))
+REAL_TIMEOUT_ADD = GLib.timeout_add
 
 
 @pytest.fixture(autouse=True)
@@ -57,9 +58,11 @@ def test_colour_row_writes_hex_with_alpha_only_when_needed():
 
 
 def test_int_row_takes_its_bounds_from_the_schema_and_is_debounced(monkeypatch):
-    timers = []
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda ms, fn: timers.append((ms, fn)) or 7)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    timers, removed = [], []
+    monkeypatch.setattr(
+        fields.GLib, "timeout_add", lambda ms, fn: timers.append((ms, fn)) or 6 + len(timers)
+    )
+    monkeypatch.setattr(fields.GLib, "source_remove", removed.append)
     row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
     spin = row.editor.widget
     assert tuple(spin.get_range()) == (2.0, 64.0)
@@ -67,6 +70,7 @@ def test_int_row_takes_its_bounds_from_the_schema_and_is_debounced(monkeypatch):
     spin.set_value(12)
     assert changes == []  # waits for the pause
     assert [ms for ms, _fn in timers] == [fields.DEBOUNCE_MS, fields.DEBOUNCE_MS]
+    assert removed == [7]  # one timer per pause: the first was cancelled by the second edit
     timers[-1][1]()
     assert changes == [(("theme", "x"), 12)]
 
@@ -146,9 +150,13 @@ def test_the_mouse_wheel_never_edits_a_row():
     mode.show_value(FieldValue("plasma", True, "your config"))
     thickness, changes, _ = row_for(FORM.theme.field("thickness"), 10)
     length, changes2, _ = row_for(FORM.edge_panel.field("length"), 300)
-    for widget in (mode.editor.widget, thickness.editor.widget, length.editor.mode):
+    for widget in (
+        mode.editor.widget,
+        thickness.editor.widget,
+        length.editor.mode,
+        length.editor.number,
+    ):
         assert scroll(widget) is False  # not handled: the page's ScrolledWindow scrolls
-    scroll(length.editor.number)
     assert mode.editor.widget.get_active_id() == "plasma"
     assert thickness.editor.widget.get_value() == 10 and length.editor.number.get_value() == 300
     assert edits == changes == changes2 == []
@@ -213,3 +221,156 @@ def test_errors_show_under_the_row_until_the_next_value():
 def test_an_unknown_kind_has_no_editor():
     with pytest.raises(ValueError):
         fields.make_editor(FieldSpec("x", "X", "blob"), lambda _v: None)  # type: ignore[arg-type]
+
+
+def fake_timers(monkeypatch):
+    """Debounce timers that never fire on their own: returns (started, removed) id lists."""
+    started, removed = [], []
+
+    def add(_ms, _fn):
+        started.append(5 + len(started))
+        return started[-1]
+
+    monkeypatch.setattr(fields.GLib, "timeout_add", add)
+    monkeypatch.setattr(fields.GLib, "source_remove", removed.append)
+    return started, removed
+
+
+def test_a_destroyed_row_cancels_its_pending_edit(monkeypatch):
+    started, removed = fake_timers(monkeypatch)
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    row.editor.widget.set_value(30)
+    row.destroy()
+    assert removed == started and changes == []
+
+
+def test_a_destroyed_row_never_writes_when_the_loop_runs(monkeypatch):
+    monkeypatch.setattr(fields.GLib, "timeout_add", REAL_TIMEOUT_ADD)
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    row.editor.widget.set_value(30)
+    row.destroy()
+    deadline = GLib.get_monotonic_time() + 500_000
+    while GLib.get_monotonic_time() < deadline:
+        GLib.MainContext.default().iteration(False)
+    assert changes == []
+
+
+def test_a_refresh_keeps_the_pending_edit_of_another_row(monkeypatch):
+    started, removed = fake_timers(monkeypatch)
+    thick, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    thick.editor.widget.set_value(30)
+    thick.show_value(FieldValue(10, False, "inherited"), keep_pending=True)
+    assert removed == [] and thick.editor.widget.get_value() == 30
+    assert thick.source.get_text().endswith("inherited")
+    thick.flush()
+    assert changes == [(("theme", "x"), 30)]
+    thick.editor.widget.set_value(12)  # a plain show_value still drops the edit
+    thick.show_value(FieldValue(30, True, "your config"))
+    assert thick.editor.widget.get_value() == 30 and removed == [started[0], started[1]]
+
+
+def test_closing_applies_every_row_even_when_each_apply_refreshes_all(monkeypatch):
+    fake_timers(monkeypatch)
+    result, rows = {}, []
+
+    def on_change(path, value):
+        result[path[1]] = value
+        for row in rows:  # SettingsView.refresh after each apply
+            row.show_value(FieldValue(result.get(row.path[1], row.shown), True, "x"), True)
+
+    thick = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), on_change, id)
+    font = fields.FieldRow(FORM.theme.field("font"), ("theme", "f"), on_change, id)
+    rows[:] = [thick, font]
+    thick.shown, font.shown = 10, ["A"]
+    for row in rows:
+        row.show_value(FieldValue(row.shown, False, "default"))
+    thick.editor.widget.set_value(20)
+    font.editor.widget.set_text("B, C")
+    for row in rows:  # SettingsView.flush
+        row.flush()
+    assert result == {"t": 20, "f": ["B", "C"]}
+
+
+def test_a_toggle_within_the_pause_does_not_drop_a_pending_spin(monkeypatch):
+    fake_timers(monkeypatch)
+    result, rows = {}, []
+
+    def on_change(path, value):
+        result[path[1]] = value
+        for row in rows:
+            row.show_value(FieldValue(result.get(row.path[1], 10), True, "x"), True)
+
+    thick = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), on_change, id)
+    flag = fields.FieldRow(
+        FORM.theme.section("border").field("enabled"), ("theme", "b"), on_change, id
+    )
+    rows[:] = [thick, flag]
+    thick.show_value(FieldValue(10, False, "default"))
+    flag.show_value(FieldValue(False, False, "default"))
+    thick.editor.widget.set_value(14)
+    flag.editor.widget.set_active(True)
+    thick.flush()
+    assert result == {"t": 14, "b": True}
+
+
+def test_empty_or_invalid_spin_text_writes_nothing():
+    for spec, value in [
+        (FORM.theme.field("thickness"), 10),
+        (FORM.edge_panel.field("offset"), 5),
+        (FORM.edge_panel.field("length"), 300),
+    ]:
+        row, changes, _ = row_for(spec, value)
+        spin = getattr(row.editor, "number", row.editor.widget)
+        for text in ("", "abc"):
+            spin.set_text(text)
+            spin.emit("activate")  # Enter; focus-out and flush take the same path
+            assert changes == [], (spec.key, text)
+            assert spin.get_value() == value
+        if spec.key != "offset":  # 0 is a valid offset: GTK itself reads "" as 0 there
+            for text in ("", "abc"):
+                spin.set_text(text)
+                spin.update()  # the policy alone reverts a value below the minimum
+                assert changes == [], (spec.key, text)
+
+
+def test_flush_sends_a_number_typed_without_enter(monkeypatch):
+    fake_timers(monkeypatch)
+    for spec, value, typed, expected in [
+        (FORM.theme.field("thickness"), 10, "20", 20),
+        (FORM.edge_panel.field("length"), 300, "200", 200),
+    ]:
+        row, changes, _ = row_for(spec, value)
+        spin = getattr(row.editor, "number", row.editor.widget)
+        spin.set_text(typed)
+        row.flush()
+        assert changes == [(("theme", "x"), expected)], spec.key
+        spin.set_text("abc")
+        row.flush()
+        assert len(changes) == 1  # invalid text sends nothing
+
+
+def test_a_value_changed_back_within_the_pause_is_not_written(monkeypatch):
+    fake_timers(monkeypatch)
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10, is_set=False)
+    row.editor.widget.set_value(11)
+    row.editor.widget.set_value(10)
+    row.flush()
+    assert changes == []  # an inherited value is not pinned by a no-op
+    row.editor.widget.set_value(12)
+    row.flush()
+    assert changes == [(("theme", "x"), 12)]
+    row.editor.widget.set_value(12)
+    row.flush()
+    assert len(changes) == 1
+
+
+def test_choosing_the_same_colour_writes_nothing():
+    row, changes, _ = row_for(FORM.theme.field("accent"), "#8fd3b6")
+    row.editor.widget.emit("color-set")
+    assert changes == []
+
+
+def test_a_choice_not_in_the_list_clears_the_selection():
+    row, _, _ = row_for(FORM.theme.section("handle_style").field("shape"), "chevron")
+    row.show_value(FieldValue("bogus", False, "default"))
+    assert row.editor.widget.get_active_id() is None

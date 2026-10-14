@@ -2639,8 +2639,8 @@ git commit -m "feat(settings): the value each field shows and where it is inheri
 - Produces:
   - `DEBOUNCE_MS = 400`, `DEBOUNCED = ("int", "length")`, `FALLBACK_PX = 300`, `FALLBACK_PERCENT = 50.0`
   - `wheel_scrolls_the_page(widget)`: a `scroll-event` handler that stops the widget's own handling (`GObject.signal_stop_emission_by_name(widget, "scroll-event")`) and returns False, so the event goes on to the page's `ScrolledWindow` (decision 13); applied to every combo box and spin button (`IntEditor`, `ChoiceEditor`, both parts of `LengthEditor`, and in Task 8 the add-panel combo)
-  - editors `ColorEditor`, `IntEditor`, `BoolEditor`, `ChoiceEditor(choices, emit, labels=())`, `FontsEditor`, `LengthEditor` (attributes `mode`, `number`, `fallback_px`; switching to px or percent uses that mode's last number, else `fallback_px` or `FALLBACK_PERCENT`, never the 60 px minimum), `DeprecatedEditor`, each with `.widget`, `.set(value)` (never emits) and `.commit()` (sends a typed value; only `FontsEditor` has one); `make_editor(spec, emit) -> editor` (`ValueError` for an unknown kind)
-  - `class FieldRow(Gtk.Box)(spec, path, on_change(path, value), on_reset(path))` with `.spec`, `.path`, `.editor`, `.source` (label), `.reset` (button), `.error` (label), `.show_value(FieldValue)` (never calls back; cancels a pending debounced edit; gives a length editor the widget's px default; reset is sensitive when the key is set, never for `widget`), `.show_error(message | None)`, `.flush()` (sends a pending debounced value and a typed font list: the window is closing).
+  - editors `ColorEditor`, `IntEditor`, `BoolEditor`, `ChoiceEditor(choices, emit, labels=())`, `FontsEditor`, `LengthEditor` (attributes `mode`, `number`, `fallback_px`; switching to px or percent uses that mode's last number, else `fallback_px` or `FALLBACK_PERCENT`, never the 60 px minimum), `DeprecatedEditor`, each with `.widget`, `.set(value)` (never emits) and `.commit()` (sends a typed value: `FontsEditor`, and both spin buttons via `update()`) and `.dirty()`; `make_editor(spec, emit) -> editor` (`ValueError` for an unknown kind)
+  - `class FieldRow(Gtk.Box)(spec, path, on_change(path, value), on_reset(path))` with `.spec`, `.path`, `.editor`, `.source` (label), `.reset` (button), `.error` (label), `.show_value(FieldValue, keep_pending=False)` (never calls back; cancels a pending debounced edit unless `keep_pending` and the row holds an unapplied edit, then only source, reset and error change; gives a length editor the widget's px default; reset is sensitive when the key is set, never for `widget`), `.show_error(message | None)`, `.flush()` (sends a pending debounced value and a typed font list: the window is closing).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3949,10 +3949,12 @@ class SettingsView(Gtk.Box):
 
     # ---- showing values ------------------------------------------------------------------
     def refresh(self) -> None:
-        """Show the session's current values in every row (no rebuild: focus is kept)."""
+        """Show the session's current values in every row (no rebuild: focus is kept). A row
+        holding an edit that is not applied yet keeps it (`keep_pending`): another row's apply
+        must neither drop a pending spin value nor reset a typed font list."""
         config, user = self.config, self.session.user
         for row in self.rows:
-            row.show_value(field_value(config, user, row.path))
+            row.show_value(field_value(config, user, row.path), keep_pending=True)
         for name, label in self.previews.items():
             out = self.outputs.get(name)
             warnings = layout_preview(config, name, out.width, out.height) if out else []
@@ -4014,6 +4016,7 @@ class SettingsView(Gtk.Box):
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
         rows that may point at an entry that is gone). `expand`: the entry to show open."""
+        self.flush()  # pending values go to the row indexes they were typed for, before they move
         if expand is not None:
             self._expand[monitor] = expand
         if not self.apply(edit, structural=True):
@@ -4036,18 +4039,22 @@ class SettingsView(Gtk.Box):
         return False
 
     def undo(self) -> None:
+        self.flush()  # a pending value is applied first (and then undone), never written after
         if self._file_action(self.session.undo):
             self.hide_banner()
             self.rebuild()
 
     def revert(self) -> None:
+        self.flush()
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
 
     def flush(self) -> None:
         """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
-        a font list without Enter): the window is closing."""
+        a font list without Enter): the window is closing, or the rows are about to be rebuilt
+        (a panel added, removed or moved, Undo, Revert all, a hand edit). Rows keep their pending
+        edit through the refresh after each apply, so every row is applied in turn."""
         for row in list(self.rows):
             row.flush()
 
@@ -4075,6 +4082,7 @@ class SettingsView(Gtk.Box):
         try:
             if not self.session.changed_outside():
                 return
+            self.flush()  # pending values are applied to the right paths before the rows go
             self.session.rebase()
         except ConfigError as exc:
             self.show_banner(f"Cannot read the config: {exc}")

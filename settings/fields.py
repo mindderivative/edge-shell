@@ -33,6 +33,11 @@ FALLBACK_PX = 300  # px when switching a length to px with no px value known (ne
 FALLBACK_PERCENT = 50.0
 
 Emit = Callable[[Any], None]
+_UNSHOWN = object()
+
+
+def _same(a: Any, b: Any) -> bool:
+    return type(a) is type(b) and a == b
 
 
 def wheel_scrolls_the_page(widget: Gtk.Widget) -> None:
@@ -58,6 +63,37 @@ class _Editor:
     def commit(self) -> None:
         """Send a typed but not yet applied value (the window is closing)."""
 
+    def dirty(self) -> bool:
+        """True while the editor holds typed text that was not sent yet."""
+        return False
+
+
+def _restore_invalid_text(spin: Gtk.SpinButton) -> None:
+    """Text that is not a number (empty text would read as 0, a valid offset) goes back to the
+    current value before GTK parses it."""
+    try:
+        float(spin.get_text().strip())
+    except ValueError:
+        spin.set_text(f"{spin.get_value():.{spin.get_digits()}f}")
+
+
+def strict_spin(spin: Gtk.SpinButton) -> None:
+    """Invalid, empty or out-of-range text reverts to the current value (the default update
+    policy ALWAYS would write the minimum, e.g. a 60 px length). Enter and focus-out check
+    the text first; commit() does the same."""
+    spin.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
+    spin.connect("activate", _restore_invalid_text)
+    spin.connect("focus-out-event", lambda w, _e: _restore_invalid_text(w) or False)
+
+
+def commit_spin(spin: Gtk.SpinButton) -> None:
+    _restore_invalid_text(spin)
+    spin.update()
+
+
+def _spin_dirty(spin: Gtk.SpinButton) -> bool:
+    return spin.get_text() != f"{spin.get_value():.{spin.get_digits()}f}"
+
 
 class ColorEditor(_Editor):
     def __init__(self, emit: Emit):
@@ -78,8 +114,15 @@ class IntEditor(_Editor):
         high = UNBOUNDED[1] if spec.maximum is None else spec.maximum
         self.widget = Gtk.SpinButton.new_with_range(low, high, 1)
         self.widget.set_numeric(True)
+        strict_spin(self.widget)
         wheel_scrolls_the_page(self.widget)
         self.widget.connect("value-changed", lambda s: emit(s.get_value_as_int()))
+
+    def commit(self) -> None:
+        commit_spin(self.widget)  # a typed number without Enter; may re-arm the row's timer
+
+    def dirty(self) -> bool:
+        return _spin_dirty(self.widget)
 
     def set(self, value: int | None) -> None:
         # None (e.g. min_length not set) shows the lowest value; the source says "not set"
@@ -109,7 +152,8 @@ class ChoiceEditor(_Editor):
             emit(combo.get_active_id())
 
     def set(self, value: str) -> None:
-        self.widget.set_active_id(value)
+        if not self.widget.set_active_id(value):
+            self.widget.set_active(-1)  # not a choice: show none, never the previous one
 
 
 class FontsEditor(_Editor):
@@ -119,6 +163,9 @@ class FontsEditor(_Editor):
         self._emit = emit
         self.widget.connect("activate", lambda *_a: self.commit())
         self.widget.connect("focus-out-event", lambda *_a: self.commit() or False)
+
+    def dirty(self) -> bool:
+        return parse_fonts(self.widget.get_text()) != self._shown
 
     def commit(self) -> None:
         fonts = parse_fonts(self.widget.get_text())
@@ -142,6 +189,7 @@ class LengthEditor(_Editor):
         for mode in LENGTH_MODES:
             self.mode.append(mode, mode)
         self.number = Gtk.SpinButton.new_with_range(*LENGTH_PX, 1)
+        strict_spin(self.number)
         self.widget.pack_start(self.mode, False, False, 0)
         self.widget.pack_start(self.number, False, False, 0)
         wheel_scrolls_the_page(self.mode)
@@ -152,6 +200,12 @@ class LengthEditor(_Editor):
         self._quiet = False
         self.mode.connect("changed", self._on_mode)
         self.number.connect("value-changed", lambda *_a: self._send())
+
+    def commit(self) -> None:
+        commit_spin(self.number)
+
+    def dirty(self) -> bool:
+        return self.number.get_sensitive() and _spin_dirty(self.number)
 
     def _range(self, mode: str) -> None:
         percent = mode == "percent"
@@ -239,6 +293,7 @@ class FieldRow(Gtk.Box):
         self._updating = False
         self._timer = 0
         self._pending: Any = None
+        self._shown: Any = _UNSHOWN  # the value last shown or written: a no-op is not written
         self.editor = make_editor(spec, self._changed)
         line = Gtk.Box(spacing=8)
         name = Gtk.Label(label=spec.label, xalign=0)
@@ -257,8 +312,16 @@ class FieldRow(Gtk.Box):
         self.error.set_no_show_all(True)
         self.pack_start(line, False, False, 0)
         self.pack_start(self.error, False, False, 0)
+        self.connect("destroy", lambda *_a: self._cancel())  # a stale timer must not write
 
-    def show_value(self, value: FieldValue) -> None:
+    def show_value(self, value: FieldValue, keep_pending: bool = False) -> None:
+        """Show `value`. With `keep_pending` a row holding an edit that is not applied yet (a
+        debounced spin value, typed text) only updates its source, reset and error, so that
+        refreshing every row after another row's apply never drops it."""
+        self._shown = value.value
+        if keep_pending and (self._timer or self.editor.dirty()):
+            self._show_note(value)
+            return
         self._cancel()
         self._updating = True
         try:
@@ -268,6 +331,9 @@ class FieldRow(Gtk.Box):
             self.editor.set(value.value)
         finally:
             self._updating = False
+        self._show_note(value)
+
+    def _show_note(self, value: FieldValue) -> None:
         note = value.source if not self.spec.hint else f"{self.spec.hint} · {value.source}"
         self.source.set_text(note)
         self.reset.set_sensitive(value.is_set and self.spec.kind != "widget")
@@ -280,16 +346,16 @@ class FieldRow(Gtk.Box):
     def flush(self) -> None:
         """Send what the user changed but has not been applied yet: a debounced spin value
         or a typed font list (the window is closing)."""
+        self.editor.commit()  # before the timer check: update() re-arms it through _changed
         if self._timer:
             self._cancel()
-            self._on_change(self.path, self._pending)
-        self.editor.commit()
+            self._write(self._pending)
 
     def _changed(self, value: Any) -> None:
         if self._updating:
             return
         if self.spec.kind not in DEBOUNCED:
-            self._on_change(self.path, value)
+            self._write(value)
             return
         self._cancel()
         self._pending = value
@@ -297,8 +363,14 @@ class FieldRow(Gtk.Box):
 
     def _flush(self) -> bool:
         self._timer = 0
-        self._on_change(self.path, self._pending)
+        self._write(self._pending)
         return GLib.SOURCE_REMOVE
+
+    def _write(self, value: Any) -> None:
+        if _same(value, self._shown):
+            return  # a no-op must not turn an inherited value into an explicit one
+        self._shown = value
+        self._on_change(self.path, value)
 
     def _cancel(self) -> None:
         if self._timer:
