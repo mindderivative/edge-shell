@@ -16,14 +16,21 @@ from gi.repository import Gdk, GLib, GtkLayerShell
 
 from shell import geometry
 from shell.canvas.canvas import ShapeCanvas
-from shell.canvas.scene import PanelShape
+from shell.canvas.scene import shape_for
 from shell.config.diff import Change
 from shell.config.models import Config
 from shell.edge_panel import EdgePanel
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.panel_layout import Layout, layout_monitor
-from shell.panel_spec import HandleSpec, Interaction, PanelGeometry, PanelRequest
+from shell.panel_spec import (
+    CornerGeometry,
+    CornerRequest,
+    HandleSpec,
+    Interaction,
+    PanelGeometry,
+    PanelRequest,
+)
 from shell.registry import requests_for, widget_class
 from shell.theme import scope_class
 
@@ -123,14 +130,15 @@ class MonitorShell:
         self.strips: list = []  # the 4 zone strips (also in `windows`)
         # Config order; None = not shown (rejected by shell.panel_layout, see layout_warnings).
         self.panels: list[EdgePanel | None] = []
-        self._resolved: list[PanelGeometry | None] = []
+        self._resolved: list[PanelGeometry | CornerGeometry | None] = []
         # Each index's (handle, interaction) as last given to its panel (changed in place).
         self._handles: list[tuple[HandleSpec, Interaction] | None] = []
         self.layout_warnings: list[str] = []
         self._keys = itertools.count()  # scene keys for the canvas
         self._config = config
         self._theme = config.theme_for(name)
-        self._requests: list[PanelRequest] = []  # of the last layout, config order
+        # Of the last layout, config order; corner panels (spec 19) are CornerRequests.
+        self._requests: list[PanelRequest | CornerRequest] = []
         # Measured "content" lengths: index -> ((widget, horizontal), px). Kept across
         # re-layouts; an entry only counts while the same widget sits at that index.
         self._natural: dict[int, tuple[tuple[str, bool], int]] = {}
@@ -240,6 +248,7 @@ class MonitorShell:
             i
             for i, (panel, req) in enumerate(zip(self.panels, self._requests, strict=True))
             if panel is not None
+            and isinstance(req, PanelRequest)  # corner panels have no "content" length
             and req.length == "content"
             and (i in self._remeasure or i not in known)
         ]
@@ -322,10 +331,14 @@ class MonitorShell:
         on_layout will fire after it."""
         return bool(self._measure_id)
 
-    def _new_panel(self, index: int, geo: PanelGeometry, theme, raise_later: bool) -> EdgePanel:
+    def _new_panel(
+        self, index: int, geo: PanelGeometry | CornerGeometry, theme, raise_later: bool
+    ) -> EdgePanel:
+        """Build one panel window (edge or corner: a CornerPanel is an EdgePanel) and its
+        canvas shape."""
         self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
-        self.canvas.add_panel(key, PanelShape(geo.edge, geo.pos, geo.length, geo.depth))
+        self.canvas.add_panel(key, shape_for(geo))
         req = self._requests[index]
         log.debug("building panel %d (%s) on %s", index, geo.widget, self.name)
         try:
