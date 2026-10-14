@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shell.config.models import Align, Edge, HandleShape, PanelState
+from shell.config.models import Align, Corner, Edge, HandleShape, PanelState
 
 LengthSpec = int | str  # px, "fill", "content" or "NN%" (validated by shell.config.models)
 
@@ -86,6 +86,65 @@ class PanelGeometry:
     widget: str
     edge: Edge
     pos: int
+    length: int
+    depth: int
+    state: PanelState
+    label: str
+
+
+def default_edge(corner: Corner) -> Edge:
+    """The edge a corner panel opens from unless told otherwise: the corner's top or bottom
+    edge (the spec's widget_panel rises out of the bottom edge)."""
+    return corner.split("-")[0]  # type: ignore[return-value]
+
+
+def corner_has_edge(corner: Corner, edge: Edge) -> bool:
+    return edge in corner.split("-")
+
+
+@dataclass(frozen=True)
+class CornerDefaults:
+    """A corner widget's registered defaults (spec 19). `width` and `height` are px from the
+    screen corner, both frame bands included; `edge` is the edge it opens from (None: the
+    corner's top or bottom edge, `default_edge`)."""
+
+    corner: Corner
+    width: int
+    height: int
+    label: str
+    edge: Edge | None = None
+    state: PanelState = "extended"
+    handle: HandleSpec = HandleSpec()
+    interaction: Interaction = Interaction()
+
+
+@dataclass(frozen=True)
+class CornerRequest:
+    """What the config asks for a corner panel (widget defaults + config overrides), before
+    layout. `edge` is always one of the corner's two edges."""
+
+    widget: str
+    corner: Corner
+    edge: Edge
+    width: int
+    height: int
+    state: PanelState
+    label: str
+    handle: HandleSpec = HandleSpec()
+    interaction: Interaction = Interaction()
+
+
+@dataclass(frozen=True)
+class CornerGeometry:
+    """A corner panel resolved by shell.panel_layout. The body is the rectangle from the screen
+    corner `along` px along `edge` (the adjacent frame band included) and `thickness + depth`
+    px across it; `length` = `along` minus the adjacent band, the part of the body the handle
+    centres on (EdgePanel's hit target reads `length`)."""
+
+    widget: str
+    corner: Corner
+    edge: Edge
+    along: int
     length: int
     depth: int
     state: PanelState

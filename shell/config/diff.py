@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from shell.config.models import Config
-from shell.panel_spec import HandleSpec, Interaction, PanelRequest
+from shell.panel_spec import CornerRequest, HandleSpec, Interaction, PanelRequest
 from shell.registry import requests_for
 
 Kind = Literal[
@@ -75,6 +75,6 @@ def _diff_panels(name, old, new) -> list[Change]:
     return changes + removed[::-1]
 
 
-def _in_place(req: PanelRequest) -> PanelRequest:
+def _in_place(req: PanelRequest | CornerRequest) -> PanelRequest | CornerRequest:
     """The request without what a live panel changes in place (state, handle, interaction)."""
     return replace(req, state="extended", handle=HandleSpec(), interaction=Interaction())

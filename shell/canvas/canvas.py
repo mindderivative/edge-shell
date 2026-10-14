@@ -16,7 +16,7 @@ from fabric.widgets.wayland import WaylandWindow
 from gi.repository import Gdk, Gtk, GtkLayerShell
 
 from shell.canvas.painter import CanvasPainter
-from shell.canvas.scene import Box, PanelShape, Scene, box_to_rect
+from shell.canvas.scene import Box, Scene, Shape, box_to_rect
 from shell.canvas.style import style_for
 from shell.config.models import Theme
 from shell.gdk_util import monitor_index
@@ -68,7 +68,7 @@ class ShapeCanvas(WaylandWindow):
         """Colour / border / shadow change (a restyle): full redraw, no rebuild."""
         self.painter.set_style(style_for(theme))
 
-    def add_panel(self, key: Hashable, shape: PanelShape) -> None:
+    def add_panel(self, key: Hashable, shape: Shape) -> None:
         self.painter.add_panel(key, shape)
 
     def remove_panel(self, key: Hashable) -> None:

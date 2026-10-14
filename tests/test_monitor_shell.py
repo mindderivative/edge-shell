@@ -843,3 +843,98 @@ def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
     assert "building panel 0 (dock) on HDMI-A-1" in caplog.text
+
+
+# ---- corner panels (spec 19) ------------------------------------------------------------
+
+
+def test_a_corner_panel_gets_its_geometry_a_corner_shape_and_a_depth_callback(
+    build, corner_registry
+):
+    from shell.canvas.scene import CornerShape
+    from shell.panel_spec import CornerGeometry
+
+    shell, _, _ = build(edge({"widget": "box"}))
+    (box,) = shell.panels
+    assert box.args[0] == CornerGeometry(
+        "box", "bottom-left", "bottom", 300, 290, 380, "extended", "box"
+    )
+    assert list(shell.canvas.shapes.values()) == [CornerShape("bottom-left", "bottom", 300, 380)]
+    box.kwargs["on_depth"](40.0)
+    assert shell.canvas.depths == [(box.scene_key, 40.0)]
+
+
+def test_edge_panels_keep_clear_of_a_corner_panel(build, corner_registry):
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock", "align": "start"}))
+    assert shell.panels[1].args[0].pos == 336  # 300 + 14 + 8 + 14
+    assert shell.layout_warnings == []
+
+
+def test_a_second_corner_panel_in_one_corner_is_hidden_and_reported(build, corner_registry):
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "box", "edge": "left"}))
+    assert shell.panels[1] is None and len(shell.canvas.shapes) == 1
+    assert "the bottom-left corner already holds" in shell.layout_warnings[0]
+
+
+def test_corner_panels_are_raised_like_edge_panels(build, corner_registry):
+    shell, _, timers = build(edge({"widget": "box"}))
+    for _, fn, a in timers:
+        fn(*a)
+    assert shell.panels[0].raised == 2
+
+
+def test_corner_panels_are_never_measured(build, corner_registry):
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock", "length": "content"}))
+    box, dock = shell.panels
+    shell.test_idles[-1]()  # the idle measurement
+    assert dock.measured == 1 and box.measured == 0
+    assert shell.panels[0] is box  # a "content" neighbour's measurement never rebuilds it
+
+
+def test_a_corner_size_change_rebuilds_only_that_panel(build, corner_registry, make_config):
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "clock"}))
+    box, clock = shell.panels
+    shell.apply(
+        make_config(monitors=edge({"widget": "box", "width": 320}, {"widget": "clock"})),
+        [Change("panel-rebuild", "HDMI-A-1", 0)],
+    )
+    assert box.destroyed and shell.panels[0].args[0].along == 320
+    assert shell.panels[1] is clock and not clock.destroyed
+
+
+def test_a_corner_handle_change_is_applied_in_place(build, corner_registry, make_config):
+    from shell.panel_spec import HandleSpec, Interaction
+
+    shell, _, timers = build(edge({"widget": "box"}))
+    (box,) = shell.panels
+    before = len(timers)
+    shell.apply(
+        make_config(monitors=edge({"widget": "box", "handle": {"shape": "bar"}})),
+        [Change("panel-handle", "HDMI-A-1", 0)],
+    )
+    assert shell.panels == [box] and not box.destroyed
+    assert box.handles == [(HandleSpec(shape="bar"), Interaction())]
+    assert len(timers) == before
+
+
+def test_a_corner_state_change_retargets_in_place(build, corner_registry, make_config):
+    shell, _, _ = build(edge({"widget": "box"}))
+    (box,) = shell.panels
+    shell.apply(
+        make_config(monitors=edge({"widget": "box", "state": "collapsed"})),
+        [Change("panel-state", "HDMI-A-1", 0)],
+    )
+    assert shell.panels == [box] and box.states == ["collapsed"]
+
+
+def test_a_smaller_monitor_shrinks_the_corner_panel(build, corner_registry):
+    monitor = FakeMonitor()
+    shell, _, timers = build(edge({"widget": "box"}), monitor=monitor)
+    (box,) = shell.panels
+    monitor.width, monitor.height = 320, 720
+    ((_signal, handler),) = monitor.handlers.values()
+    handler(monitor, None)
+    relayout = [t for t in timers if t[0] == mon_mod.RELAYOUT_DELAY_MS][-1]
+    assert relayout[1]() is False
+    assert box.destroyed and shell.panels[0].args[0].along == 282  # 320 - (10 + 14) - 14
+    assert "width 300 px does not fit the bottom edge; shrunk to 282" in shell.layout_warnings[0]

@@ -7,8 +7,10 @@ import math
 from collections.abc import Hashable
 from dataclasses import dataclass
 
-from shell.canvas.outline import Panel
-from shell.config.models import Edge
+from shell.canvas.outline import CornerSpan, Panel
+from shell.config.models import Corner, Edge
+from shell.corner import corner_box
+from shell.panel_spec import CornerGeometry, PanelGeometry
 
 Box = tuple[int, int, int, int]  # (x0, y0, x1, y1) in surface px; x1 / y1 exclusive
 
@@ -22,6 +24,29 @@ class PanelShape:
     pos: int
     length: int
     depth: int  # full depth past the frame
+
+
+@dataclass(frozen=True)
+class CornerShape:
+    """A corner panel as the canvas draws it (spec 19): a rectangle in `corner`, `along` px
+    along `edge` (the edge it opens from) from the screen corner, the adjacent frame band
+    included, `depth` px past the band of `edge` when extended."""
+
+    corner: Corner
+    edge: Edge
+    along: int
+    depth: int
+
+
+Shape = PanelShape | CornerShape
+
+
+def shape_for(geo: PanelGeometry | CornerGeometry) -> Shape:
+    """The canvas shape of a panel resolved by shell.panel_layout (PanelGeometry or
+    CornerGeometry)."""
+    if isinstance(geo, CornerGeometry):
+        return CornerShape(geo.corner, geo.edge, geo.along, geo.depth)
+    return PanelShape(geo.edge, geo.pos, geo.length, geo.depth)
 
 
 def union_boxes(a: Box | None, b: Box | None) -> Box | None:
@@ -67,7 +92,7 @@ class Scene:
         self.width, self.height = width, height
         self.thickness, self.radius = thickness, radius
         self.pad = pad
-        self._shapes: dict[Hashable, PanelShape] = {}
+        self._shapes: dict[Hashable, Shape] = {}
         self._depths: dict[Hashable, float] = {}
 
     # ---- whole-surface changes (callers redraw everything) ----------------------------
@@ -81,8 +106,8 @@ class Scene:
         return 0, 0, self.width, self.height
 
     # ---- panels -------------------------------------------------------------------------
-    def add_panel(self, key: Hashable, shape: PanelShape, depth: float = 0.0) -> Box:
-        """Add (or replace) a panel; returns the box to redraw."""
+    def add_panel(self, key: Hashable, shape: Shape, depth: float = 0.0) -> Box:
+        """Add (or replace) an edge or corner panel; returns the box to redraw."""
         old = self._box(key)
         self._shapes[key] = shape
         self._depths[key] = float(depth)
@@ -117,15 +142,37 @@ class Scene:
         return list(self._shapes)
 
     def outline_panels(self) -> list[Panel]:
-        """Panels in the form shell.canvas.outline expects: (edge, pos, length, depth, d)."""
+        """Edge panels in the form shell.canvas.outline expects: (edge, pos, length, depth, d)."""
         return [
-            (s.edge, s.pos, s.length, s.depth, self._depths[k]) for k, s in self._shapes.items()
+            (s.edge, s.pos, s.length, s.depth, self._depths[k])
+            for k, s in self._shapes.items()
+            if isinstance(s, PanelShape)
+        ]
+
+    def outline_corners(self) -> list[CornerSpan]:
+        """Corner panels as shell.canvas.outline expects: (corner, edge, along, depth, d)."""
+        return [
+            (s.corner, s.edge, s.along, s.depth, self._depths[k])
+            for k, s in self._shapes.items()
+            if isinstance(s, CornerShape)
         ]
 
     def _box(self, key: Hashable) -> Box | None:
         shape = self._shapes.get(key)
         if shape is None:
             return None
+        if isinstance(shape, CornerShape):
+            return corner_box(
+                shape.corner,
+                shape.edge,
+                shape.along,
+                self._depths[key],
+                self.width,
+                self.height,
+                self.thickness,
+                self.radius,
+                self.pad,
+            )
         return panel_box(
             shape,
             self._depths[key],

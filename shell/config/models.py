@@ -20,6 +20,8 @@ Edge = Literal["top", "bottom", "left", "right"]
 PanelState = Literal["collapsed", "extended"]
 ShellMode = Literal["edge", "plasma", "both", "none"]
 Align = Literal["start", "center", "end"]
+Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+CORNERS: tuple[str, ...] = get_args(Corner)  # the settings window's choices
 
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
@@ -219,7 +221,19 @@ class InteractionConfig(_Strict):
     drag: StrictBool | None = None
 
 
+# The panel keys by kind (spec 19; the settings window reads them): both kinds take
+# SHARED_KEYS; an entry mixing EDGE_ONLY_KEYS with CORNER_ONLY_KEYS is rejected.
+SHARED_KEYS = ("widget", "edge", "state", "handle", "interaction")
+EDGE_ONLY_KEYS = ("pos", "align", "offset", "order", "length", "min_length", "max_length", "depth")
+CORNER_ONLY_KEYS = ("corner", "width", "height")
+
+
 class PanelConfig(_Strict):
+    """One panel entry. Edge panels use edge / align / offset / order / length / depth; corner
+    panels (spec 19) use corner / edge (the edge they open from) / width / height. Which kind an
+    entry is comes from its widget (shell.registry.validate_widgets checks the keys against
+    it); an entry that mixes the two kinds' keys is rejected here already."""
+
     widget: str
     edge: Edge | None = None
     pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
@@ -233,6 +247,9 @@ class PanelConfig(_Strict):
     state: PanelState | None = None
     handle: HandleConfig = Field(default_factory=HandleConfig)
     interaction: InteractionConfig = Field(default_factory=InteractionConfig)
+    corner: Corner | None = None
+    width: Length | None = None  # px from the screen corner, both frame bands included
+    height: Length | None = None
 
     @field_validator("length")
     @classmethod
@@ -241,6 +258,21 @@ class PanelConfig(_Strict):
 
     @model_validator(mode="after")
     def _placement(self) -> PanelConfig:
+        corner_keys = [k for k in CORNER_ONLY_KEYS if getattr(self, k) is not None]
+        edge_keys = [k for k in EDGE_ONLY_KEYS if getattr(self, k) is not None]
+        if corner_keys and edge_keys:
+            raise ValueError(
+                f"{', '.join(edge_keys)} cannot be combined with {', '.join(corner_keys)}: a "
+                "corner panel takes corner, edge, width and height; an edge panel takes edge, "
+                "align, offset, order, length, min_length, max_length and depth"
+            )
+        if self.corner is not None and self.edge is not None:
+            if self.edge not in self.corner.split("-"):
+                first, second = self.corner.split("-")
+                raise ValueError(
+                    f"edge {self.edge!r} is not an edge of the {self.corner} corner "
+                    f"(use {first} or {second})"
+                )
         if self.pos is not None and (self.align is not None or self.offset is not None):
             advice = (
                 "drop pos; center is the default align (use offset to shift it)"

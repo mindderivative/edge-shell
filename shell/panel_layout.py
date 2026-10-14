@@ -23,10 +23,11 @@ Per edge (`layout_edge`):
    edge, clamped into its free span (warning); it takes no part in the slots or the fill
    (a `pos` panel with length "fill" runs to the end of its free span).
 
-Across the monitor (`layout_monitor`): panels are checked in config order; a panel whose body
-box (full depth, from the screen edge, grown by its `r`) overlaps an earlier panel's is not
-shown (warning). On one edge that is the minimum gap `r1 + r2`; it also catches deep panels on
-neighbouring edges (two panels meeting at a shared screen corner at offset 0 always collide:
+Across the monitor (`layout_monitor`): corner panels are checked first, then edge panels in
+config order; a panel whose body box (full depth, from the screen edge, grown by its `r`)
+overlaps an earlier panel's is not shown (warning). On one edge that is the minimum gap
+`r1 + r2`; it also catches deep panels on neighbouring edges (two panels meeting at a shared
+screen corner at offset 0 always collide:
 one needs an offset of at least the other's depth + r - R), and `pos` panels dropped onto
 slotted ones. Touching is allowed. A hidden panel keeps the slot space it was given: its
 neighbours do not close up.
@@ -35,6 +36,19 @@ Gaps between slot groups: the `gap` is honoured between neighbours inside one sl
 between different groups (start / center / end) only the minimum `r1 + r2` is guaranteed,
 not `r1 + r2 + gap` (the center group is pushed clear of the start and end groups by the
 minimum, and a fill sizes against the full spacing). Raised for a decision.
+
+Corner panels (spec 19, `layout_corners`) are placed first, in config order: at most one per
+screen corner (a later one in a taken corner is not shown); each is shrunk to fit beside the
+corner panels already placed (along its edge: their free ends plus `r1 + r2 + gap`, or their
+lifted screen-corner arc; across: the far corner's occupant), and not shown when `along` falls
+below max(T + MIN_LENGTH, T + R + r) (so the outline never folds, whatever the theme radius)
+or less than MIN_DEPTH px of depth remains; a hidden panel gets only its "not shown" warning.
+A corner panel that overlaps one placed before it is hidden there too, so only the corner
+panels that are shown are held. They then move the free span of their two edges: on the edge
+a corner panel opens from, the span starts `along + r_c + gap` from that corner (plus the
+panel's own `r`, as between neighbours); on the other edge the screen-corner arc rides up by
+its depth, so the span starts `T + R + depth` from the corner (plus `r`). The overlap check
+then runs over the shown corner panels first, then the edge panels.
 
 Every warning names the key path (`where`.panels.N (widget)).
 """
@@ -47,10 +61,12 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from shell import geometry
-from shell.config.models import Edge
-from shell.panel_spec import PanelGeometry, PanelRequest
+from shell.config.models import Corner, Edge
+from shell.corner import pq_box
+from shell.panel_spec import CornerGeometry, CornerRequest, PanelGeometry, PanelRequest
 
 MIN_LENGTH = 60  # same floor as the config model's px lengths
+MIN_DEPTH = 16  # a corner panel's smallest depth past the band (the model's Depth minimum)
 CONTENT_PAD = 12  # body px on each side of a "content" panel's natural size
 EDGES: tuple[Edge, ...] = ("top", "right", "bottom", "left")
 
@@ -58,9 +74,25 @@ Box = tuple[float, float, float, float]  # x0, y0, x1, y1
 Note = tuple[int, str]  # (config index, warning)
 
 
+# The screen corner at the start (left / top) and at the end (right / bottom) of each edge, in
+# the layout's screen-axis terms (`pos` grows left to right, top to bottom).
+AXIS_START: dict[Edge, Corner] = {
+    "top": "top-left",
+    "bottom": "bottom-left",
+    "left": "top-left",
+    "right": "top-right",
+}
+AXIS_END: dict[Edge, Corner] = {
+    "top": "top-right",
+    "bottom": "bottom-right",
+    "left": "bottom-left",
+    "right": "bottom-right",
+}
+
+
 @dataclass(frozen=True)
 class Layout:
-    panels: list[PanelGeometry | None]  # config order; None = not shown
+    panels: list[PanelGeometry | CornerGeometry | None]  # config order; None = not shown
     warnings: list[str]
 
 
@@ -69,10 +101,46 @@ def content_length(natural: int) -> int:
     return max(MIN_LENGTH, natural + 2 * CONTENT_PAD)
 
 
-def free_span(extent: int, thickness: int, radius: int, depth: int) -> tuple[int, int]:
-    """(first, last) px along the edge a body of this depth may occupy (corner clearance)."""
-    clearance = thickness + radius + geometry.join_radius(depth, radius)
-    return math.ceil(clearance), math.floor(extent - clearance)
+def free_span(
+    extent: int,
+    thickness: int,
+    radius: int,
+    depth: int,
+    start: float | None = None,
+    end: float | None = None,
+) -> tuple[int, int]:
+    """(first, last) px along the edge a body of this depth may occupy: `start` / `end` px of
+    each corner are taken (`T + R` without a corner panel, `corner_clearance`), plus the
+    body's own join radius."""
+    r = geometry.join_radius(depth, radius)
+    lo = (thickness + radius if start is None else start) + r
+    hi = extent - (thickness + radius if end is None else end) - r
+    return math.ceil(lo), math.floor(hi)
+
+
+def corner_clearance(
+    edge: Edge,
+    held: CornerGeometry | None,
+    thickness: int,
+    radius: int,
+    gap: int,
+) -> float:
+    """Px of `edge` taken from the corner that holds `held` (None: a plain screen corner,
+    T + R). A corner panel opening from `edge` takes its body, its free-end join and the gap
+    (edge panels keep `r1 + r2 + gap` from it, as from a neighbour); one opening from the
+    other edge lifts the screen-corner arc by its depth (no gap, as at a plain corner)."""
+    spare = gap if held is not None and held.edge == edge else 0
+    return _reach(edge, held, thickness, radius) + spare
+
+
+def _reach(edge: Edge, held: CornerGeometry | None, thickness: int, radius: int) -> float:
+    """Px of `edge` a corner's occupant reaches from its corner: its free end (body plus join)
+    when it opens from `edge`, else the screen-corner arc it lifts (T + R + depth)."""
+    if held is None:
+        return thickness + radius
+    if held.edge == edge:
+        return held.along + geometry.join_radius(held.depth, radius)
+    return thickness + radius + held.depth
 
 
 @dataclass
@@ -131,16 +199,19 @@ def layout_edge(
     gap: int,
     natural: Mapping[int, int] | None = None,
     where: str = "monitor",
+    clear: tuple[float | None, float | None] = (None, None),
 ) -> tuple[dict[int, tuple[int, int] | None], list[Note]]:
-    """Resolve the panels of ONE edge. `entries` are (config index, request) pairs; returns
-    {index: (pos, length) or None when the edge has no room} and (index, warning) notes."""
+    """Resolve the panels of ONE edge. `entries` are (config index, request) pairs; `clear`
+    is what corner panels take at the start and the end of the edge (corner_clearance; None:
+    a plain corner). Returns {index: (pos, length) or None when the edge has no room} and
+    (index, warning) notes."""
     natural = natural or {}
     out: dict[int, tuple[int, int] | None] = {}
     notes: list[Note] = []
     items: list[_Item] = []
     for index, req in entries:
         name = f"{where}.panels.{index} ({req.widget})"
-        lo, hi = free_span(extent, thickness, radius, req.depth)
+        lo, hi = free_span(extent, thickness, radius, req.depth, *clear)
         if hi - lo < MIN_LENGTH:
             notes.append(
                 (index, f"{name}: the {req.edge} edge ({extent} px) has no room for it; not shown")
@@ -271,12 +342,155 @@ def _grown_body(geo: PanelGeometry, width: int, height: int, thickness: int, r: 
     return (width - across, a0, width + r, a1)
 
 
+def _corner_grown(geo: CornerGeometry, width: int, height: int, thickness: int, radius: int) -> Box:
+    """The corner panel's box for the overlap check: its body, its free-end join along its
+    edge and the lifted screen-corner arc (radius R) across, from beyond the screen corner."""
+    r = geometry.join_radius(geo.depth, radius)
+    return pq_box(
+        geo.corner,
+        geo.edge,
+        -radius,
+        geo.along + r,
+        -radius,
+        thickness + geo.depth + radius,
+        width,
+        height,
+    )
+
+
+def _other(corner: Corner, edge: Edge) -> Edge:
+    first, second = corner.split("-")
+    return second if edge == first else first  # type: ignore[return-value]
+
+
+def _far(corner: Corner, edge: Edge) -> Corner:
+    """The other screen corner on `edge`."""
+    return AXIS_END[edge] if AXIS_START[edge] == corner else AXIS_START[edge]
+
+
+def layout_corners(
+    entries: Sequence[tuple[int, CornerRequest]],
+    width: int,
+    height: int,
+    thickness: int,
+    radius: int,
+    gap: int,
+    where: str = "monitor",
+) -> tuple[dict[int, CornerGeometry | None], list[Note]]:
+    """Resolve the corner panels (spec 19), in config order (see the module docstring). Only
+    corner panels that are shown are held: a hidden one takes no clearance from anything."""
+    out: dict[int, CornerGeometry | None] = {}
+    notes: list[Note] = []
+    held: dict[Corner, tuple[int, CornerGeometry]] = {}
+    boxes: list[tuple[int, CornerGeometry, Box]] = []
+    for index, req in entries:
+        name = f"{where}.panels.{index} ({req.widget})"
+        if req.corner in held:
+            j, other = held[req.corner]
+            notes.append(
+                (
+                    index,
+                    f"{name}: the {req.corner} corner already holds {where}.panels.{j} "
+                    f"({other.widget}); not shown",
+                )
+            )
+            out[index] = None
+            continue
+        edge, side = req.edge, _other(req.corner, req.edge)
+        horizontal = geometry.is_horizontal(edge)
+        along_key, across_key = ("width", "height") if horizontal else ("height", "width")
+        extent_e, extent_f = (width, height) if horizontal else (height, width)
+        depth = getattr(req, across_key) - thickness
+        shrunk: list[Note] = []  # reported only when the panel is shown
+        # across: the screen-corner arc it lifts must stay clear of the far corner of `side`
+        far_f = held.get(_far(req.corner, side), (None, None))[1]
+        room = extent_f - thickness - radius - math.ceil(_reach(side, far_f, thickness, radius))
+        if depth > room:
+            shrunk.append(
+                (
+                    index,
+                    f"{name}: {across_key} {depth + thickness} px does not fit the {side} edge; "
+                    f"shrunk to {room + thickness}",
+                )
+            )
+            depth = room
+        r = geometry.join_radius(depth, radius)
+        # the side from the lifted arc (T + R) to the free corner (along - r) never runs
+        # backwards, and the body keeps MIN_LENGTH px past the band, whatever the theme radius
+        need = max(thickness + MIN_LENGTH, thickness + radius + math.ceil(r))
+        asked = getattr(req, along_key)
+        if asked < need:
+            shrunk.append(
+                (
+                    index,
+                    f"{name}: {along_key} {asked} px is below the minimum {need} for this "
+                    f"theme; widened to {need}",
+                )
+            )
+        along = max(asked, need)
+        # along: its free end must stay clear of the far corner of `edge`
+        far_e = held.get(_far(req.corner, edge), (None, None))[1]
+        room = math.floor(extent_e - corner_clearance(edge, far_e, thickness, radius, gap) - r)
+        if along > room:
+            shrunk.append(
+                (
+                    index,
+                    f"{name}: {along_key} {along} px does not fit the {edge} edge; "
+                    f"shrunk to {room}",
+                )
+            )
+            along = room
+        if getattr(req, across_key) - thickness < MIN_DEPTH:
+            notes.append(
+                (
+                    index,
+                    f"{name}: {across_key} {getattr(req, across_key)} px leaves less than "
+                    f"{MIN_DEPTH} px past the {thickness} px band; not shown",
+                )
+            )
+            out[index] = None
+            continue
+        if depth < MIN_DEPTH or along < need:
+            notes.append((index, f"{name}: the {req.corner} corner has no room for it; not shown"))
+            out[index] = None
+            continue
+        geo = CornerGeometry(
+            req.widget,
+            req.corner,
+            edge,
+            along,
+            along - thickness,
+            depth,
+            req.state,
+            req.label,
+        )
+        # a corner panel across the screen may still overlap one placed before it: hidden,
+        # and never held, so it takes no clearance from any edge panel
+        box = _corner_grown(geo, width, height, thickness, radius)
+        clash = next(((j, other) for j, other, b in boxes if _overlap(box, b)), None)
+        if clash is not None:
+            notes.append(
+                (
+                    index,
+                    f"{name}: overlaps {where}.panels.{clash[0]} ({clash[1].widget}) or leaves "
+                    "less than the minimum gap between their joins; not shown",
+                )
+            )
+            out[index] = None
+            continue
+        notes.extend(shrunk)
+        held[req.corner] = (index, geo)
+        boxes.append((index, geo, box))
+        out[index] = geo
+    return out, notes
+
+
 def _overlap(a: Box, b: Box) -> bool:
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
 def layout_monitor(
-    requests: Sequence[PanelRequest],
+    requests: Sequence[PanelRequest | CornerRequest],
     width: int,
     height: int,
     thickness: int,
@@ -285,39 +499,62 @@ def layout_monitor(
     natural: Mapping[int, int] | None = None,
     where: str = "monitor",
 ) -> Layout:
-    """Resolve every panel of one monitor. `natural` maps a config index to the measured
-    length of a "content" panel; `where` prefixes warnings, e.g. "monitors.HDMI-A-1"."""
+    """Resolve every panel of one monitor, edge (PanelRequest) and corner (CornerRequest).
+    `natural` maps a config index to the measured length of a "content" panel; `where`
+    prefixes warnings, e.g. "monitors.HDMI-A-1"."""
+    corner_entries = [(i, r) for i, r in enumerate(requests) if isinstance(r, CornerRequest)]
+    corners, notes = layout_corners(corner_entries, width, height, thickness, radius, gap, where)
+    held = {geo.corner: geo for geo in corners.values() if geo is not None}
     resolved: dict[int, tuple[int, int] | None] = {}
-    notes: list[Note] = []
     for edge in EDGES:
-        entries = [(i, req) for i, req in enumerate(requests) if req.edge == edge]
+        entries = [
+            (i, req)
+            for i, req in enumerate(requests)
+            if isinstance(req, PanelRequest) and req.edge == edge
+        ]
         if entries:
             extent = width if geometry.is_horizontal(edge) else height
-            got, edge_notes = layout_edge(entries, extent, thickness, radius, gap, natural, where)
+            clear = (
+                corner_clearance(edge, held.get(AXIS_START[edge]), thickness, radius, gap),
+                corner_clearance(edge, held.get(AXIS_END[edge]), thickness, radius, gap),
+            )
+            got, edge_notes = layout_edge(
+                entries, extent, thickness, radius, gap, natural, where, clear
+            )
             resolved.update(got)
             notes.extend(edge_notes)
-    out: list[PanelGeometry | None] = []
-    placed: list[tuple[int, PanelGeometry, Box]] = []
-    for i, req in enumerate(requests):
-        got = resolved[i]
+    geos: dict[int, PanelGeometry | CornerGeometry | None] = dict(corners)
+    for i, got in resolved.items():
+        req = requests[i]
         if got is None:
-            out.append(None)
+            geos[i] = None
             continue
-        geo = PanelGeometry(req.widget, req.edge, got[0], got[1], req.depth, req.state, req.label)
-        box = _grown_body(geo, width, height, thickness, geometry.join_radius(req.depth, radius))
+        pos, length = got
+        geos[i] = PanelGeometry(req.widget, req.edge, pos, length, req.depth, req.state, req.label)
+    out: list[PanelGeometry | CornerGeometry | None] = [geos[i] for i in range(len(requests))]
+    placed: list[tuple[int, PanelGeometry | CornerGeometry, Box]] = []
+    order = [i for i, _ in corner_entries] + [i for i in range(len(requests)) if i in resolved]
+    for i in order:
+        geo = out[i]
+        if geo is None:
+            continue
+        if isinstance(geo, CornerGeometry):
+            box = _corner_grown(geo, width, height, thickness, radius)
+        else:
+            r = geometry.join_radius(geo.depth, radius)
+            box = _grown_body(geo, width, height, thickness, r)
         clash = next(((j, other) for j, other, b in placed if _overlap(box, b)), None)
         if clash is not None:
             notes.append(
                 (
                     i,
-                    f"{where}.panels.{i} ({req.widget}): overlaps {where}.panels.{clash[0]} "
+                    f"{where}.panels.{i} ({geo.widget}): overlaps {where}.panels.{clash[0]} "
                     f"({clash[1].widget}) or leaves less than the minimum gap between their "
                     "joins; not shown",
                 )
             )
-            out.append(None)
+            out[i] = None
             continue
         placed.append((i, geo, box))
-        out.append(geo)
     notes.sort(key=lambda note: note[0])  # stable: per panel, in the order they arose
     return Layout(out, [message for _, message in notes])

@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import functools
 import math
+from collections.abc import Sequence
 
 import cairo
 
-from shell.canvas.outline import Panel, fill_mass, outline_path
+from shell.canvas.outline import CornerSpan, Panel, fill_mass, outline_path
 
 RGBA = tuple[float, float, float, float]
 
@@ -73,6 +74,7 @@ def draw_border(
     panels: list[Panel],
     width: float,
     rgba: RGBA,
+    corners: Sequence[CornerSpan] = (),
 ) -> None:
     """RGBA border `width` px thick on the desktop side of the outline; nothing over the mass.
 
@@ -83,10 +85,10 @@ def draw_border(
     """
     cr.save()
     cr.new_path()
-    outline_path(cr, w, h, T, R, panels)
+    outline_path(cr, w, h, T, R, panels, corners)
     cr.clip()
     cr.new_path()
-    outline_path(cr, w, h, T, R, panels)
+    outline_path(cr, w, h, T, R, panels, corners)
     cr.set_line_width(2 * width)
     cr.set_line_join(cairo.LINE_JOIN_ROUND)
     cr.set_source_rgba(*rgba)
@@ -104,9 +106,10 @@ def draw_shadow_uniform(
     elevation_pct: float,
     rgba: RGBA,
     offset: float = 0,
+    corners: Sequence[CornerSpan] = (),
 ) -> None:
     """Uniform shadow of the mass (+ border via `offset`): reach = reach_px(elevation_pct)."""
-    draw_shadow_reach(cr, w, h, T, R, panels, reach_px(elevation_pct), rgba, offset)
+    draw_shadow_reach(cr, w, h, T, R, panels, reach_px(elevation_pct), rgba, offset, corners)
 
 
 def draw_shadow_reach(
@@ -119,6 +122,7 @@ def draw_shadow_reach(
     reach: int,
     rgba: RGBA,
     offset: float = 0,
+    corners: Sequence[CornerSpan] = (),
 ) -> None:
     """Uniform shadow with an absolute `reach` in px (the primitive under draw_shadow_uniform).
 
@@ -136,13 +140,13 @@ def draw_shadow_reach(
     levels = shadow_levels(reach, a)
     cr.save()
     cr.new_path()
-    outline_path(cr, w, h, T, R, panels)
+    outline_path(cr, w, h, T, R, panels, corners)
     cr.clip()
     cr.set_line_join(cairo.LINE_JOIN_ROUND)
     cr.set_line_cap(cairo.LINE_CAP_ROUND)
     for i in range(reach, 0, -1):
         cr.new_path()
-        outline_path(cr, w, h, T, R, panels)
+        outline_path(cr, w, h, T, R, panels, corners)
         cr.set_line_width(2 * (i + offset))
         cr.set_source_rgba(r, g, b, levels[i - 1])
         cr.stroke()
@@ -160,6 +164,7 @@ def draw_scene(
     border: tuple[float, RGBA] | None = None,
     shadow: tuple[float, RGBA] | None = None,
     clip: tuple[int, int, int, int] | None = None,
+    corners: Sequence[CornerSpan] = (),
 ) -> None:
     """Clear, then draw shadow (under), mass, border (over, on the desktop side of the outline).
 
@@ -175,11 +180,11 @@ def draw_scene(
     cr.push_group()
     if shadow is not None:
         draw_shadow_uniform(
-            cr, w, h, T, R, panels, shadow[0], shadow[1], border[0] if border else 0
+            cr, w, h, T, R, panels, shadow[0], shadow[1], border[0] if border else 0, corners
         )
-    fill_mass(cr, w, h, T, R, panels, mass_rgba)
+    fill_mass(cr, w, h, T, R, panels, mass_rgba, corners)
     if border is not None:
-        draw_border(cr, w, h, T, R, panels, border[0], border[1])
+        draw_border(cr, w, h, T, R, panels, border[0], border[1], corners)
     cr.pop_group_to_source()
     cr.set_operator(cairo.OPERATOR_SOURCE)
     cr.paint()
