@@ -11,7 +11,7 @@ from typing import Protocol
 import cairo
 
 from shell.canvas.effects import draw_scene
-from shell.canvas.scene import Box, PanelShape, Scene
+from shell.canvas.scene import Box, Scene, Shape
 from shell.canvas.style import CanvasStyle
 
 Rect = tuple[int, int, int, int]  # (x, y, width, height)
@@ -55,7 +55,7 @@ class CanvasPainter:
         self._full()
         return True
 
-    def add_panel(self, key: Hashable, shape: PanelShape) -> None:
+    def add_panel(self, key: Hashable, shape: Shape) -> None:
         self._damage(self.scene.add_panel(key, shape))
 
     def remove_panel(self, key: Hashable) -> None:
@@ -87,6 +87,7 @@ class CanvasPainter:
             border=st.border,
             shadow=st.shadow,
             clip=None if full else clip,
+            corners=s.outline_corners(),
         )
         if self.recorder is not None:
             self.recorder.on_draw((time.perf_counter() - start) * 1000, full)

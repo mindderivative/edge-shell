@@ -13,7 +13,15 @@ import cairo
 
 from shell.anim import Tween
 from shell.canvas.painter import CanvasPainter
-from shell.canvas.scene import Box, PanelShape, Scene, box_to_rect, union_boxes
+from shell.canvas.scene import (
+    Box,
+    PanelShape,
+    Scene,
+    Shape,
+    box_to_rect,
+    shape_for,
+    union_boxes,
+)
 from shell.canvas.style import style_for
 from shell.config.models import Config, Theme
 from shell.panel_layout import layout_monitor
@@ -80,7 +88,7 @@ def compare(a: bytes, b: bytes) -> tuple[int, int]:
 def simulate(
     theme: Theme,
     size: tuple[int, int],
-    shapes: list[PanelShape],
+    shapes: list[Shape],
     frames: int,
     toggle_every: int = 18,
     check_every: int = 0,
@@ -99,7 +107,7 @@ def simulate(
     painter = CanvasPainter(scene, style_for(theme), pending.append)
     painter.recorder = recorder
     ticker = FakeTicker()
-    tweens: list[tuple[Tween, PanelShape]] = []
+    tweens: list[tuple[Tween, Shape]] = []
     for key, shape in enumerate(shapes):
         painter.add_panel(key, shape)
         tween = Tween(ticker, lambda d, k=key: painter.set_depth(k, d), theme.duration_ms)
@@ -174,9 +182,10 @@ def default_shapes(width: int, height: int) -> list[PanelShape]:
 
 def config_shapes(
     config: Config, monitor: str, width: int, height: int
-) -> tuple[list[PanelShape], list[str]]:
-    """The shown panels of `monitor` in `config`, laid out by shell.panel_layout at width x
-    height, plus the layout warnings. The widgets must be registered (import widgets)."""
+) -> tuple[list[Shape], list[str]]:
+    """The shown panels of `monitor` in `config` (edge and corner panels), laid out by
+    shell.panel_layout at width x height, plus the layout warnings. The widgets must be
+    registered (import widgets)."""
     theme = config.theme_for(monitor)
     layout = layout_monitor(
         requests_for(config, monitor),
@@ -187,7 +196,7 @@ def config_shapes(
         config.layout_for(monitor).gap,
         where=f"monitors.{monitor}",
     )
-    shapes = [PanelShape(p.edge, p.pos, p.length, p.depth) for p in layout.panels if p]
+    shapes = [shape_for(p) for p in layout.panels if p]
     return shapes, layout.warnings
 
 
