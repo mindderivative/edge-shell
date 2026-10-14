@@ -20,6 +20,7 @@ class FakeWindow:
         self.title = "w"
         self.themes = []
         self.states = []
+        self.handles = []
         self.natural = 200
         self.measured = 0
 
@@ -36,6 +37,9 @@ class FakeWindow:
 
     def set_state(self, state):
         self.states.append(state)
+
+    def set_handle(self, handle, interaction):
+        self.handles.append((handle, interaction))
 
     def get_title(self):
         return self.title
@@ -98,6 +102,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.windows = list(windows)
     shell.panels = list(panels)
     shell._resolved = [None] * len(shell.panels)
+    shell._handles = [None] * len(shell.panels)
     shell.canvas = FakeCanvas()
     shell.strips = []
     shell._closed = False
@@ -748,3 +753,93 @@ def test_a_geometry_signal_on_a_closed_shell_is_ignored(build):
     shell._closed = True
     shell._on_geometry()
     assert len(timers) == before
+
+
+# ---- handle and interaction (spec 15): in place, never a rebuild ---------------------
+
+
+def test_panels_get_their_handle_and_interaction(build):
+    from shell.panel_spec import HandleSpec, Interaction
+
+    shell, _, _ = build(
+        edge(
+            {"widget": "dock", "handle": {"shape": "bar", "offset": 20}},
+            {"widget": "clock", "interaction": {"hover": False}},
+        )
+    )
+    dock, clock = shell.panels
+    assert dock.kwargs["handle"] == HandleSpec(shape="bar", offset=20)
+    assert dock.kwargs["interaction"] == Interaction()
+    assert clock.kwargs["handle"] == HandleSpec()
+    assert clock.kwargs["interaction"] == Interaction(hover=False)
+
+
+def test_a_handle_change_updates_the_live_panel(build, make_config):
+    from shell.panel_spec import HandleSpec, Interaction
+
+    shell, _, timers = build(edge({"widget": "dock"}, {"widget": "clock"}))
+    dock, clock = shell.panels
+    before = len(timers)
+    new = make_config(
+        monitors=edge(
+            {"widget": "dock", "handle": {"shape": "chevron"}, "interaction": {"drag": False}},
+            {"widget": "clock"},
+        )
+    )
+    shell.apply(new, [Change("panel-handle", "HDMI-A-1", 0)])
+    assert shell.panels == [dock, clock] and not dock.destroyed
+    assert dock.handles == [(HandleSpec(shape="chevron"), Interaction(drag=False))]
+    assert clock.handles == []  # unchanged panels are not touched
+    assert len(timers) == before  # no rebuild, so no re-raise
+    shell.apply(new, [])  # the same config again: nothing to do
+    assert len(dock.handles) == 1
+
+
+def test_a_handle_and_state_change_does_both_in_place(build, make_config):
+    shell, _, _ = build(edge({"widget": "dock"}))
+    dock = shell.panels[0]
+    new = make_config(
+        monitors=edge({"widget": "dock", "state": "collapsed", "handle": {"size": 30}})
+    )
+    shell.apply(new, [Change("panel-handle", "HDMI-A-1", 0)])
+    assert shell.panels[0] is dock and dock.states == ["collapsed"]
+    assert dock.handles[0][0].size == 30
+
+
+def test_a_rebuilt_panel_gets_the_new_handle(build, make_config):
+    shell, _, _ = build(edge({"widget": "dock"}))
+    old = shell.panels[0]
+    shell.apply(
+        make_config(monitors=edge({"widget": "dock", "depth": 80, "handle": {"shape": "bar"}})),
+        [Change("panel-rebuild", "HDMI-A-1", 0)],
+    )
+    new = shell.panels[0]
+    assert old.destroyed and new is not old
+    assert new.kwargs["handle"].shape == "bar" and new.handles == []
+
+
+def test_a_theme_handle_style_change_restyles_in_place(build, make_config):
+    shell, _, _ = build(edge({"widget": "dock"}))
+    dock = shell.panels[0]
+    new = make_config(theme={"handle_style": {"shape": "bar"}}, monitors=edge({"widget": "dock"}))
+    shell.apply(new, [Change("restyle", "HDMI-A-1")])
+    assert shell.panels[0] is dock and not dock.destroyed
+    assert dock.themes[0].handle_style.shape == "bar" and dock.handles == []
+
+
+def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
+    caplog.set_level("DEBUG", logger="shell.monitors")
+    shell, _, _ = build(edge({"widget": "dock"}))
+    built = [r.getMessage() for r in caplog.records if "building panel" in r.getMessage()]
+    assert built == ["building panel 0 (dock) on HDMI-A-1"]
+    caplog.clear()
+    shell.apply(
+        make_config(monitors=edge({"widget": "dock", "handle": {"shape": "bar"}})),
+        [Change("panel-handle", "HDMI-A-1", 0)],
+    )
+    assert "building panel" not in caplog.text  # in place (Gate B item 6 reads this line)
+    shell.apply(
+        make_config(monitors=edge({"widget": "dock", "depth": 80})),
+        [Change("panel-rebuild", "HDMI-A-1", 0)],
+    )
+    assert "building panel 0 (dock) on HDMI-A-1" in caplog.text

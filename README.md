@@ -132,6 +132,45 @@ The border adds to the overall size: the frame band keeps its thickness (a 10 px
 a 4 px border occupies 14 px), the shadow is measured from the outer border edge, and the
 frame strips reserve thickness plus border width while the border is enabled.
 
+### Handles and interactions
+
+Each panel's handle and its three interactions can be set per panel entry; every key is
+optional (a missing one comes from the theme):
+
+```toml
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+handle.shape = "chevron"     # auto | dots | bar | chevron | none
+handle.size = 24             # px along the edge, 4-40
+handle.weight = 2            # px, 1-8: dot diameter, bar and chevron thickness
+handle.offset = -100         # px along the edge from the body centre (clamped to the body)
+handle.color = "#8fd3b6"     # rest colour (default: theme handle)
+handle.hover_color = "#ffffff"  # pointer on the handle, or peeking (default: theme handle_hover)
+interaction.click = true     # click (and keyboard) toggles
+interaction.hover = false    # hovering the strip peeks
+interaction.drag = true      # dragging the handle opens and closes
+
+[theme.handle_style]         # the default for every panel; per monitor:
+shape = "auto"               # [monitors.NAME.theme.handle_style]
+size = 15
+weight = 3
+```
+
+`auto` picks the shape from the interactions: dots (click and drag), a bar (drag only), a
+chevron (click only), dots (hover only), nothing (all off). The chevron points where the
+panel opens while it is collapsed and folds through a flat bar to point back as it extends.
+The handle sits at a fixed inset from the body's inner edge (5 px; centred in the band on a
+frame thinner than 10 px) and keeps a constant size on a thick frame: a shape is drawn at
+most 6 px across the band (4 to 0 px on frames of 8 px and thinner), so a larger `weight`, or
+a chevron taller than that, is drawn smaller across, never over the band's edges. The hit
+target is 14 px across at any frame thickness and rides the inner edge; with `hover` off on a
+thick frame only that target toggles, the rest of the band is click-through.
+A panel with all three interactions off opens and closes only through `state`; it draws no
+handle unless its own entry (or its widget) sets a shape, and each config load logs one INFO
+line naming such panels. Handle and interaction changes apply in place on reload.
+`scripts/py -m shell.handle_draw --sheet /tmp/handles.png` renders every shape for a look
+without starting the shell.
+
 ## Develop
 
 ```bash
@@ -139,6 +178,7 @@ scripts/py -m pytest -q                            # display-free tests
 scripts/py -m ruff format . && scripts/py -m ruff check .
 scripts/py -m shell.canvas.simulate --elevation 50 --border 2   # headless canvas benchmark
 scripts/py -m shell.canvas.simulate --config examples/layout-test.toml   # a config's layout, headless
+scripts/py -m shell.handle_draw --sheet /tmp/handles.png        # every handle shape, enlarged
 ```
 
 `EDGE_SHELL_RAISE_MS=0` disables the startup re-raise of panels (debug switch only; the
@@ -159,11 +199,18 @@ that need `gi` or Fabric skip themselves there.
   measured); no startup flash was visible with content panels at Gate B, so an in-place resize stays
   unplanned. A "content" panel that is hidden at its default length is never measured and stays
   hidden.
-- Handle customization (shape, color, size, position) and per-interaction opt-in/out
-  (click, hover, drag) are planned, see spec section 15.
+- Handle customization watch items: the chevron's half-pixel parity jump during the morph (within
+  1 px, no wobble reported at Gate B); under an RTL locale the along-edge `handle.offset` would
+  flip (pre-existing behaviour); hover-only and all-off panels keep an invisible inert button
+  over the inner 14 px of the extended body; keyboard activation of the handle cannot be tested
+  live (built-in panels use `keyboard_mode = "none"`); the handle-draw and edge-panel tests are
+  skipped in CI (no `gi`), the pure tests run.
 - Panel startup includes a brief re-raise (`raise_to_top`) about half a second after launch.
-  Live testing showed it is still needed: without it the collapsed handle dots are hidden
-  behind the canvas. `EDGE_SHELL_RAISE_MS=0` turns it off for debugging.
+  Live testing showed it is still needed: with the raise off, the collapsed handles and the
+  extended content (dock icons, clock text, bar labels) were both hidden (Plan 3 Gate B
+  item 11, Phil), so the canvas covers the panel windows until the delayed re-raise; drawing
+  only the handle on the canvas could not remove the workaround. `EDGE_SHELL_RAISE_MS=0`
+  remains a debugging switch.
 - One layout gap per monitor (no per-edge gap). Resolution changes re-lay out panels (verified live on
   HDMI-A-1: 1920x1080 to 1280x720 and back, via `notify::geometry`, with no shell reopen and the
   collapsed handle dots intact); a scale change is not verified, and HiDPI drawing is not

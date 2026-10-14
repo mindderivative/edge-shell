@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 
-from shell.config.models import Config, ConfigError, PanelConfig
-from shell.panel_spec import PanelDefaults, PanelRequest
+from pydantic import ValidationError
+
+from shell.config.models import (
+    Config,
+    ConfigError,
+    HandleConfig,
+    InteractionConfig,
+    PanelConfig,
+)
+from shell.panel_spec import HandleSpec, Interaction, PanelDefaults, PanelRequest
 
 _WIDGETS: dict[str, type] = {}
 _DEFAULTS: dict[str, PanelDefaults] = {}
@@ -13,6 +22,8 @@ _PLACEMENT = ("pos", "align", "offset")
 
 
 def register(name: str, defaults: PanelDefaults) -> Callable[[type], type]:
+    _check_defaults(name, defaults)  # a bad widget default fails at import, before any window
+
     def decorate(cls: type) -> type:
         if name in _WIDGETS:
             raise ValueError(f"widget {name!r} is already registered")
@@ -21,6 +32,17 @@ def register(name: str, defaults: PanelDefaults) -> Callable[[type], type]:
         return cls
 
     return decorate
+
+
+def _check_defaults(name: str, defaults: PanelDefaults) -> None:
+    """Widget defaults do not pass through the config models: check the handle and interaction
+    ones with the same rules as a config entry (spec 15: shape, size 4-40, weight 1-8, offset,
+    #rrggbb[aa] colours, strict booleans)."""
+    try:
+        HandleConfig.model_validate(asdict(defaults.handle))
+        InteractionConfig.model_validate(asdict(defaults.interaction))
+    except ValidationError as exc:
+        raise ValueError(f"widget {name!r}: invalid handle or interaction default: {exc}") from exc
 
 
 def widget_names() -> list[str]:
@@ -59,6 +81,29 @@ def request_for(cfg: PanelConfig) -> PanelRequest:
         state=cfg.state or d.state,
         label=d.label,
         fallback_length=d.length,
+        handle=_handle(cfg, d.handle),
+        interaction=_interaction(cfg, d.interaction),
+    )
+
+
+def _handle(cfg: PanelConfig, default: HandleSpec) -> HandleSpec:
+    """Key by key: the entry's [handle] value, else the widget's default (None = the theme's)."""
+    own = cfg.handle
+    return HandleSpec(
+        **{
+            key: getattr(default, key) if getattr(own, key) is None else getattr(own, key)
+            for key in ("shape", "size", "weight", "offset", "color", "hover_color")
+        }
+    )
+
+
+def _interaction(cfg: PanelConfig, default: Interaction) -> Interaction:
+    own = cfg.interaction
+    return Interaction(
+        **{
+            key: getattr(default, key) if getattr(own, key) is None else getattr(own, key)
+            for key in ("click", "hover", "drag")
+        }
     )
 
 
@@ -89,6 +134,22 @@ def moved_default_paths(config: Config) -> list[str]:
         if panel.widget == "system_bar"
         and any(v is not None for v in (panel.edge, panel.length, panel.depth))
         and all(getattr(panel, k) is None for k in _PLACEMENT)
+    ]
+
+
+_ALL_OFF = Interaction(click=False, hover=False, drag=False)
+
+
+def all_off_paths(config: Config) -> list[str]:
+    """Key paths of the panel entries whose click, hover and drag are all off (entry over the
+    widget's default): they open and close only through `state` (decision 7). EdgeShellApp
+    logs them once per config load; unknown widgets are left to validate_widgets."""
+    return [
+        f"monitors.{name}.panels.{i}"
+        for name, mon in config.monitors.items()
+        for i, panel in enumerate(mon.panels)
+        if panel.widget in _DEFAULTS
+        and _interaction(panel, _DEFAULTS[panel.widget].interaction) == _ALL_OFF
     ]
 
 
