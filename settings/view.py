@@ -14,7 +14,7 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 from settings.document import UserDocument
 from settings.fields import FieldRow
@@ -85,9 +85,17 @@ class SettingsView(Gtk.Box):
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
         or a hand edit); keeps the visible page."""
         visible = self.stack.get_visible_child_name()
-        for child in self.stack.get_children():
+        for row in self.rows:
+            row.cancel_pending()  # pending values go with the old rows, never written later
+        retired = self.stack.get_children()
+        for child in retired:
             self.stack.remove(child)
-            child.destroy()
+        if retired:
+            # destroyed once the loop is idle, not here: a rebuild runs inside the signal of a
+            # widget on these pages (a combo's "changed", a panel button's "clicked"), and GTK
+            # finishes that emission on the widget afterwards (destroyed and freed here, it
+            # printed g_object_notify / g_object_set "G_IS_OBJECT" criticals)
+            GLib.idle_add(_destroy_all, retired)
         self.rows, self.previews = [], {}
         valid = self.session.config is not None
         self._page("theme", "Theme", self._theme_page(), valid)
@@ -363,6 +371,12 @@ class SettingsView(Gtk.Box):
                 f"{self.session.path} was changed outside this window; showing the new values",
                 Gtk.MessageType.INFO,
             )
+
+
+def _destroy_all(widgets: list[Gtk.Widget]) -> bool:
+    for widget in widgets:
+        widget.destroy()
+    return GLib.SOURCE_REMOVE
 
 
 def _panel_edit(entry_path: tuple, ops: list[tuple[str, str, Any]]) -> Edit:

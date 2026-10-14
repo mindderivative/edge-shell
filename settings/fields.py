@@ -374,6 +374,10 @@ class FieldRow(Gtk.Box):
         self._shown = value
         self._on_change(self.path, value)
 
+    def cancel_pending(self) -> None:
+        """Drop a debounced value without writing it (the row is about to be discarded)."""
+        self._cancel()
+
     def _cancel(self) -> None:
         if self._timer:
             GLib.source_remove(self._timer)

@@ -10,7 +10,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 pytest.importorskip("tomlkit")
 
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
@@ -474,3 +474,37 @@ def test_a_refused_edit_snaps_back_and_another_rows_reset_leaves_its_row_alone(m
 
     type_into(view, MAX_LENGTH, 300)  # the same value again, valid now: written
     assert "max_length = 300" in path.read_text() and not refused.error.get_visible()
+
+
+def drain():
+    ctx = GLib.MainContext.default()
+    while ctx.iteration(False):
+        pass
+
+
+def test_a_rebuild_from_a_widgets_own_signal_destroys_that_widget_only_when_idle(make):
+    """The align combo's "changed" (a title key) rebuilds the page. Destroying the combo inside
+    its own emission let GTK finish the emission (the popup menu hiding, popup-shown) on a
+    finalized widget: g_object_notify / g_object_set "G_IS_OBJECT" criticals in the settings
+    terminal. The old pages leave the stack at once and are destroyed when the loop is idle."""
+    view, path = make()
+    combo = row(view, (*P0, "align")).editor.widget
+    destroyed = []
+    combo.connect("destroy", lambda *_a: destroyed.append(combo))
+    combo.set_active_id("end")  # as the user's pick in the popup does
+    assert 'align = "end"' in path.read_text()
+    assert row(view, (*P0, "align")).editor.widget is not combo  # the page was rebuilt
+    assert not destroyed and combo.get_parent() is not None  # alive through its emission
+    drain()
+    assert destroyed == [combo]
+
+
+def test_a_rebuild_cancels_the_old_rows_pending_values_at_once(make, pending):
+    """Their destroy now waits for the idle loop: a pending pause must not write meanwhile."""
+    view, path = make()
+    old = row(view, DEPTH)
+    old.editor.widget.set_value(120)
+    assert old._timer
+    path.write_text(USER.replace('"edge"', '"both"'))
+    view.file_changed()  # a hand edit: rebuild, pending values go with the old rows
+    assert not old._timer
