@@ -20,10 +20,18 @@ class ConfigWatcher:
         self._on_change = on_change
         self._debounce_ms = debounce_ms
         self._timer = 0
+        self._monitor = self._watch(path)
+        # A symlinked config (a dotfiles repo): a write to the file it points to (an atomic
+        # replace by the settings window or an editor, or an in-place save) changes nothing at
+        # the link itself, so that file is watched too. The link stays watched (re-pointed).
+        self._target = self._watch(path.resolve()) if path.is_symlink() else None
+
+    def _watch(self, path: Path) -> Gio.FileMonitor:
         gfile = Gio.File.new_for_path(str(path))
         # WATCH_MOVES so editors that save by renaming a temp file over the config still trigger
-        self._monitor = gfile.monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        self._monitor.connect("changed", self._on_event)
+        monitor = gfile.monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        monitor.connect("changed", self._on_event)
+        return monitor
 
     def _on_event(self, _monitor, _file, _other, event) -> None:
         if event not in _TRIGGERS:
