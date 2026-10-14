@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("tomlkit")
 
+from settings import files  # noqa: E402
 from settings.session import ChangedOutside, SettingsSession, check_text  # noqa: E402
 from shell.config.diff import Change, diff_configs  # noqa: E402
 from shell.config.models import ConfigError  # noqa: E402
@@ -154,6 +155,8 @@ def test_an_unwritable_folder_is_an_error_not_a_crash(path):
     if os.geteuid() == 0:
         pytest.skip("root can write into a read-only folder")
     s = SettingsSession(path)
+    s.apply(lambda d: d.set(SHELL, "both"))
+    changed = path.read_text()
     os.chmod(path.parent, 0o500)
     try:
         with pytest.raises(ConfigError, match="cannot write"):
@@ -162,7 +165,7 @@ def test_an_unwritable_folder_is_an_error_not_a_crash(path):
             s.revert()
     finally:
         os.chmod(path.parent, 0o700)
-    assert path.read_text() == USER and s.history == [] and s.text == USER
+    assert path.read_text() == changed and len(s.history) == 1 and s.text == changed
 
 
 def test_an_edit_can_fix_an_invalid_file(path):
@@ -203,3 +206,78 @@ def test_adding_a_panel_reloads_as_panel_add(path):
     SettingsSession(path).apply(lambda d: d.add_panel("HDMI-A-1", "clock"))
     old, new = store.reload()
     assert diff_configs(old, new) == [Change("panel-add", "HDMI-A-1", 1)]
+
+
+def test_a_failed_backup_writes_nothing_and_is_tried_again(path):
+    (path.parent / "config.toml.bak").mkdir()  # the backup cannot be written
+    s = SettingsSession(path)
+    with pytest.raises(ConfigError, match=r"cannot write .*config\.toml\.bak"):
+        s.apply(lambda d: d.set(DEPTH, 80))
+    assert not s.backed_up and path.read_text() == USER and s.history == []
+    (path.parent / "config.toml.bak").rmdir()
+    s.apply(lambda d: d.set(DEPTH, 80))
+    assert (path.parent / "config.toml.bak").read_text() == USER
+
+
+def test_a_failed_write_changes_nothing(path, monkeypatch):
+    s = SettingsSession(path)
+    real = files.write_atomic
+
+    def full_disk(target, data, **kw):
+        if target == path:
+            raise OSError(28, "No space left on device")
+        return real(target, data, **kw)
+
+    monkeypatch.setattr(files, "write_atomic", full_disk)
+    with pytest.raises(ConfigError, match="No space left"):
+        s.apply(lambda d: d.set(DEPTH, 80))
+    assert path.read_text() == USER and s.history == [] and s.text == USER
+
+
+def test_an_edit_that_changes_nothing_writes_nothing(path):
+    s = SettingsSession(path)
+    inode = path.stat().st_ino
+    config = s.apply(lambda d: d.set(SHELL, "edge"))  # already "edge"
+    assert config.monitor("HDMI-A-1").shell == "edge"
+    assert path.stat().st_ino == inode and path.read_text() == USER
+    assert s.history == [] and not s.backed_up
+    assert not (path.parent / "config.toml.bak").exists()
+
+
+def test_revert_with_no_changes_does_not_rewrite_the_file(path):
+    s = SettingsSession(path)
+    inode = path.stat().st_ino
+    s.revert()
+    assert path.stat().st_ino == inode and path.read_text() == USER
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.undo()
+    inode = path.stat().st_ino
+    s.revert()
+    assert path.stat().st_ino == inode and s.history == []
+
+
+BROKEN = '[monitors.HDMI-A-1]\nshell = "sideways"\n'
+
+
+def test_a_hand_break_keeps_the_last_valid_baseline_for_revert(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    path.write_text(BROKEN)  # broken by hand
+    with pytest.raises(ChangedOutside):
+        s.apply(lambda d: d.set(DEPTH, 90))
+    assert s.config is None
+    s.revert()
+    assert path.read_text() == USER and s.config is not None
+
+
+def test_a_file_invalid_at_open_can_be_fixed_by_hand_then_reverted(path):
+    path.write_text(BROKEN)
+    s = SettingsSession(path)
+    assert s.config is None
+    path.write_text(USER)  # fixed by hand
+    with pytest.raises(ChangedOutside):
+        s.revert()
+    assert s.config is not None and path.read_text() == USER
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.revert()
+    assert path.read_text() == USER

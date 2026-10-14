@@ -5,6 +5,15 @@ shell's own rules (shell.config.loader + registry.validate_widgets) and only the
 atomically; the running shell picks it up through its file watcher. A change the shell would
 reject is never written. Before the first write of a session the file is copied to
 config.toml.bak (`main.py --restore-config` puts it back).
+
+Limits, by design: the file is read with universal newlines, so the first edit rewrites CRLF
+line endings as LF (the .bak stays byte-exact) and `changed_outside` cannot see a hand edit
+that only changes line endings. When the config file is missing at open, an older
+config.toml.bak from a previous session survives (the first write only backs up an existing
+file), and `--restore-config` would restore that older file. An edit that raises something
+other than ConfigError escapes `apply` (UserDocument wraps the realistic ones). A file that
+is invalid when the session opens has no valid baseline: Revert all would only rewrite it, so
+the window offers the hand fix or `--restore-config` instead.
 """
 
 from __future__ import annotations
@@ -47,6 +56,8 @@ class SettingsSession:
         self.config: Config | None = None  # None while the file on disk is invalid
         self.error: str | None = None  # why the file on disk is invalid
         self.reload()
+        # An invalid file at open has no valid baseline; keep its text so Revert all is a no-op
+        # (a later valid hand edit becomes the baseline through rebase).
         self.start_text = self.text
 
     def reload(self) -> None:
@@ -66,12 +77,15 @@ class SettingsSession:
         return files.read_text(self.path) != self.text
 
     def rebase(self) -> None:
-        """Re-read a file that was changed outside the window (a hand edit): the hand edit
+        """Re-read a file that was changed outside the window (a hand edit): a valid hand edit
         becomes the new starting point (Revert all goes back to it, never past it) and the
-        undo history, which led to a file that no longer exists, is cleared."""
+        undo history, which led to a file that no longer exists, is cleared. An INVALID hand
+        edit does not: the last valid baseline stays, so Revert all (confirmed by the user)
+        is a way out of a broken file instead of rewriting the same broken text."""
         self.reload()
         self.history.clear()
-        self.start_text = self.text
+        if self.config is not None:
+            self.start_text = self.text
 
     def apply(self, edit: Edit) -> Config:
         """Apply one change and write it; returns the new config. Raises ChangedOutside (the
@@ -85,8 +99,11 @@ class SettingsSession:
         doc = UserDocument(self.text)
         edit(doc)
         config = check_text(doc.text, self.default_path)
+        if doc.text == self.text:
+            return config  # nothing changed: no backup, no write, no do-nothing undo step
         if not self.backed_up:
-            self._write_file(lambda: files.write_backup(self.path))
+            backup = files.backup_path(self.path.resolve())
+            self._write_file(lambda: files.write_backup(self.path), backup)
             self.backed_up = True
         self._write_file(lambda: files.write_atomic(self.path, doc.text))
         self.history.append(self.text)
@@ -116,14 +133,15 @@ class SettingsSession:
                 f"{self.path} was changed outside the settings window; Revert all keeps that "
                 "change (it is the new starting point)"
             )
-        self._write_file(lambda: files.write_atomic(self.path, self.start_text))
+        if self.start_text != self.text:
+            self._write_file(lambda: files.write_atomic(self.path, self.start_text))
         self.history.clear()
         self.reload()
 
-    def _write_file(self, write: Callable[[], Any]) -> None:
+    def _write_file(self, write: Callable[[], Any], target: Path | None = None) -> None:
         """Run one file write; an OSError (read-only folder, disk full) is a ConfigError the
         window shows, never an exception inside a GTK callback."""
         try:
             write()
         except OSError as exc:
-            raise ConfigError(f"cannot write {self.path}: {exc}") from None
+            raise ConfigError(f"cannot write {target or self.path}: {exc}") from None
