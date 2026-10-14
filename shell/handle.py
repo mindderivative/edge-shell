@@ -4,11 +4,14 @@ The handle is drawn by the panel's own window (shell.edge_panel) with shell.hand
 hit target is a separate, larger box than the drawn shape: at least HIT_ALONG x HIT_ACROSS px
 (today's 44 x 14 handle button), growing with the shape size and the frame thickness.
 
-Across the edge the shape is centred in the last `thickness` px of the panel's mass: in the
-middle of the frame band while collapsed, `thickness / 2` px inside the body's inner edge
-while extended, so it rides the inner edge and never leaves the mass (the border is drawn
-outside the mass, so it never covers the handle). Across it never uses more than
-`band_room(thickness)` px, which keeps BAND_CLEAR px of the band empty on both sides.
+Across the edge the shape's centre sits `centre_inset(thickness)` px inside the body's inner
+edge (the band's inner edge while collapsed): 5 px from the default 10 px frame up, so a
+thick frame keeps the handle hugging the edge the panel opens from (Gate B, thickness 64);
+on a thinner frame `thickness / 2`, the middle of its band. It rides the inner edge and never
+leaves the mass (the border is drawn outside the mass, so it never covers the handle).
+Across it never uses more than `shape_room(thickness)` px: `band_room` of the frame, but no
+more than at the default thickness, so the shape keeps BAND_CLEAR px clear of both band
+edges and does not grow with a thicker frame.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ HIT_ALONG = 44  # minimum hit target along the edge
 HIT_ACROSS = 14  # minimum hit target across the edge
 HIT_PAD = 8  # the hit target reaches this far past the drawn shape along the edge
 BAND_CLEAR = 2  # empty band px kept on each side of the shape (1 on a band under 8 px)
+DEFAULT_THICKNESS = 10  # the theme's default frame; the handle's look is tuned for it
+SHAPE_INSET = DEFAULT_THICKNESS / 2  # px from the body's inner edge to the shape's centre
 
 
 @dataclass(frozen=True)
@@ -107,12 +112,32 @@ def band_room(thickness: int) -> int:
     return max(0, thickness - 2 * clear)
 
 
+def shape_room(thickness: int) -> int:
+    """Px the drawn shape may use across (draw_handle's `max_across`): `band_room`, but never
+    more than on the default frame (6 px), so a thicker frame does not make the shape taller.
+    A thinner frame still shrinks it (4 px at 8 and 6, 0 at 2)."""
+    return band_room(min(thickness, DEFAULT_THICKNESS))
+
+
+def centre_inset(thickness: int) -> float:
+    """Px from the body's inner edge to the shape's centre: SHAPE_INSET (5) from the default
+    frame up, the middle of the band (`thickness / 2`) on a thinner one."""
+    return min(thickness / 2, SHAPE_INSET)
+
+
+def shape_offset(thickness: int, d: float) -> float:
+    """Distance of the shape's centre from the screen edge at depth `d`: `centre_inset` px
+    inside the body's inner edge, which is `thickness + d` px from the screen edge."""
+    return thickness + d - centre_inset(thickness)
+
+
 def hit_size(thickness: int, size: int, length: int) -> tuple[int, int]:
     """(along, across) px of the hit target; never longer than the body. Across it is today's
-    14 px, or the band when the frame is thicker (the shape is drawn inside the target, so it
-    must hold the band); extended it never reaches further into the content than that."""
+    14 px on any frame: the shape's room (at most 5 + 3 px from the body's inner edge) always
+    fits in it, so a thick frame does not turn the whole band into the target; extended it
+    never reaches further into the content than that."""
     along = min(length, max(HIT_ALONG, size + 2 * HIT_PAD))
-    return along, max(HIT_ACROSS, thickness)
+    return along, HIT_ACROSS
 
 
 def clamp_offset(offset: int, length: int, hit_along: int) -> int:
@@ -136,10 +161,10 @@ def shape_centre(
     edge: Edge, width: float, height: float, thickness: int, d: float
 ) -> tuple[float, float]:
     """Centre of the drawn shape in the hit target's own coordinates (`width` x `height` is its
-    allocation). Along the edge: the middle. Across: `thickness + d - thickness / 2` px from
-    the screen edge."""
+    allocation). Along the edge: the middle. Across: `shape_offset(thickness, d)` px from the
+    screen edge (`centre_inset` px inside the body's inner edge)."""
     across = height if geometry.is_horizontal(edge) else width
-    local = thickness + d - thickness / 2 - hit_inset(thickness, d, round(across))
+    local = shape_offset(thickness, d) - hit_inset(thickness, d, round(across))
     if edge == "bottom":
         return width / 2, height - local
     if edge == "top":

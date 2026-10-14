@@ -367,7 +367,7 @@ class EdgePanel(WaylandWindow):
                 self.spec.edge,
                 cx,
                 cy,
-                hd.band_room(t.thickness),  # 2 px of the band stay clear (decision 12)
+                hd.shape_room(t.thickness),  # band edges stay clear (decisions 5, 12)
             )
         except Exception:  # never let a draw error escape into GTK's main loop
             if not self._draw_failed:

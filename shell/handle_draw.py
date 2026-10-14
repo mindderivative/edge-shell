@@ -5,8 +5,9 @@ Shapes are drawn in a canonical frame centred on the handle: u along the edge, v
 onto the real edge. The chevron morphs with the panel's depth (`morph` = d / depth): at 0 it
 points where the panel opens, at 0.5 it is a flat bar, at 1 it points back to the screen edge.
 
-`python -m shell.handle_draw --sheet FILE.png` renders every shape on every edge at several
-morph values, enlarged, for a visual check without starting the shell.
+`python -m shell.handle_draw --sheet FILE.png [--thickness N]` renders every shape on every
+edge at several morph values, enlarged, for a visual check without starting the shell: the
+handle on its frame band and body, with the body's inner edge marked in red.
 """
 
 from __future__ import annotations
@@ -67,8 +68,9 @@ def draw_handle(
     max_across: float,
 ) -> None:
     """Draw `shape` centred on (cx, cy): `size` px along the edge, `weight` px thick, never
-    more than `max_across` px across, stroke included (callers pass shell.handle.band_room,
-    so the shape keeps 2 px of the band empty on each side, 1 px on a band under 8 px). A
+    more than `max_across` px across, stroke included (callers pass shell.handle.shape_room,
+    so the shape keeps 2 px of the band empty on each side, 1 px on a band under 8 px, and
+    is no taller on a thick frame than on the default one). A
     weight above `max_across` is drawn `max_across` thick; a chevron gets flatter to fit."""
     if shape not in SHAPES:
         raise ValueError(f"unknown handle shape {shape!r}")
@@ -106,16 +108,34 @@ def draw_handle(
     cr.restore()
 
 
+SHEET_DEPTH = 16  # the review sheet's panel depth: morph 1 draws the body this far out
+
+
+def _strip(
+    edge: Edge, x0: float, y0: float, cell: float, start: float, width: float
+) -> tuple[float, float, float, float]:
+    """The sheet cell's strip `start`..`start + width` px from its screen edge (x, y, w, h)."""
+    return {
+        "top": (x0, y0 + start, cell, width),
+        "bottom": (x0, y0 + cell - start - width, cell, width),
+        "left": (x0 + start, y0, width, cell),
+        "right": (x0 + cell - start - width, y0, width, cell),
+    }[edge]
+
+
 def render_sheet(path: str, thickness: int = 10, zoom: int = 6) -> tuple[int, int]:
     """Write a PNG: one row per shape and edge, columns at morph 0, 0.25, 0.5, 0.75, 1. Each
-    cell is a `thickness` px frame band (frame colour) with the handle in the theme's rest
-    colour, then the same in the hover colour; enlarged `zoom` times without smoothing."""
-    from shell.handle import band_room
+    cell is the panel's mass in the frame colour (the `thickness` px band plus the body out
+    to depth morph x SHEET_DEPTH), a 1 px red line just past the body's inner edge, and the
+    handle where the shell puts it (shell.handle.shape_offset, at most shape_room across) in
+    the theme's rest colour, then the same in the hover colour; enlarged `zoom` times without
+    smoothing."""
+    from shell.handle import shape_offset, shape_room
     from shell.theme import hex_to_rgba
 
     frame, rest, hover = (hex_to_rgba(c) for c in ("#0b0c0d", "#7b7f84", "#e6e8ea"))
     morphs = (0.0, 0.25, 0.5, 0.75, 1.0)
-    cell, pad = 48, 4  # px per cell at 1x, and the white gap around it
+    cell, pad = max(48, thickness + SHEET_DEPTH + 8), 4  # px per cell at 1x, white gap
     rows = [(s, e) for s in SHAPES[:3] for e in ("top", "bottom", "left", "right")]
     step = cell + 2 * pad
     width, height = step * len(morphs) * 2, step * len(rows)
@@ -131,24 +151,21 @@ def render_sheet(path: str, thickness: int = 10, zoom: int = 6) -> tuple[int, in
             cr.fill()
             colour = rest if col < len(morphs) else hover
             m = morphs[col % len(morphs)]
-            # the frame band along the cell's own edge
-            band = {
-                "top": (x0, y0, cell, thickness),
-                "bottom": (x0, y0 + cell - thickness, cell, thickness),
-                "left": (x0, y0, thickness, cell),
-                "right": (x0 + cell - thickness, y0, thickness, cell),
-            }[edge]
-            cr.set_source_rgba(*frame)
-            cr.rectangle(*band)
+            d = m * SHEET_DEPTH
+            cr.set_source_rgba(*frame)  # the mass: frame band plus the body out to depth d
+            cr.rectangle(*_strip(edge, x0, y0, cell, 0, thickness + d))
             cr.fill()
-            mid = thickness / 2
+            cr.set_source_rgb(0.9, 0.1, 0.1)  # the body's inner edge, on the desktop side
+            cr.rectangle(*_strip(edge, x0, y0, cell, thickness + d, 1))
+            cr.fill()
+            v = shape_offset(thickness, d)  # handle centre, px from the screen edge
             cx, cy = {
-                "top": (x0 + cell / 2, y0 + mid),
-                "bottom": (x0 + cell / 2, y0 + cell - mid),
-                "left": (x0 + mid, y0 + cell / 2),
-                "right": (x0 + cell - mid, y0 + cell / 2),
+                "top": (x0 + cell / 2, y0 + v),
+                "bottom": (x0 + cell / 2, y0 + cell - v),
+                "left": (x0 + v, y0 + cell / 2),
+                "right": (x0 + cell - v, y0 + cell / 2),
             }[edge]
-            draw_handle(cr, shape, 15, 3, colour, m, edge, cx, cy, band_room(thickness))
+            draw_handle(cr, shape, 15, 3, colour, m, edge, cx, cy, shape_room(thickness))
     big = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * zoom, height * zoom)
     out = cairo.Context(big)
     out.scale(zoom, zoom)

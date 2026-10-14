@@ -126,6 +126,26 @@ def test_place_handle_offsets_along_and_rides_across(make_config, edge, offset, 
     assert s._handle_area.draws == 1
 
 
+@pytest.mark.parametrize(
+    ("edge", "d", "key", "inset"),
+    [
+        ("bottom", 0.0, "margin_bottom", 50),  # 64 - 14: the box ends on the band's inner edge
+        ("bottom", 64.0, "margin_bottom", 114),  # 64 + 64 - 14: on the body's inner edge
+        ("top", 32.0, "margin_top", 82),
+        ("left", 0.0, "margin_start", 50),
+        ("right", 64.0, "margin_end", 114),
+    ],
+)
+def test_place_handle_on_a_thick_frame(make_config, edge, d, key, inset):
+    # Gate B (thickness 64): a 14 px target at the body's inner edge, not the whole band
+    s = stub(make_config, edge=edge, _theme=make_config(theme={"thickness": 64}).theme)
+    ep.EdgePanel._size_handle(s)
+    along_first = edge in ("top", "bottom")
+    assert s._handle.set["size_request"] == ((44, 14) if along_first else (14, 44))
+    ep.EdgePanel._place_handle(s, d)
+    assert s._handle.set[key] == (inset,)
+
+
 # ---- drawing ------------------------------------------------------------------------
 
 
@@ -166,13 +186,15 @@ def test_a_draw_error_is_logged_not_raised(make_config, caplog):
     assert "drawing the handle of dock failed" in caplog.text
 
 
+@pytest.mark.parametrize("thickness", [10, 64])
 @pytest.mark.parametrize(
     ("edge", "d", "w", "h"), [("left", 32.0, 14, 44), ("bottom", 64.0, 44, 14)]
 )
-def test_the_draw_call_is_pinned(make_config, edge, d, w, h):
-    """_on_handle_draw must pass exactly the look, morph, centre and band room to draw_handle."""
+def test_the_draw_call_is_pinned(make_config, edge, d, w, h, thickness):
+    """_on_handle_draw must pass exactly the look, morph, centre and shape room to draw_handle."""
     handle = HandleSpec(shape="chevron")
-    s = stub(make_config, edge=edge, handle=handle, _d=d)
+    theme = make_config(theme={"thickness": thickness}).theme
+    s = stub(make_config, edge=edge, handle=handle, _d=d, _theme=theme)
     got = draw(s, w, h)
     t, look = s._theme, s._look
     want = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
@@ -185,11 +207,25 @@ def test_the_draw_call_is_pinned(make_config, edge, d, w, h):
         hd.morph(d, 64),
         edge,
         *hd.shape_centre(edge, w, h, t.thickness, d),
-        hd.band_room(t.thickness),
+        hd.shape_room(t.thickness),
     )
     want.flush()
     assert bytes(got.get_data()) == bytes(want.get_data())
     assert any(bytes(want.get_data()))  # something was drawn
+
+
+@pytest.mark.parametrize("edge", ["top", "bottom", "left", "right"])
+def test_a_thick_frame_draws_like_the_default_extended(make_config, edge):
+    # Gate B: collapsed on a 64 px frame the box sits on the band's inner edge, extended on
+    # the body's; the shape inside it is the default frame's extended handle, byte for byte
+    # (dots: no morph, so collapsed and extended draw the same shape)
+    w, h = (44, 14) if edge in ("top", "bottom") else (14, 44)
+    thick = make_config(theme={"thickness": 64}).theme
+    default = draw(stub(make_config, edge=edge, _d=64.0), w, h)
+    assert any(bytes(default.get_data()))
+    for d in (0.0, 32.0, 64.0):
+        got = draw(stub(make_config, edge=edge, _d=d, _theme=thick), w, h)
+        assert bytes(got.get_data()) == bytes(default.get_data()), d
 
 
 def test_a_draw_error_is_logged_once_per_look(make_config, caplog):

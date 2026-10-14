@@ -96,10 +96,11 @@ def test_colours_rest_hover_and_alpha():
 
 
 def band_profile(shape, edge, morph, size, weight, thickness, d):
-    """Render like EdgePanel does: in a 44 x 14 hit target at hd.shape_centre, at most
-    hd.band_room(thickness) px across. Returns
+    """Render like EdgePanel does: in its hd.hit_size target (44 x 14 at any thickness) at
+    hd.shape_centre, at most hd.shape_room(thickness) px across. Returns
     {(along px, px from the box's screen-side edge): alpha} of every lit pixel."""
-    w, h = (44, 14) if edge in ("top", "bottom") else (14, 44)
+    along, across = hd.hit_size(thickness, size, 560)
+    w, h = (along, across) if edge in ("top", "bottom") else (across, along)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
     cx, cy = hd.shape_centre(edge, w, h, thickness, d)
     hdraw.draw_handle(
@@ -112,7 +113,7 @@ def band_profile(shape, edge, morph, size, weight, thickness, d):
         edge,
         cx,
         cy,
-        hd.band_room(thickness),
+        hd.shape_room(thickness),
     )
     surface.flush()
     data, stride = surface.get_data(), surface.get_stride()
@@ -129,28 +130,61 @@ MORPHS = (0.0, 0.25, 0.5, 0.75, 1.0)
 @pytest.mark.parametrize("shape", ["dots", "bar", "chevron"])
 @pytest.mark.parametrize("edge", EDGES)
 @pytest.mark.parametrize(("size", "weight"), [(4, 1), (15, 3), (40, 8)])
-@pytest.mark.parametrize(("thickness", "clear"), [(10, 2), (6, 1)])
+@pytest.mark.parametrize(("thickness", "clear"), [(10, 2), (6, 1), (20, 2), (64, 2)])
 def test_the_shape_never_touches_the_band_edges(shape, edge, size, weight, thickness, clear):
-    # collapsed the band is box px 0..T-1; extended (d = 64, the box rides the inner edge)
-    # it is the last T px of the 14 px box. Decision 12: `clear` band px stay empty on both
-    # sides (band px 0, 1, T-2, T-1 at T = 10; 0 and T-1 on the thin T = 6 band), also for
-    # the biggest size and weight (the drawing is clamped to hd.band_room).
-    for d, first in ((0, 0), (64, 14 - thickness)):
+    # The band (the last T px of the mass, ending on the body's inner edge at T + d px from
+    # the screen edge) in box px is `first`..`first + T - 1`, clipped to the 14 px box. At
+    # T = 10: box px 0..9 collapsed, the last 10 px of the box extended (d = 64). Decision
+    # 12: `clear` px stay empty on both sides (band px 0, 1, T-2, T-1 at T = 10; 0 and T-1 on
+    # the thin T = 6 band), also for the biggest size and weight (clamped to hd.shape_room).
+    # Thick frames (20, 64): the shape stays 2 px inside the body's inner edge and inside the
+    # box, wherever the box sits in the band (Gate B).
+    box = hd.hit_size(thickness, size, 560)[1]
+    for d in (0, 64):
+        first = d - hd.hit_inset(thickness, d, box)  # band's screen-side px in box px
         for m in MORPHS:
             profile = band_profile(shape, edge, m, size, weight, thickness, d)
             assert profile, (d, m)
             across = {v for _, v in profile}
-            low, high = first + clear, first + thickness - 1 - clear
+            low = max(first, 0) + clear
+            high = min(first + thickness, box) - 1 - clear
             assert min(across) >= low and max(across) <= high, (d, m, across)
 
 
+@pytest.mark.parametrize("edge", EDGES)
+@pytest.mark.parametrize("thickness", [20, 64])
+def test_a_thick_frame_draws_the_default_frame_shape(edge, thickness):
+    # Gate B: at T = 64 the chevron's tip-to-arm extent grew and the shape sat mid-band. Now
+    # every lit pixel (and its alpha) matches the default 10 px frame: extended the box sits
+    # in the same place on both; collapsed the thick frame matches the default extended.
+    for shape in ("dots", "bar", "chevron"):
+        for m in MORPHS:
+            default = band_profile(shape, edge, m, 15, 3, 10, 64)
+            assert band_profile(shape, edge, m, 15, 3, thickness, 64) == default, (shape, m)
+            assert band_profile(shape, edge, m, 15, 3, thickness, 0) == default, (shape, m)
+
+
+@pytest.mark.parametrize("edge", EDGES)
+def test_the_chevron_extent_does_not_grow_with_the_frame(edge):
+    def rows(thickness):
+        across = {v for _, v in band_profile("chevron", edge, 0.0, 15, 3, thickness, 0)}
+        return max(across) - min(across) + 1
+
+    assert rows(10) == 6  # 2 * 1.5 + 3 px: tip to arm ends, stroke included
+    assert rows(20) == rows(64) == rows(10)
+    assert rows(6) == 4  # a thin frame still shrinks it (band_room(6) = 4)
+
+
 @pytest.mark.parametrize("shape", ["dots", "bar", "chevron"])
-def test_the_four_edges_mirror_each_other(shape):
+@pytest.mark.parametrize("thickness", [10, 20, 64])
+def test_the_four_edges_mirror_each_other(shape, thickness):
     # the same pixels on every edge, measured from the screen edge (alpha may differ by a
     # few levels: cairo's anti-aliasing is not exactly mirror-symmetric)
     for d in (0, 64):
         for m in MORPHS:
-            top, bottom, left, right = (band_profile(shape, e, m, 15, 3, 10, d) for e in EDGES)
+            top, bottom, left, right = (
+                band_profile(shape, e, m, 15, 3, thickness, d) for e in EDGES
+            )
             for a, b in ((top, bottom), (left, right), (top, left)):
                 assert set(a) == set(b), (d, m)
                 assert all(abs(a[k] - b[k]) <= 16 for k in a), (d, m)
@@ -186,6 +220,13 @@ def test_the_review_sheet(tmp_path, capsys):
     assert hdraw.main(["--sheet", str(out)]) == 0
     assert out.stat().st_size > 0
     assert "handles.png (3360x4032)" in capsys.readouterr().out
+
+
+def test_the_review_sheet_grows_its_cells_for_a_thick_frame(tmp_path, capsys):
+    # T = 64: cells of 64 + 16 (sheet depth) + 8 = 88 px, 96 with the gap; 10 x 12 cells, x 6
+    out = tmp_path / "thick.png"
+    assert hdraw.main(["--sheet", str(out), "--thickness", "64"]) == 0
+    assert "thick.png (5760x6912)" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("shape", ["star", "auto"])
