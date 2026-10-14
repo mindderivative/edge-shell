@@ -304,3 +304,139 @@ def test_a_pending_value_does_not_break_a_hand_edit_reload(make, pending):
     view.file_changed()
     assert row(view, SHELL).editor.widget.get_active_id() == "both"
     assert "depth" not in path.read_text()
+
+
+def edge_choices(view, entry=0):
+    combo = row(view, (*("monitors", "HDMI-A-1", "panels", entry), "edge")).editor.widget
+    return [r[0] for r in combo.get_model()], combo.get_active_id()
+
+
+def title(view, entry=0):
+    return panel_editor(view).expanders[entry].get_label()
+
+
+def test_reset_of_a_title_key_retitles_the_panel_and_keeps_it_open(make, corner_registry):
+    view, _ = make()
+    plain = title(view)
+    view._on_change((*P0, "edge"), "top")
+    assert title(view) != plain
+    view._on_reset((*P0, "edge"))
+    assert title(view) == plain and panel_editor(view).expanders[0].get_expanded()
+
+    view._on_change((*P0, "widget"), "box")
+    boxed = title(view)
+    view._on_change((*P0, "width"), 400)
+    assert title(view) != boxed
+    view._on_reset((*P0, "width"))
+    assert title(view) == boxed and panel_editor(view).expanders[0].get_expanded()
+
+
+def test_reset_of_a_corner_gives_the_edge_combo_the_default_corners_edges(make, corner_registry):
+    view, _ = make()
+    view._on_change((*P0, "widget"), "box")
+    before = (title(view), edge_choices(view))
+    view._on_change((*P0, "corner"), "top-right")
+    assert edge_choices(view)[0] == ["top", "right"]
+    view._on_reset((*P0, "corner"))
+    assert (title(view), edge_choices(view)) == before
+    assert edge_choices(view)[1] is not None
+
+
+@pytest.fixture
+def timers(monkeypatch):
+    """Spin pauses never fire on their own, but their timer ids are real (a flush cancels)."""
+    import settings.fields as fields
+
+    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+
+
+THICKNESS = ("monitors", "HDMI-A-1", "theme", "thickness")
+
+
+def test_flush_applies_every_pending_value_even_when_one_rebuilds_the_page(
+    make, corner_registry, timers
+):
+    view, path = make()
+    view._on_change((*P0, "widget"), "box")
+    row(view, (*P0, "width")).editor.widget.set_value(420)  # a title key: its write rebuilds
+    row(view, THICKNESS).editor.widget.set_value(17)  # a later row on the same page
+    view.flush()
+    text = path.read_text()
+    assert "width = 420" in text and "thickness = 17" in text
+    assert "420x" in title(view)
+
+
+def test_flush_rebuilds_once_at_the_end(make, corner_registry, timers):
+    view, _ = make()
+    view._on_change((*P0, "widget"), "box")
+    rebuilds = []
+    original = view.rebuild
+    view.rebuild = lambda: (rebuilds.append(1), original())
+    row(view, (*P0, "width")).editor.widget.set_value(420)
+    row(view, (*P0, "height")).editor.widget.set_value(333)
+    row(view, THICKNESS).editor.widget.set_value(17)
+    view.flush()
+    assert len(rebuilds) == 1
+
+
+def test_revert_after_a_hand_edit_with_a_pending_value_keeps_the_outside_warning(make, timers):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('"edge"', '"both"'))
+    view.revert()
+    assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
+    assert "depth" not in path.read_text() and 'shell = "both"' in path.read_text()
+
+
+def test_file_changed_with_pending_rows_rebuilds_once(make, timers):
+    view, path = make()
+    rebuilds = []
+    original = view.rebuild
+    view.rebuild = lambda: (rebuilds.append(1), original())
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('"edge"', '"both"'))
+    view.file_changed()
+    assert len(rebuilds) == 1 and "changed outside" in view.banner_label.get_text()
+
+
+def test_a_warning_banner_clears_on_the_next_good_edit(make):
+    view, _ = make()
+    view.show_banner("old", Gtk.MessageType.WARNING)
+    view._on_change(DEPTH, 90)
+    assert not view.banner.get_visible()
+
+
+def test_a_banner_clears_after_undo(make):
+    view, _ = make()
+    view._on_change(DEPTH, 90)
+    view.show_banner("old", Gtk.MessageType.WARNING)
+    view.undo()
+    assert not view.banner.get_visible()
+
+
+def test_a_rejected_edit_leaves_no_panel_marked_to_open(make):
+    view, _ = make()
+    view._on_change((*P0, "pos"), 400)
+    view._on_change((*P0, "align"), "end")  # a title key, rejected
+    assert view._expand == {}
+    panel_editor(view).add("nope")  # a structural edit, rejected
+    assert view._expand == {}
+    view.rebuild()
+    assert not panel_editor(view).expanders[0].get_expanded()
+
+
+def test_the_invalid_file_banner_names_the_restore_command(make):
+    view, path = make()
+    path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')
+    view.file_changed()
+    assert "--restore-config" in view.banner_label.get_text()
+
+
+def test_undo_is_insensitive_after_a_rebuild_with_no_history(make):
+    view, path = make()
+    view._on_change(DEPTH, 90)
+    assert view.undo_button.get_sensitive()
+    path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')  # invalid: no refresh runs
+    view.file_changed()
+    assert not view.session.history and not view.undo_button.get_sensitive()

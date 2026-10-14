@@ -33,7 +33,7 @@
 9. **A panel's expander title** shows `N. widget: edge, align`, or for a corner panel `N. widget: corner, from edge, WIDTHxHEIGHT`; changing the widget, edge, align, corner, width or height (`TITLE_KEYS`) rebuilds the page so the title (and, for widget and corner, the rows) follows, and keeps that panel open. Adding a panel opens the new one, moving opens the moved one. *Cost:* none.
 10. **The right-click needs the handle to take input**: a panel with click, hover and drag all off takes no input while collapsed (spec 15), so its handle cannot open the window; any other handle, the CLI or the shortcut can. The frame band stays click-through (no frame click). *Cost:* none.
 11. **Corner panels in the settings window: the corner plan's contract, nothing private.** *Default pending Phil.* Each panel entry shows the rows of its widget's kind: `form.panel_for(registry.widget_kind(req.widget), corner)`. The edge section is `PanelConfig` without `CORNER_ONLY_KEYS`; the corner section is `PanelConfig` without `EDGE_ONLY_KEYS`, in the order widget, corner, edge, width, height, state; `SHARED_KEYS` and the handle and interaction tables are in both. A corner panel's edge row offers only the corner's two edges (`corner.split("-")`). Placeholders and defaults come from `registry.defaults(name)` (a `CornerDefaults` branch in `settings/values.py`), never `registry._DEFAULTS`. A new corner entry is just `{"widget": "widget_panel"}`. *Cost if Phil wants corner panels on their own page:* a second list editor per monitor (about half a task), against Plan 5's one panel list.
-12. **Changing a panel's widget kind or its corner is ONE compound edit.** *Default pending Phil.* `settings.values.panel_ops` turns one row change into steps applied to the same document and written once (one reload). A widget of the other kind also unsets the keys only the old kind takes (a dock turned into `widget_panel` loses `align`, `length`, …; the shell would otherwise reject the entry). A corner (or a corner widget landing in a corner) that does not contain the entry's `edge` also unsets that edge, so the panel opens from the widget's edge or the corner's default edge (`default_edge`). Resetting a panel's `corner` is the same edit with the key unset (`panel_ops(entry, "corner", None)`; the edge check uses the widget's corner), so `_on_reset` sends a panel's own keys through `panel_ops` too. *Cost if Phil prefers to set the new edge explicitly:* one line in `panel_ops` (`("set", "edge", default_edge(corner))`) and two expected values.
+12. **Changing a panel's widget kind or its corner is ONE compound edit.** *Default pending Phil.* `settings.values.panel_ops` turns one row change into steps applied to the same document and written once (one reload). A widget of the other kind also unsets the keys only the old kind takes (a dock turned into `widget_panel` loses `align`, `length`, …; the shell would otherwise reject the entry). A corner (or a corner widget landing in a corner) that does not contain the entry's `edge` also unsets that edge, so the panel opens from the widget's edge or the corner's default edge (`default_edge`). Resetting a panel's `corner` is the same edit with the key unset (`panel_ops(entry, "corner", None)`; the edge check uses the widget's corner), so `_on_reset` uses `panel_ops` for `corner` only and a plain unset for every other key; a reset of a `TITLE_KEYS` key rebuilds structurally and keeps the panel open, like a change. *Cost if Phil prefers to set the new edge explicitly:* one line in `panel_ops` (`("set", "edge", default_edge(corner))`) and two expected values.
 13. **The mouse wheel scrolls the page; it never edits a value.** *Default pending Phil.* Found by the independent review: with live apply, a wheel over DP-1's mode row set it to `edge` (an Edge Shell frame over the Plasma panel, against "never touch DP-1"), and over thickness it rebuilt the monitor. Every combo box and spin button gets `wheel_scrolls_the_page` (`settings/fields.py`), a `scroll-event` handler that stops the widget's own handling (`GObject.signal_stop_emission_by_name`) and returns False, so the page's `ScrolledWindow` scrolls instead. *Cost if Phil wants wheel edits back:* wheel edits only on the focused widget (a focus check in `_pass_scroll`), small.
 14. **One settings window per config file.** *Default pending Phil.* The id carries a hash of the resolved path: a second launch with another `--config` (e.g. the gate's `/tmp/edge-settings.toml` while the real config is open) opens its own window instead of silently raising the first one, which edits a different file. *Cost:* none.
 15. **Fabric's unauthenticated D-Bus client is switched off** (Task 12, its own commit). *Default pending Phil.* `fabric.Application` registers `org.Fabric.fabric.edge-shell` with `Execute` and `Evaluate` methods that run any Python inside the shell for any session-bus client, with no caller check (`fabric/core/application.py`, `DBusClient`); nothing in this repository uses them. `Application(APP_NAME, *self._early, open_client=False)` keeps the bus name (the `Gtk.Application` owns it, so `_already_running` still works) and drops the client. *Cost if Phil wants it back* (e.g. for `fabric-cli`): revert the one-line commit.
@@ -3488,7 +3488,7 @@ Before this task: tomlkit must be installed (Prerequisites: Phil installs it him
 
 **Interfaces:**
 - Consumes: `FieldRow` (Task 7), `PanelEditor` (Task 8), `SettingsSession`, `ChangedOutside`, `check_text` (Task 4), `config_form`, `MODE_HINTS`, `SectionSpec` (Task 5), `field_value`, `layout_preview`, `lookup`, `monitor_names`, `panel_ops` (Task 6), `requests_for`, `widget_names` (`shell/registry.py`), `registry.widget_kind` (Plan 5), `Output` (`shell/outputs.py`); in tests the `corner_registry` fixture.
-- Produces: `TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")`; `class SettingsView(Gtk.Box)(session, outputs)` with `.session`, `.outputs` (name -> Output), `.form`, `.rows`, `.previews` (monitor -> label), `.stack` (pages `theme`, `monitor:NAME`), `.banner`, `.banner_label`, `.undo_button`; methods `rebuild()`, `refresh()`, `section_rows(section, prefix) -> Gtk.Widget`, `apply(edit, row=None, structural=False) -> bool`, `undo()`, `revert()` (both: a hand edit, an unwritable folder or an unreadable file shows in the banner), `flush()` (every row's pending or typed value: the window is closing), `file_changed()` (a hand edit: `session.rebase()`, then rebuild; a `ConfigError` from reading shows in the banner), `show_banner(text, kind)`, `hide_banner()`; the private `_on_change(path, value)` / `_on_reset(path)` are the rows' callbacks (the tests call them as a user edit would). A panel's own key goes through `panel_ops` as one compound edit (`_panel_edit`).
+- Produces: `TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")`; `class SettingsView(Gtk.Box)(session, outputs)` with `.session`, `.outputs` (name -> Output), `.form`, `.rows`, `.previews` (monitor -> label), `.stack` (pages `theme`, `monitor:NAME`), `.banner`, `.banner_label`, `.undo_button`; methods `rebuild()`, `refresh()`, `section_rows(section, prefix) -> Gtk.Widget`, `apply(edit, row=None, structural=False) -> bool`, `undo()`, `revert()` (both: a hand edit, an unwritable folder or an unreadable file shows in the banner; `undo()` flushes first, `revert()` and `file_changed()` do not: pending values go with the rows), `flush()` (every row's pending or typed value: the window is closing or Undo / a panel move follows; a rebuild an apply asks for happens once, after the last row), `file_changed()` (a hand edit: `session.rebase()`, then rebuild; a `ConfigError` from reading shows in the banner), `show_banner(text, kind)`, `hide_banner()`; the private `_on_change(path, value)` / `_on_reset(path)` are the rows' callbacks (the tests call them as a user edit would). A panel's own key goes through `panel_ops` as one compound edit (`_panel_edit`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3811,6 +3811,8 @@ class SettingsView(Gtk.Box):
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
+        self._rebuild_due = False
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -3978,7 +3980,7 @@ class SettingsView(Gtk.Box):
         try:
             self.session.apply(edit)
         except ChangedOutside as exc:
-            self.rebuild()
+            self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
         except ConfigError as exc:
@@ -3989,10 +3991,18 @@ class SettingsView(Gtk.Box):
             return False
         self.hide_banner()
         if structural:
-            self.rebuild()
+            self._rebuild_soon()
         else:
             self.refresh()
         return True
+
+    def _rebuild_soon(self) -> None:
+        """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
+        destroy the rows that still hold a pending value."""
+        if self._flushing:
+            self._rebuild_due = True
+        else:
+            self.rebuild()
 
     def _on_change(self, path: tuple, value: Any) -> None:
         titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
@@ -4007,11 +4017,18 @@ class SettingsView(Gtk.Box):
             self._expand.pop(path[1], None)
 
     def _on_reset(self, path: tuple) -> None:
-        if len(path) == 5 and path[2] == "panels":  # a panel's own key: resetting a corner
-            _, entry = lookup(self.session.user, path[:4])  # also drops an edge it cannot hold
-            self.apply(_panel_edit(path[:4], panel_ops(entry or {}, path[4], None)), self._row(path))
+        panel_key = len(path) == 5 and path[2] == "panels"
+        titled = panel_key and path[4] in TITLE_KEYS  # the title and rows follow: rebuild
+        if panel_key and path[4] == "corner":
+            _, entry = lookup(self.session.user, path[:4])  # resetting a corner also drops an
+            # edge it cannot hold (panel_ops only turns None into an unset for the corner)
+            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], None))
         else:
-            self.apply(lambda d: d.unset(path), self._row(path))
+            edit = lambda d: d.unset(path)  # noqa: E731
+        if titled:
+            self._expand[path[1]] = path[3]
+        if not self.apply(edit, self._row(path), structural=titled) and titled:
+            self._expand.pop(path[1], None)
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
@@ -4045,7 +4062,8 @@ class SettingsView(Gtk.Box):
             self.rebuild()
 
     def revert(self) -> None:
-        self.flush()
+        # no flush: a pending value is about to be reverted, and applying it first would
+        # re-read a hand edit and hide the "changed outside" warning
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
@@ -4053,10 +4071,19 @@ class SettingsView(Gtk.Box):
     def flush(self) -> None:
         """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
         a font list without Enter): the window is closing, or the rows are about to be rebuilt
-        (a panel added, removed or moved, Undo, Revert all, a hand edit). Rows keep their pending
-        edit through the refresh after each apply, so every row is applied in turn."""
-        for row in list(self.rows):
-            row.flush()
+        (a panel added, removed or moved, Undo). Rows keep their pending
+        edit through the refresh after each apply, so every row is applied in turn; a rebuild an
+        apply asks for waits until the last row was applied (once, at the end). Not for Revert
+        all or a hand edit: their pending values are discarded with the rows."""
+        self._flushing = True
+        try:
+            for row in list(self.rows):
+                row.flush()
+        finally:
+            self._flushing = False
+            if self._rebuild_due:
+                self._rebuild_due = False
+                self.rebuild()
 
     def _confirm_revert(self) -> None:
         dialog = Gtk.MessageDialog(
@@ -4082,8 +4109,8 @@ class SettingsView(Gtk.Box):
         try:
             if not self.session.changed_outside():
                 return
-            self.flush()  # pending values are applied to the right paths before the rows go
-            self.session.rebase()
+            self.session.rebase()  # pending values go with the rows: they were typed against
+            # the old file
         except ConfigError as exc:
             self.show_banner(f"Cannot read the config: {exc}")
             return

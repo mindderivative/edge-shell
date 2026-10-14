@@ -43,6 +43,8 @@ class SettingsView(Gtk.Box):
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
+        self._rebuild_due = False
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -211,7 +213,7 @@ class SettingsView(Gtk.Box):
         try:
             self.session.apply(edit)
         except ChangedOutside as exc:
-            self.rebuild()
+            self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
         except ConfigError as exc:
@@ -222,10 +224,18 @@ class SettingsView(Gtk.Box):
             return False
         self.hide_banner()
         if structural:
-            self.rebuild()
+            self._rebuild_soon()
         else:
             self.refresh()
         return True
+
+    def _rebuild_soon(self) -> None:
+        """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
+        destroy the rows that still hold a pending value."""
+        if self._flushing:
+            self._rebuild_due = True
+        else:
+            self.rebuild()
 
     def _on_change(self, path: tuple, value: Any) -> None:
         titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
@@ -240,14 +250,18 @@ class SettingsView(Gtk.Box):
             self._expand.pop(path[1], None)
 
     def _on_reset(self, path: tuple) -> None:
-        if len(path) == 5 and path[2] == "panels" and path[4] == "corner":
+        panel_key = len(path) == 5 and path[2] == "panels"
+        titled = panel_key and path[4] in TITLE_KEYS  # the title and rows follow: rebuild
+        if panel_key and path[4] == "corner":
             _, entry = lookup(self.session.user, path[:4])  # resetting a corner also drops an
             # edge it cannot hold (panel_ops only turns None into an unset for the corner)
-            self.apply(
-                _panel_edit(path[:4], panel_ops(entry or {}, path[4], None)), self._row(path)
-            )
+            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], None))
         else:
-            self.apply(lambda d: d.unset(path), self._row(path))
+            edit = lambda d: d.unset(path)  # noqa: E731
+        if titled:
+            self._expand[path[1]] = path[3]
+        if not self.apply(edit, self._row(path), structural=titled) and titled:
+            self._expand.pop(path[1], None)
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
@@ -281,7 +295,8 @@ class SettingsView(Gtk.Box):
             self.rebuild()
 
     def revert(self) -> None:
-        self.flush()
+        # no flush: a pending value is about to be reverted, and applying it first would
+        # re-read a hand edit and hide the "changed outside" warning
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
@@ -289,10 +304,19 @@ class SettingsView(Gtk.Box):
     def flush(self) -> None:
         """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
         a font list without Enter): the window is closing, or the rows are about to be rebuilt
-        (a panel added, removed or moved, Undo, Revert all, a hand edit). Rows keep their pending
-        edit through the refresh after each apply, so every row is applied in turn."""
-        for row in list(self.rows):
-            row.flush()
+        (a panel added, removed or moved, Undo). Rows keep their pending
+        edit through the refresh after each apply, so every row is applied in turn; a rebuild an
+        apply asks for waits until the last row was applied (once, at the end). Not for Revert
+        all or a hand edit: their pending values are discarded with the rows."""
+        self._flushing = True
+        try:
+            for row in list(self.rows):
+                row.flush()
+        finally:
+            self._flushing = False
+            if self._rebuild_due:
+                self._rebuild_due = False
+                self.rebuild()
 
     def _confirm_revert(self) -> None:
         dialog = Gtk.MessageDialog(
@@ -318,8 +342,8 @@ class SettingsView(Gtk.Box):
         try:
             if not self.session.changed_outside():
                 return
-            self.flush()  # pending values are applied to the right paths before the rows go
-            self.session.rebase()
+            self.session.rebase()  # pending values go with the rows: they were typed against
+            # the old file
         except ConfigError as exc:
             self.show_banner(f"Cannot read the config: {exc}")
             return
