@@ -83,12 +83,27 @@ def test_a_corner_panel_taller_than_the_other_edge_is_shrunk():
 def test_a_corner_panel_with_too_little_depth_is_not_shown():
     assert placed(box(height=70), thickness=64) == (
         [None],
-        ["monitors.X.panels.0 (box): the bottom-left corner has no room for it; not shown"],
+        [
+            "monitors.X.panels.0 (box): height 70 px leaves less than 16 px past the 64 px band; "
+            "not shown"
+        ],
     )
 
 
 def test_a_narrow_body_is_floored_to_the_minimum_length():
-    assert placed(box(width=60)) == ([("bottom-left", "bottom", 70, 380)], [])
+    assert placed(box(width=60)) == (
+        [("bottom-left", "bottom", 70, 380)],
+        [
+            "monitors.X.panels.0 (box): width 60 px is below the minimum 70 for this theme; "
+            "widened to 70"
+        ],
+    )
+
+
+def test_a_widened_panel_that_is_not_shown_reports_only_that():
+    got, warnings = placed(box(width=60, height=70), thickness=64)
+    assert got == [None]
+    assert len(warnings) == 1 and warnings[0].endswith("not shown")
 
 
 def test_a_large_radius_raises_the_minimum_along():
@@ -96,7 +111,10 @@ def test_a_large_radius_raises_the_minimum_along():
     # from the lifted arc to the free corner never runs backwards (no folded outline)
     layout = layout_monitor([box(width=60)], W, H, T, 40, GAP, None, "monitors.X")
     assert [where(p) for p in layout.panels] == [("bottom-left", "bottom", 90, 380)]
-    assert layout.warnings == []
+    assert layout.warnings == [
+        "monitors.X.panels.0 (box): width 60 px is below the minimum 90 for this theme; "
+        "widened to 90"
+    ]
 
 
 # ---- several corner panels -----------------------------------------------------------------

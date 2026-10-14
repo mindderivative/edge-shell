@@ -418,7 +418,16 @@ def layout_corners(
         # the side from the lifted arc (T + R) to the free corner (along - r) never runs
         # backwards, and the body keeps MIN_LENGTH px past the band, whatever the theme radius
         need = max(thickness + MIN_LENGTH, thickness + radius + math.ceil(r))
-        along = max(getattr(req, along_key), need)
+        asked = getattr(req, along_key)
+        if asked < need:
+            shrunk.append(
+                (
+                    index,
+                    f"{name}: {along_key} {asked} px is below the minimum {need} for this "
+                    f"theme; widened to {need}",
+                )
+            )
+        along = max(asked, need)
         # along: its free end must stay clear of the far corner of `edge`
         far_e = held.get(_far(req.corner, edge), (None, None))[1]
         room = math.floor(extent_e - corner_clearance(edge, far_e, thickness, radius, gap) - r)
@@ -431,6 +440,16 @@ def layout_corners(
                 )
             )
             along = room
+        if getattr(req, across_key) - thickness < MIN_DEPTH:
+            notes.append(
+                (
+                    index,
+                    f"{name}: {across_key} {getattr(req, across_key)} px leaves less than "
+                    f"{MIN_DEPTH} px past the {thickness} px band; not shown",
+                )
+            )
+            out[index] = None
+            continue
         if depth < MIN_DEPTH or along < need:
             notes.append((index, f"{name}: the {req.corner} corner has no room for it; not shown"))
             out[index] = None
