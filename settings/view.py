@@ -43,6 +43,7 @@ class SettingsView(Gtk.Box):
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        self.save_failed = False  # the last flush() could not write something (shown on screen)
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
 
@@ -217,6 +218,7 @@ class SettingsView(Gtk.Box):
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
         except ConfigError as exc:
+            self.save_failed = True
             if row is not None:
                 row.show_error(f"Not saved: {exc}")
             else:
@@ -307,7 +309,9 @@ class SettingsView(Gtk.Box):
         (a panel added, removed or moved, Undo). Rows keep their pending
         edit through the refresh after each apply, so every row is applied in turn; a rebuild an
         apply asks for waits until the last row was applied (once, at the end). Not for Revert
-        all or a hand edit: their pending values are discarded with the rows."""
+        all or a hand edit: their pending values are discarded with the rows. `save_failed` says
+        whether any of them could not be written (the error is on screen)."""
+        self.save_failed = False
         self._flushing = True
         try:
             for row in list(self.rows):

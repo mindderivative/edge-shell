@@ -2,6 +2,7 @@
 session bus name)."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -150,3 +151,122 @@ def test_closing_the_window_flushes_and_ctrl_z_undoes(tmp_path, fake_registry):
         assert calls == ["undo", "flush"]
     finally:
         monkey.undo()
+        win.destroy()
+
+
+def test_the_first_instance_loads_the_widget_registry(monkeypatch, tmp_path):
+    """Without `import widgets` the registry is empty and every config with panels is invalid."""
+    pytest.importorskip("tomlkit")
+    import widgets  # noqa: F401  (loaded, so it can be put back below)
+
+    class First:
+        failed = False
+
+        def __init__(self, path, default_path):
+            pass
+
+        def register(self, _cancellable):
+            return True
+
+        def get_is_remote(self):
+            return False
+
+        def run(self, argv):
+            return 0
+
+    monkeypatch.setattr(app_mod, "SettingsApp", First)
+    monkeypatch.delitem(sys.modules, "widgets")
+    assert app_mod.run_settings(tmp_path / "c.toml") == 0
+    assert "widgets" in sys.modules
+
+
+def _activatable(path, default_path=None):
+    """A SettingsApp that is built but never registered on the bus, with `present` stubbed."""
+    app = app_mod.SettingsApp(path, default_path or app_mod.DEFAULT_PATH)
+    return app
+
+
+@pytest.fixture
+def gtk_app(monkeypatch, tmp_path, fake_registry):
+    pytest.importorskip("tomlkit")
+    from gi.repository import Gtk
+
+    if not Gtk.init_check()[0]:
+        pytest.skip("no display")
+    from settings.window import SettingsWindow
+
+    presented = []
+    monkeypatch.setattr(SettingsWindow, "present", lambda self: presented.append(self))
+    monkeypatch.setattr(app_mod, "connected_outputs", lambda: [])
+    apps = []
+
+    def make(path):
+        app = _activatable(path)
+        apps.append(app)
+        return app
+
+    make.presented = presented
+    yield make
+    for app in apps:
+        if app.window is not None:
+            app.window.destroy()
+
+
+def test_activation_sets_the_undo_accel_watches_the_file_and_presents_once(gtk_app, tmp_path):
+    app = gtk_app(tmp_path / "sub" / "c.toml")
+    app_mod.SettingsApp.do_activate(app)
+    assert app.get_accels_for_action("win.undo") == ["<Primary>z"]
+    assert app._watcher is not None
+    first = app.window
+    seen = []
+    first.file_changed = lambda: seen.append("changed")  # what the watcher reports reaches it
+    app._watcher._on_change()
+    assert seen == ["changed"]
+    app_mod.SettingsApp.do_activate(app)  # a second launch: the open window comes forward
+    assert app.window is first
+    assert gtk_app.presented == [first, first]
+
+
+def test_an_uncreatable_config_folder_exits_cleanly_without_a_window(gtk_app, capsys):
+    app = gtk_app(Path("/proc/nope/c.toml"))
+    app_mod.SettingsApp.do_activate(app)
+    assert app.failed
+    assert app.window is None and app.get_windows() == []
+    assert "cannot open the settings" in capsys.readouterr().err
+
+
+def _window_with_view_flush(monkeypatch, tmp_path, fails):
+    from settings.session import SettingsSession
+    from settings.view import SettingsView
+    from settings.window import SettingsWindow
+
+    def flush(self):
+        self.save_failed = fails()
+
+    monkeypatch.setattr(SettingsView, "flush", flush)
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("")
+    return SettingsWindow(SettingsSession(cfg), [])
+
+
+def test_a_failed_save_keeps_the_window_open_once(monkeypatch, tmp_path, fake_registry):
+    """The close flush could not write: the banner stays visible; closing again closes."""
+    pytest.importorskip("tomlkit")
+    from gi.repository import Gdk, Gtk
+
+    if not Gtk.init_check()[0]:
+        pytest.skip("no display")
+    state = {"fail": True}
+    win = _window_with_view_flush(monkeypatch, tmp_path, lambda: state["fail"])
+    try:
+        close = lambda: win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE))  # noqa: E731
+        assert close() is True  # kept open: the error is on screen
+        assert close() is False  # asked twice: closes anyway
+    finally:
+        win.destroy()
+    state["fail"] = False
+    win = _window_with_view_flush(monkeypatch, tmp_path, lambda: state["fail"])
+    try:
+        assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is False
+    finally:
+        win.destroy()

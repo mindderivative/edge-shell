@@ -64,10 +64,16 @@ class SettingsApp(Gtk.Application):
                 print(f"cannot open the settings: {exc}", file=sys.stderr)
                 self.failed = True
                 return  # no window and no hold: run() returns
+            try:  # before the window exists: a failure here must not leave a hidden one
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                watcher = ConfigWatcher(self.path, lambda: self.window.file_changed())
+            except OSError as exc:  # e.g. --config /proc/nope/c.toml
+                print(f"cannot open the settings: {exc}", file=sys.stderr)
+                self.failed = True
+                return
+            self._watcher = watcher
             self.window = SettingsWindow(session, connected_outputs(), application=self)
             self.set_accels_for_action("win.undo", ["<Control>z"])
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._watcher = ConfigWatcher(self.path, self.window.file_changed)
         self.window.present()
 
 
