@@ -51,7 +51,7 @@ Previous plans (style, gates, constraints): `docs/superpowers/plans/2026-10-13-s
 - Task 13 is docs.
 
 The riskiest tasks:
-- **Task 4:** the outline walk at the corners. One wrong arc direction makes a spike or a hole. 48 reference-union pixel tests check every corner, opening edge and depth.
+- **Task 4:** the outline walk at the corners. One wrong arc direction makes a spike or a hole. 64 reference-union pixel tests check every corner, opening edge and depth, at R = 14 and at R = 40.
 - **Task 6:** layout precedence and clearance. A missed rule gives a self-intersecting outline (spike finding: 20-30 wrong pixels).
 - **Task 9:** the corner window's absolute placement inside a GTK Overlay. Only stand-ins test it; Gate B items 1-5 check it live.
 
@@ -60,7 +60,7 @@ The riskiest tasks:
 The spec leaves these open. They are the planner's choices; nothing below is built yet.
 
 1. **Geometry: a rectangle in the corner that opens from one edge.** *Default pending Phil.*
-   - **The shape.** A corner panel is a plain rectangle (a square-ish block) in one screen corner. It is `width` x `height` px measured from the screen corner, with both frame bands included. It is NOT an L.
+   - **The shape.** A corner panel is a plain rectangle (a square-ish block) in one screen corner. It is `width` x `height` px measured from the screen corner, with both frame bands included. It is NOT an L: **the corner panel window is a rectangle, not an L.**
    - **Its two sides on the screen edges.** They lie on the two screen edges of the corner, so the panel covers that corner's piece of both frame bands.
    - **Its two free sides.** Each meets one of the two frame bands with a concave fillet. This is what "connects to two edges" means.
      - The free side parallel to the opening edge (for the bottom-left `widget_panel`: its top side) meets the OTHER band (the left band). There the fillet is the screen corner's own arc, radius R, lifted along that band by the panel's current depth. At depth 0 it is exactly today's screen corner, so a collapsed corner panel draws the plain frame.
@@ -69,8 +69,8 @@ The spec leaves these open. They are the planner's choices; nothing below is bui
    - **The widget_panel's numbers.** `along` = 300 px along the bottom edge from the corner (the spec's "300 incl. left frame"), depth = 380 px past the bottom band (the spec's "extended depth 380"). That is `width = 300`, `height = 390`.
    - **How the outline is traced.** Each edge's walk (`trace_edge`) gains a `head` and a `tail` (a corner panel on this edge in its start or end corner) and a `lead` and a `trail` (one in the neighbouring edge's corner that lifts this edge's start or end arc). With every depth 0 the path is operation-for-operation the plain frame (pinned by a test).
    - **Minimum geometry** (the spike's self-intersection rules, applied by the layout):
-     - along >= T + 60 (the 60 px body floor past the band, so the top line from `T + R` to `along - r` never runs backwards);
-     - depth >= 16;
+     - along >= max(T + 60, T + R + r): the 60 px body floor past the band, and the side from the lifted arc (`T + R`) to the free corner (`along - r`) never runs backwards. `T + 60` alone covers only `R + r <= 60`, but the theme allows R up to 64: with R = 40 and r = 40 the outline would fold (the reviewer's stress sheet). The layout floors `along` to this `need` and hides the panel when less remains;
+     - depth >= 16 (`MIN_DEPTH`). The hover zone and the peek can be larger (both up to 64 px); they are clamped to the depth exactly as on edge panels (`input_rects` uses `min(hover_zone, depth)`, `panel_state.target_depth` uses `min(peek, depth)`), so a 16 px deep corner panel peeks 16 px. Pinned by `test_a_shallow_corner_panel_clamps_the_hover_zone_and_the_peek` (Task 3);
      - the lifted arc stays clear of the far corner of the other edge: `T + R + depth <= extent - (T + R)`, or minus that corner's occupant;
      - the free end stays clear of the far corner of its edge (plus `gap` when it faces another corner panel).
    - **Cost if Phil wants both extents to animate** (a diagonal grow out of the corner): at small sizes the panel lies inside the screen corner's rounding. Its lifted arc would need a radius that jumps from R to `min(R, a, b)`, or a traced union of the corner piece and the body. That is about one more task (union tracing plus its reference tests), a different handle (diagonal drag), and a new Gate A. A lifted arc that shrinks to `min(R, d/2)`, like a join: a discontinuity at d = 0, where the screen corner is R. Rejected.
@@ -86,10 +86,10 @@ The spec leaves these open. They are the planner's choices; nothing below is bui
 3. **Layout: corner panels first, one per corner, shrink to fit; edge panels keep clear of them.** *Default pending Phil.*
    - **Order.** Corner panels are placed first, in config order.
    - **A taken corner.** A second corner panel in that corner is not shown: `... the bottom-left corner already holds monitors.X.panels.N (widget_panel); not shown`, with a "Panels adjusted" notification.
-   - **Shrinking.** A corner panel is shrunk to fit beside the corner panels already placed (a warning names `width` or `height`), and not shown when less than 60 px of body or 16 px of depth remains. On its own edge it keeps `r1 + r2 + gap` from another corner panel's free end; against a lifted arc it keeps `r` (like a plain screen corner).
+   - **Shrinking.** A corner panel is shrunk to fit beside the corner panels already placed (a warning names `width` or `height`), and not shown when `along` falls below `max(T + 60, T + R + r)` or less than 16 px of depth remains. A panel that ends up hidden gets only the "has no room for it; not shown" warning, never a "shrunk to" one before it. On its own edge it keeps `r1 + r2 + gap` from another corner panel's free end; against a lifted arc it keeps `r` (like a plain screen corner).
    - **Edge panels on the edge it opens from.** The free span starts `along + r_c + gap + r` from that corner, the same spacing as two neighbours.
-   - **Edge panels on the other edge.** The free span starts `T + R + depth + r` from the corner: the lifted screen-corner arc, at full depth so animation never collides.
-   - **The overlap check.** It runs over corner panels first, then edge panels (config order), so a deep corner panel hides an edge panel on a far edge that it overlaps, whatever their config order.
+   - **Edge panels on the other edge.** The free span starts `T + R + depth + r` from the corner: the lifted screen-corner arc, at full depth so animation never collides. No `gap` there (option A; whether to add one is open decision 10).
+   - **The overlap check.** Corner panels are checked against each other inside `layout_corners`, before any is held: a corner panel that overlaps an earlier one is hidden with the usual "overlaps ... not shown" warning and takes no clearance, so it moves no edge panel (bottom-left 1200 x 700 plus top-right 1200 x 700: the top-right one is hidden, and a top `align = "end"` panel stays at the plain corner, pos 1582, not 384). Then edge panels are checked (config order) against the shown corner panels and each other, so a deep corner panel hides an edge panel on a far edge that it overlaps, whatever their config order.
    - **Resolution changes and hot-plug.** They reuse Plan 2's `notify::geometry` re-layout and the hot-plug sync unchanged: a smaller monitor shrinks a corner panel with a warning, never an error.
    - *Cost if Phil prefers one config order for both kinds:* a corner listed after an edge panel would lose to it. That is a small change (merge the two orders in `layout_monitor` and drop the corners from the edges' clearances when hidden), but then an edge panel can hide the corner panel it sits next to.
 
@@ -110,7 +110,12 @@ The spec leaves these open. They are the planner's choices; nothing below is bui
    - **Rejected keys.** An entry mixing corner keys with edge-only keys (`pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length`, `depth`) is rejected by the model with its key path. An edge key on a corner widget, a corner key on an edge widget, or an `edge` that is not an edge of the corner is rejected by `validate_widgets` at load, naming the key path (for example `monitors.HDMI-A-1.panels[0].align: widget_panel is a corner panel; it takes corner, edge, width and height, not align`). An invalid config never replaces the working one.
    - **Moving corners.** A moved `corner` without an `edge` keeps the widget's edge when it belongs to the new corner, else uses the corner's top or bottom edge.
    - **Reload.** It uses the existing change kinds: `state` is `panel-state`; `handle` and `interaction` are `panel-handle` (in place); `corner`, `edge`, `width` and `height` are `panel-rebuild`, plus a rebuild of any edge panel whose resolved place changed.
-   - **Settings-window readiness.** The models stay the single source: `Corner`, `CORNERS`, `EDGE_ONLY_KEYS`, `CORNER_ONLY_KEYS`, the schema (`corner`, `width` and `height` are pinned in `Config.model_json_schema()`) and `registry.widget_kind(name)`.
+   - **Settings-window readiness: the contract the settings plan must use.** The models and the registry stay the single source; the settings window reads only these public names:
+     - `registry.widget_kind(name)` (`"edge"` or `"corner"`) decides which keys a panel's section shows;
+     - `shell.config.models.SHARED_KEYS = ("widget", "edge", "state", "handle", "interaction")` are shown for both kinds; `EDGE_ONLY_KEYS` only for edge widgets and `CORNER_ONLY_KEYS = ("corner", "width", "height")` only for corner widgets. The three partition `PanelConfig`'s fields (pinned by `test_the_key_sets_partition_the_panel_keys`, Task 1);
+     - `registry.defaults(name)` gives a widget's `PanelDefaults` or `CornerDefaults` (placeholders, "reset to default"); the settings window never reads `registry._DEFAULTS` (Task 2);
+     - "the corner's two edges" are `corner.split("-")` (for example `("bottom", "left")`), and the edge used when none is set is `panel_spec.default_edge(corner)`; `corner_has_edge(corner, edge)` checks a choice;
+     - `Corner` / `CORNERS` for the corner choice, and the JSON schema (`corner`, `width` and `height` are pinned in `Config.model_json_schema()`, 60-4000 px).
    - **Only corner widgets go in corners.** An edge widget (clock, dock) cannot sit in a corner in this plan. *Cost if Phil wants any widget in a corner:* a corner subclass built per widget at registration (a dynamic `type()` per widget class, cached; PyGObject registers one GType each). About 1 task.
    - *Cost if Phil wants a separate `[[monitors.X.corners]]` table:* a second index space in `diff_configs`, `MonitorShell` and the layout, and two lists in the settings window. About 1 task, against Phil's wish of one panel list.
 
@@ -122,12 +127,28 @@ The spec leaves these open. They are the planner's choices; nothing below is bui
    - Gate A (Task 8): two PNG sheets, no shell. Every corner, both opening edges, six collapse fractions, edge panels placed by the resolver right beside it; plain and with border and shadow.
    - Gate B (Task 12): live, on HDMI-A-1 ONLY (never DP-1), with `examples/corner-test.toml`. Live probes at most 10 s.
 
+10. **Open decision for Phil: a gap on the other edge too?** *Option A, default pending Phil (what this plan builds).*
+    - **Option A (as planned).** An edge panel on the corner panel's other edge starts at `T + R + depth + r` from the corner: at full depth its fillet starts exactly where the lifted corner arc ends. There is no straight piece of frame between them: a stepped silhouette, but valid geometry (no overlap, no self-intersection; pinned by `test_corner_panels_next_to_edge_panels_cleared_by_the_layout`, Task 4). On the edge the corner panel opens from, the `gap` is kept as between two neighbours.
+    - **Option B.** Keep the `gap` on the other edge as well: in `corner_clearance`, drop the `held.edge == edge` condition (`spare = gap if held is not None else 0`). It changes these expected numbers (checked in the scratch copy: 3 tests fail, the rest pass): `test_corner_clearance` (`24 + 380` -> `24 + 380 + 8`, `24 + 290` -> `24 + 290 + 8`), `test_an_edge_panel_on_the_other_edge_stays_below_the_lifted_corner_arc` (`("left", 362, 300)` -> `("left", 354, 300)`), `test_a_corner_panel_opening_from_the_side_edge_moves_the_other_edge` (`("bottom", 328, 560)` -> `("bottom", 336, 560)`), Task 11 Step 5's expected `('left', 362, 300)` -> `('left', 354, 300)`, and Gate B item 4 (the system bar at y 362-662 -> 354-654). A one-line code change plus those numbers, made before Task 6 runs; nothing else moves.
+
 ## Prerequisites
 
 - Branch `feat/corner-panel` from `origin/main` at `ad58f61` (Plans 1-3 merged).
 - Baseline before Task 1: `scripts/py -m pytest -q` prints `1192 passed` (2 GLib deprecation warnings are normal); `scripts/py -m ruff check .` prints `All checks passed!`.
 - Always stage files by name, never `git add -A` or `git add .`.
-- The pure parts of this plan (Tasks 1-7, 9-11) were prototyped in a scratch copy by the planner: every code block and test below passed as written (1403 passed, ruff clean). The review sheet was rendered and inspected.
+- The pure parts of this plan (Tasks 1-7, 9-11) were prototyped in a scratch copy by the planner: every code block and test below passed as written, task by task (1424 passed at the end, ruff check and ruff format clean after every task). The review sheet was rendered and inspected. After the independent review's corrections the code and tests were re-extracted into a fresh copy and re-run the same way.
+- **The settings plan must be updated before it executes.** Plan 4 (`feat/settings-window`, 14 tasks) was drafted before corner panels and does not know them. Before its Task 1 runs, update it to use decision 6's contract (`widget_kind`, `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`, `registry.defaults`, `corner.split("-")`, `default_edge`), with these 10 changes:
+  1. two panel sections, edge and corner, built through `section_for` with skip sets (`CORNER_ONLY_KEYS` skipped for edge widgets, `EDGE_ONLY_KEYS` for corner widgets);
+  2. a `corner` enum row (`CORNERS`) and `width` / `height` spinbuttons (60-4000) in the corner section;
+  3. the `edge` row of a corner panel offers only the corner's two edges (`corner.split("-")`), unset meaning `default_edge(corner)`;
+  4. a `CornerDefaults` branch in `settings/values.py` (placeholders from `registry.defaults(name)`, never `_DEFAULTS`);
+  5. panel titles for `CornerRequest` in `settings/panels.py`: `{widget}: {corner}, from {edge}, {width}x{height}`;
+  6. switching a panel's widget to the other kind unsets the other kind's keys in the same single edit (one save, one reload);
+  7. changing `corner` unsets an `edge` that is no longer an edge of the new corner (same edit);
+  8. the widget combo grouped by kind (edge widgets, then corner widgets);
+  9. the layout-warning preview lists corner items too (the three new warning texts of Task 6);
+  10. handle right-click (its Task 11) works on corner panels: `CornerPanel` inherits it from `EdgePanel`; add a corner case to its tests.
+- **Expect merge conflicts with the settings plan.** Its Task 11 (right-click on a handle) and this plan's Tasks 9-10 both change `shell/edge_panel.py` and `shell/monitors.py`. Whichever plan runs second rebases onto the first and resolves them there (both sides keep their changes: the hooks `surface_layout` / `_input_rects` and corner building here, the right-click handler there).
 
 ## Global Constraints
 
@@ -180,11 +201,11 @@ The six input classes most likely to bite Phil that the spec implies but a happy
    - `test_a_collapsed_corner_panel_draws_the_plain_frame` (Task 7);
 
    live by Gate A items 1-3 and Gate B item 2.
-3. **Edge panels near a corner panel, and a smaller monitor.** An edge panel aligned towards the corner, a "fill" panel, a second corner panel on a shared edge, a deep panel on a far edge, or a resolution change. Expect no overlap and no self-intersecting outline: clearances applied, things shrunk or hidden with a "Panels adjusted" warning naming the key, never a crash.
+3. **Edge panels near a corner panel, a large theme radius, and a smaller monitor.** An edge panel aligned towards the corner, a "fill" panel, a second corner panel on a shared edge, a corner panel hidden by the overlap check, a deep panel on a far edge, a theme radius up to 64, or a resolution change. Expect no overlap and no self-intersecting outline: clearances applied (and none taken by a hidden corner panel), `along` floored to `max(T + 60, T + R + r)`, things shrunk or hidden with one "Panels adjusted" warning per outcome naming the key, never a crash.
 
    Pinned by:
-   - `test_an_edge_panel_starts_past_the_corner_panel_on_its_edge`, `test_an_edge_panel_on_the_other_edge_stays_below_the_lifted_corner_arc`, `test_a_fill_panel_fills_up_to_the_corner_panel`, `test_two_corner_panels_facing_on_one_edge_keep_their_joins_and_the_gap`, `test_a_lifted_corner_arc_limits_the_next_corner_across`, `test_corner_panels_win_over_earlier_edge_panels_they_overlap` (Task 6);
-   - `test_corner_panels_next_to_edge_panels_cleared_by_the_layout` (Task 4);
+   - `test_an_edge_panel_starts_past_the_corner_panel_on_its_edge`, `test_an_edge_panel_on_the_other_edge_stays_below_the_lifted_corner_arc`, `test_a_fill_panel_fills_up_to_the_corner_panel`, `test_two_corner_panels_facing_on_one_edge_keep_their_joins_and_the_gap`, `test_a_lifted_corner_arc_limits_the_next_corner_across`, `test_corner_panels_win_over_earlier_edge_panels_they_overlap`, `test_a_hidden_corner_panel_takes_no_clearance`, `test_a_large_radius_raises_the_minimum_along`, `test_a_corner_squeezed_below_the_minimum_is_not_shown` (Task 6);
+   - `test_corner_panels_next_to_edge_panels_cleared_by_the_layout` and the R = 40 rows of `test_a_corner_panel_matches_the_reference_union` (Task 4);
    - `test_a_smaller_monitor_shrinks_the_corner_panel` (Task 10);
 
    live by Gate B items 4 and 11.
@@ -213,11 +234,11 @@ The six input classes most likely to bite Phil that the spec implies but a happy
 ## File Structure
 
 ```
-shell/config/models.py        # + Corner, CORNERS, Extent, EDGE_ONLY_KEYS, CORNER_ONLY_KEYS;
+shell/config/models.py        # + Corner, CORNERS, SHARED_KEYS, EDGE_ONLY_KEYS, CORNER_ONLY_KEYS;
                               #   PanelConfig.corner / .width / .height + kind / edge checks
 shell/panel_spec.py           # + default_edge, corner_has_edge, CornerDefaults, CornerRequest,
                               #   CornerGeometry
-shell/registry.py             # register() takes CornerDefaults; widget_kind; corner requests;
+shell/registry.py             # register() takes CornerDefaults; widget_kind; defaults; corner requests;
                               #   validate_widgets checks keys against the widget's kind
 shell/corner.py               # NEW, PURE: to_xy, pq_box, surface_size, anchor, corner_box,
                               #   body_rect, content_rect, hit_rect, input_rects
@@ -251,19 +272,19 @@ README.md, docs/superpowers/specs/2026-10-11-edge-shell-design.md   # Task 13
 
 | Task | Deliverable | Expected `pytest -q` | Keeps the suite green because |
 | --- | --- | --- | --- |
-| 1 | config keys and checks | 1207 (+15) | new keys optional |
-| 2 | corner requests, registry kind, key checks, diff | 1231 (+24) | edge widgets unchanged; new fixture only |
-| 3 | pure corner geometry | 1267 (+36) | new module |
-| 4 | outline and effects with corners | 1321 (+54) | `corners` defaults to empty; edge paths identical |
-| 5 | scene, painter, simulate | 1331 (+10) | `Shape` includes `PanelShape` |
-| 6 | layout resolver | 1357 (+26) | no corner requests = old layout |
-| 7 | review sheet | 1375 (+18) | new module |
-| 8 | Gate A (PNG sheets, Phil) | 1375 | no code |
-| 9 | `EdgePanel` hooks, `CornerPanel` | 1389 (+14) | hooks are behaviour-preserving |
-| 10 | `MonitorShell` builds corner panels | 1398 (+9) | edge path unchanged |
-| 11 | `widget_panel` widget, CSS, example | 1403 (+5) | new widget |
-| 12 | Gate B (live, Phil) | 1403 | no code |
-| 13 | README, spec | 1403 | docs only |
+| 1 | config keys and checks, the key sets | 1208 (+16) | new keys optional |
+| 2 | corner requests, registry kind and defaults, key checks, diff | 1233 (+25) | edge widgets unchanged; new fixture only |
+| 3 | pure corner geometry | 1270 (+37) | new module |
+| 4 | outline and effects with corners | 1340 (+70) | `corners` defaults to empty; edge paths identical |
+| 5 | scene, painter, simulate | 1350 (+10) | `Shape` includes `PanelShape` |
+| 6 | layout resolver | 1378 (+28) | no corner requests = old layout |
+| 7 | review sheet | 1396 (+18) | new module |
+| 8 | Gate A (PNG sheets, Phil) | 1396 | no code |
+| 9 | `EdgePanel` hooks, `CornerPanel` | 1410 (+14) | hooks are behaviour-preserving |
+| 10 | `MonitorShell` builds corner panels | 1419 (+9) | edge path unchanged |
+| 11 | `widget_panel` widget, CSS, example | 1424 (+5) | new widget |
+| 12 | Gate B (live, Phil) | 1424 | no code |
+| 13 | README, spec | 1424 | docs only |
 
 Without `gi`/Fabric (CI) the GTK tests skip themselves: Task 9's 14, Task 10's 9 and Task 11's 5, as the existing GTK tests do.
 
@@ -279,9 +300,8 @@ Without `gi`/Fabric (CI) the GTK tests skip themselves: Task 9's 14, Task 10's 9
 - Consumes: `_Strict`, `Edge`, `PanelConfig` (existing).
 - Produces:
   - `shell.config.models.Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]`, `CORNERS: tuple[str, ...]` (same order);
-  - `Extent = Annotated[int, Field(ge=60, le=4000)]`;
-  - `EDGE_ONLY_KEYS = ("pos", "align", "offset", "order", "length", "min_length", "max_length", "depth")` and `CORNER_ONLY_KEYS = ("corner", "width", "height")`;
-  - `PanelConfig.corner: Corner | None`, `.width: Extent | None`, `.height: Extent | None`, all default None;
+  - `SHARED_KEYS = ("widget", "edge", "state", "handle", "interaction")` (the keys both kinds take), `EDGE_ONLY_KEYS = ("pos", "align", "offset", "order", "length", "min_length", "max_length", "depth")` and `CORNER_ONLY_KEYS = ("corner", "width", "height")`: public module constants that together partition `PanelConfig`'s fields (the settings window reads them; decision 6);
+  - `PanelConfig.corner: Corner | None`, `.width: Length | None`, `.height: Length | None` (the existing 60-4000 px `Length`), all default None;
   - `PanelConfig._placement` rejects an entry mixing the two kinds' keys, and an `edge` that is not an edge of the entry's own `corner`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -294,7 +314,15 @@ Create `tests/test_config_corner.py`:
 import pytest
 
 from shell.config.loader import parse_config
-from shell.config.models import CORNERS, Config, ConfigError, PanelConfig
+from shell.config.models import (
+    CORNER_ONLY_KEYS,
+    CORNERS,
+    EDGE_ONLY_KEYS,
+    SHARED_KEYS,
+    Config,
+    ConfigError,
+    PanelConfig,
+)
 
 
 def entry(**keys):
@@ -322,6 +350,14 @@ def test_corner_keys_are_read():
 
 def test_the_four_corners_are_exported_in_order():
     assert CORNERS == ("top-left", "top-right", "bottom-left", "bottom-right")
+
+
+def test_the_key_sets_partition_the_panel_keys():
+    """The settings window shows SHARED_KEYS plus the keys of the widget's kind."""
+    assert SHARED_KEYS == ("widget", "edge", "state", "handle", "interaction")
+    assert CORNER_ONLY_KEYS == ("corner", "width", "height")
+    keys = SHARED_KEYS + EDGE_ONLY_KEYS + CORNER_ONLY_KEYS
+    assert len(set(keys)) == len(keys) and set(keys) == set(PanelConfig.model_fields)
 
 
 @pytest.mark.parametrize(
@@ -372,7 +408,7 @@ def test_defaults_change_nothing(make_config):
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `scripts/py -m pytest -q tests/test_config_corner.py`
-Expected: FAIL at import: `ImportError: cannot import name 'CORNERS' from 'shell.config.models'`.
+Expected: FAIL at import: `ImportError: cannot import name 'CORNER_ONLY_KEYS' from 'shell.config.models'`.
 
 - [ ] **Step 3: Implement**
 
@@ -390,19 +426,13 @@ Apply this change to `shell/config/models.py` (a diff against `ad58f61`):
  
  _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
  _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
-@@ -159,6 +161,7 @@ ThemeOverride = _override_of(
- )
- 
- Length = Annotated[int, Field(ge=60, le=4000)]
-+Extent = Annotated[int, Field(ge=60, le=4000)]  # corner panel width / height from the corner
- Depth = Annotated[int, Field(ge=16, le=2000)]
- Offset = Annotated[int, Field(ge=0, le=20000)]
- SignedOffset = Annotated[int, Field(ge=-20000, le=20000)]
-@@ -219,7 +222,17 @@ class InteractionConfig(_Strict):
+@@ -219,7 +221,19 @@ class InteractionConfig(_Strict):
      drag: StrictBool | None = None
  
  
-+# Keys that only make sense for one kind of panel (spec 19): an entry mixing them is rejected.
++# The panel keys by kind (spec 19; the settings window reads them): both kinds take
++# SHARED_KEYS; an entry mixing EDGE_ONLY_KEYS with CORNER_ONLY_KEYS is rejected.
++SHARED_KEYS = ("widget", "edge", "state", "handle", "interaction")
 +EDGE_ONLY_KEYS = ("pos", "align", "offset", "order", "length", "min_length", "max_length", "depth")
 +CORNER_ONLY_KEYS = ("corner", "width", "height")
 +
@@ -416,17 +446,17 @@ Apply this change to `shell/config/models.py` (a diff against `ad58f61`):
      widget: str
      edge: Edge | None = None
      pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
-@@ -233,6 +246,9 @@ class PanelConfig(_Strict):
+@@ -233,6 +247,9 @@ class PanelConfig(_Strict):
      state: PanelState | None = None
      handle: HandleConfig = Field(default_factory=HandleConfig)
      interaction: InteractionConfig = Field(default_factory=InteractionConfig)
 +    corner: Corner | None = None
-+    width: Extent | None = None
-+    height: Extent | None = None
++    width: Length | None = None  # px from the screen corner, both frame bands included
++    height: Length | None = None
  
      @field_validator("length")
      @classmethod
-@@ -241,6 +257,21 @@ class PanelConfig(_Strict):
+@@ -241,6 +258,21 @@ class PanelConfig(_Strict):
  
      @model_validator(mode="after")
      def _placement(self) -> PanelConfig:
@@ -453,11 +483,11 @@ Apply this change to `shell/config/models.py` (a diff against `ad58f61`):
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `scripts/py -m pytest -q tests/test_config_corner.py`
-Expected: `15 passed`.
+Expected: `16 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1207 passed`.
+Run VERIFY. Expected: `1208 passed`.
 
 ```bash
 git add shell/config/models.py tests/test_config_corner.py
@@ -482,6 +512,7 @@ git commit -m "feat(config): corner, width and height keys for corner panels" -m
 - Produces (`shell/registry.py`):
   - `register(name, PanelDefaults | CornerDefaults)` (corner defaults are checked: an edge of the corner, 60-4000 px);
   - `widget_kind(name) -> "edge" | "corner"`;
+  - `defaults(name) -> PanelDefaults | CornerDefaults` (public; KeyError for an unknown widget): the settings window shows a widget's defaults through it and never reads `_DEFAULTS`;
   - `request_for(cfg) -> PanelRequest | CornerRequest`, and `requests_for` returns both kinds in config order;
   - `validate_widgets` also rejects keys of the other kind and a wrong `edge`, with the key path `monitors.NAME.panels[i].KEY`.
 - Produces (`tests/conftest.py`): fixture `corner_registry` = `fake_registry` plus the corner widget `"box"` (bottom-left, 300 x 390).
@@ -564,6 +595,16 @@ def test_a_corner_widget_gives_a_corner_request(corner_registry, make_config):
     )
     assert corner_registry.widget_kind("box") == "corner"
     assert corner_registry.widget_kind("dock") == "edge"
+
+
+def test_a_widgets_defaults_are_public(corner_registry):
+    """The settings window reads defaults(name), never _DEFAULTS."""
+    assert corner_registry.defaults("box") == CornerDefaults(
+        corner="bottom-left", width=300, height=390, label="box"
+    )
+    assert corner_registry.defaults("dock").edge == "bottom"
+    with pytest.raises(KeyError):
+        corner_registry.defaults("nope")
 
 
 def test_entry_keys_override_the_corner_defaults(corner_registry, make_config):
@@ -852,7 +893,7 @@ Apply to `shell/registry.py`:
  
  
  def widget_names() -> list[str]:
-@@ -53,7 +73,12 @@ def widget_class(name: str) -> type:
+@@ -53,7 +73,18 @@ def widget_class(name: str) -> type:
      return _WIDGETS[name]
  
  
@@ -862,11 +903,17 @@ Apply to `shell/registry.py`:
 +    return "corner" if isinstance(_DEFAULTS[name], CornerDefaults) else "edge"
 +
 +
++def defaults(name: str) -> PanelDefaults | CornerDefaults:
++    """The widget's registered defaults (the settings window shows them; it never reads
++    _DEFAULTS). KeyError for an unknown widget, like widget_class."""
++    return _DEFAULTS[name]
++
++
 +def request_for(cfg: PanelConfig) -> PanelRequest | CornerRequest:
      """The widget's defaults overlaid with one config entry. Placement is taken as a whole: if
      the entry sets any of pos / align / offset, the widget's default placement is dropped and
      the keys it leaves out are align = "center", offset = 0 (`pos = "center"` is align =
-@@ -62,6 +87,8 @@ def request_for(cfg: PanelConfig) -> PanelRequest:
+@@ -62,6 +93,8 @@ def request_for(cfg: PanelConfig) -> PanelRequest:
      if d is None:
          known = ", ".join(widget_names()) or "none"
          raise ConfigError(f"unknown widget {cfg.widget!r} (known: {known})")
@@ -875,7 +922,7 @@ Apply to `shell/registry.py`:
      if any(getattr(cfg, key) is not None for key in _PLACEMENT):
          pos = None if cfg.pos in (None, "center") else cfg.pos
          align, offset = cfg.align or "center", cfg.offset or 0
-@@ -86,6 +113,27 @@ def request_for(cfg: PanelConfig) -> PanelRequest:
+@@ -86,6 +119,27 @@ def request_for(cfg: PanelConfig) -> PanelRequest:
      )
  
  
@@ -903,7 +950,7 @@ Apply to `shell/registry.py`:
  def _handle(cfg: PanelConfig, default: HandleSpec) -> HandleSpec:
      """Key by key: the entry's [handle] value, else the widget's default (None = the theme's)."""
      own = cfg.handle
-@@ -107,7 +155,7 @@ def _interaction(cfg: PanelConfig, default: Interaction) -> Interaction:
+@@ -107,7 +161,7 @@ def _interaction(cfg: PanelConfig, default: Interaction) -> Interaction:
      )
  
  
@@ -912,7 +959,7 @@ Apply to `shell/registry.py`:
      return [request_for(p) for p in config.monitor(monitor).panels]
  
  
-@@ -153,13 +201,41 @@ def all_off_paths(config: Config) -> list[str]:
+@@ -153,13 +207,41 @@ def all_off_paths(config: Config) -> list[str]:
      ]
  
  
@@ -965,11 +1012,11 @@ Apply to `shell/registry.py`:
 - [ ] **Step 5: Run them to see them pass**
 
 Run: `scripts/py -m pytest -q tests/test_corner_requests.py`
-Expected: `24 passed`.
+Expected: `25 passed`.
 
 - [ ] **Step 6: VERIFY and commit**
 
-Run VERIFY. Expected: `1231 passed` (`tests/test_registry.py::test_widget_names_sorted` still sees `["bar", "clock", "dock"]`: the corner widget lives only in the new fixture).
+Run VERIFY. Expected: `1233 passed` (`tests/test_registry.py::test_widget_names_sorted` still sees `["bar", "clock", "dock"]`: the corner widget lives only in the new fixture).
 
 ```bash
 git add shell/panel_spec.py shell/registry.py tests/conftest.py tests/test_corner_requests.py
@@ -1109,6 +1156,17 @@ def test_input_without_hover_is_the_body_and_the_hit_target():
         (0, 330, 300, 60),
         (133, 330, 44, 14),
     ]
+
+
+def test_a_shallow_corner_panel_clamps_the_hover_zone_and_the_peek():
+    """MIN_DEPTH (16) is below the largest hover zone and peek (64): both stop at the depth,
+    the clamps edge panels already use (input_rects, panel_state.target_depth)."""
+    from shell.panel_state import target_depth
+
+    assert cn.input_rects("bottom-left", "bottom", 300, 16, 0, T, 64, ALL, HIT, 0) == [
+        (0, 0, 300, 26)
+    ]
+    assert target_depth(False, True, 16, 64) == 16.0
 
 
 def test_with_every_interaction_off_a_collapsed_corner_panel_is_click_through():
@@ -1327,14 +1385,14 @@ def input_rects(
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `scripts/py -m pytest -q tests/test_corner_geometry.py`
-Expected: `36 passed`. The numbers to check by hand, for the default 300 x 390 bottom-left panel:
+Expected: `37 passed`. The numbers to check by hand, for the default 300 x 390 bottom-left panel:
 - the hit target is `hd.hit_size(10, 15, 290) = (44, 14)`, starting `10 + (290 - 44) // 2 = 133` px from the corner;
 - collapsed it sits on the bottom 14 px of the 390 px surface (y 376), extended on the top 14 (y 0);
 - with `d = 50`, `hit_inset = 10 + 50 - 14 = 46`, so `q` is 46-60 and y = 390 - 60 = 330.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1267 passed`.
+Run VERIFY. Expected: `1270 passed`.
 
 ```bash
 git add shell/corner.py tests/test_corner_geometry.py
@@ -1392,12 +1450,15 @@ CORNER_EDGES = [
     for corner in ("top-left", "top-right", "bottom-left", "bottom-right")
     for edge in corner.split("-")
 ]
-_OFFSETS = {
-    "top-left": (T, T),
-    "top-right": (W - T - R, T),
-    "bottom-left": (T, H - T - R),
-    "bottom-right": (W - T - R, H - T - R),
-}
+
+
+def _offsets(radius):
+    return {
+        "top-left": (T, T),
+        "top-right": (W - T - radius, T),
+        "bottom-left": (T, H - T - radius),
+        "bottom-right": (W - T - radius, H - T - radius),
+    }
 
 
 def pq_matrix(corner, edge):
@@ -1411,19 +1472,19 @@ def pq_matrix(corner, edge):
     return cairo.Matrix(0, sy, sx, 0, x0, y0)
 
 
-def draw_corner_reference(cr, corner, edge, along, d):
+def draw_corner_reference(cr, corner, edge, along, d, radius=R):
     """The corner panel's pieces in (p, q), each filled on its own."""
     cr.save()
     cr.transform(pq_matrix(corner, edge))
     cr.set_source_rgba(*RGBA)
     # the screen-corner piece, lifted d px along the other edge
     cr.move_to(T, T + d)
-    cr.line_to(T + R, T + d)
-    cr.arc_negative(T + R, T + d + R, R, -0.5 * math.pi, -math.pi)
+    cr.line_to(T + radius, T + d)
+    cr.arc_negative(T + radius, T + d + radius, radius, -0.5 * math.pi, -math.pi)
     cr.close_path()
     cr.fill()
     if d > 0:
-        r = g.join_radius(d, R)
+        r = g.join_radius(d, radius)
         # the body: from the screen corner, its free corner rounded by r
         cr.move_to(0, 0)
         cr.line_to(along, 0)
@@ -1441,7 +1502,7 @@ def draw_corner_reference(cr, corner, edge, along, d):
     cr.restore()
 
 
-def render_reference(corners, panels=()):
+def render_reference(corners, panels=(), radius=R):
     """corners: [(corner, edge, along, d)], panels: [(edge, pos, length, depth, d)]."""
     s = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     cr = cairo.Context(s)
@@ -1450,27 +1511,27 @@ def render_reference(corners, panels=()):
         cr.rectangle(*rect)
     cr.fill()
     taken = {c for c, _e, _a, _d in corners}
-    for name, (ox, oy) in _OFFSETS.items():
+    for name, (ox, oy) in _offsets(radius).items():
         if name not in taken:
             cr.save()
             cr.translate(ox, oy)
-            draw_screen_corner(cr, name, R, RGBA)
+            draw_screen_corner(cr, name, radius, RGBA)
             cr.restore()
     for corner, edge, along, d in corners:
-        draw_corner_reference(cr, corner, edge, along, d)
+        draw_corner_reference(cr, corner, edge, along, d, radius)
     for edge, pos, length, depth, d in panels:
         ox, oy = surface_origin(edge, pos, length, depth)
         cr.save()
         cr.translate(ox, oy)
-        draw_panel(cr, edge, length, depth, d, T, R, RGBA)
+        draw_panel(cr, edge, length, depth, d, T, radius, RGBA)
         cr.restore()
     return alpha_bytes(s)
 
 
-def render_canvas(corners, panels=()):
+def render_canvas(corners, panels=(), radius=R):
     s = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     spans = [(c, e, a, DEPTH, d) for c, e, a, d in corners]
-    fill_mass(cairo.Context(s), W, H, T, R, list(panels), RGBA, spans)
+    fill_mass(cairo.Context(s), W, H, T, radius, list(panels), RGBA, spans)
     return alpha_bytes(s)
 
 
@@ -1484,10 +1545,24 @@ def bad_pixels(a, b):
 
 
 @pytest.mark.parametrize(("corner", "edge"), CORNER_EDGES)
-@pytest.mark.parametrize("d", [0, 3, 14, 27.5, 60, 100])
-def test_a_corner_panel_matches_the_reference_union(corner, edge, d):
+@pytest.mark.parametrize(
+    ("d", "radius", "along"),
+    [
+        (0, R, ALONG),
+        (3, R, ALONG),
+        (14, R, ALONG),
+        (27.5, R, ALONG),
+        (60, R, ALONG),
+        (100, R, ALONG),
+        # a large theme radius at the layout's minimum along, T + R + r (Task 6): 80 and 90
+        (60, 40, 80),
+        (100, 40, 90),
+    ],
+)
+def test_a_corner_panel_matches_the_reference_union(corner, edge, d, radius, along):
     bad = bad_pixels(
-        render_reference([(corner, edge, ALONG, d)]), render_canvas([(corner, edge, ALONG, d)])
+        render_reference([(corner, edge, along, d)], radius=radius),
+        render_canvas([(corner, edge, along, d)], radius=radius),
     )
     assert len(bad) < 40, bad[:10]
 
@@ -1811,11 +1886,11 @@ Apply to `shell/canvas/effects.py`:
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `scripts/py -m pytest -q tests/test_canvas_corner_outline.py tests/test_canvas_outline.py tests/test_canvas_effects.py`
-Expected: all pass. `test_canvas_corner_outline.py` has 54 tests. The legacy contract in `test_canvas_outline.py` must pass untouched: edge panels without corners walk exactly the old path.
+Expected: all pass. `test_canvas_corner_outline.py` has 70 tests. The legacy contract in `test_canvas_outline.py` must pass untouched: edge panels without corners walk exactly the old path.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1321 passed`.
+Run VERIFY. Expected: `1340 passed`.
 
 ```bash
 git add shell/canvas/outline.py shell/canvas/effects.py tests/test_canvas_corner_outline.py
@@ -2219,7 +2294,7 @@ Expected: all pass (`test_canvas_corner_scene.py`: 10).
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1331 passed`.
+Run VERIFY. Expected: `1350 passed`.
 
 ```bash
 git add shell/canvas/scene.py shell/canvas/painter.py shell/canvas/canvas.py shell/canvas/simulate.py tests/test_canvas_corner_scene.py
@@ -2240,7 +2315,7 @@ git commit -m "feat(canvas): corner shapes in the scene, damage boxes and the si
   - `MIN_DEPTH = 16`, plus `AXIS_START` and `AXIS_END` (`{edge: corner}`: the corner at the left or top end, and at the right or bottom end, of each edge);
   - `free_span(extent, thickness, radius, depth, start=None, end=None)`: `start` and `end` are the px each corner takes (None = `T + R`, the old behaviour);
   - `corner_clearance(edge, held: CornerGeometry | None, thickness, radius, gap) -> float`;
-  - `layout_corners(entries, width, height, thickness, radius, gap, where) -> ({index: CornerGeometry | None}, notes)`;
+  - `layout_corners(entries, width, height, thickness, radius, gap, where) -> ({index: CornerGeometry | None}, notes)`: floors `along` to `need = max(T + MIN_LENGTH, T + R + ceil(r))`; a corner panel is None (hidden) when its corner is taken, when `along < need` or `depth < MIN_DEPTH` after shrinking, or when it overlaps a corner panel shown before it (`_corner_grown` against the boxes already held). Only shown corner panels are held, so a hidden one takes no clearance in `layout_monitor`; a hidden one gets only its "not shown" note;
   - `layout_edge(..., clear=(None, None))`;
   - `layout_monitor(requests: Sequence[PanelRequest | CornerRequest], ...)` returns `Layout.panels: list[PanelGeometry | CornerGeometry | None]`.
 - Warning texts (key paths as in Plan 2):
@@ -2248,7 +2323,7 @@ git commit -m "feat(canvas): corner shapes in the scene, damage boxes and the si
   - `{where}.panels.{i} ({widget}): width|height {n} px does not fit the {edge} edge; shrunk to {m}`
   - `{where}.panels.{i} ({widget}): the {corner} corner has no room for it; not shown`
 
-  The overlap message is unchanged.
+  The overlap message is unchanged (`layout_corners` uses the same text for a corner panel that overlaps an earlier corner panel).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2348,6 +2423,14 @@ def test_a_narrow_body_is_floored_to_the_minimum_length():
     assert placed(box(width=60)) == ([("bottom-left", "bottom", 70, 380)], [])
 
 
+def test_a_large_radius_raises_the_minimum_along():
+    # R = 40 (the theme allows up to 64): T + R + r = 10 + 40 + 40 = 90 > T + 60, so the side
+    # from the lifted arc to the free corner never runs backwards (no folded outline)
+    layout = layout_monitor([box(width=60)], W, H, T, 40, GAP, None, "monitors.X")
+    assert [where(p) for p in layout.panels] == [("bottom-left", "bottom", 90, 380)]
+    assert layout.warnings == []
+
+
 # ---- several corner panels -----------------------------------------------------------------
 
 
@@ -2385,8 +2468,7 @@ def test_two_corner_panels_opening_from_the_same_side_edge():
 def test_a_corner_squeezed_below_the_minimum_is_not_shown():
     got, warnings = placed(box(width=1840), box("bottom-right"))
     assert got == [("bottom-left", "bottom", 1840, 380), None]
-    assert warnings == [
-        "monitors.X.panels.1 (box): width 300 px does not fit the bottom edge; shrunk to 44",
+    assert warnings == [  # only the outcome: no "shrunk to 44" for a panel that is not shown
         "monitors.X.panels.1 (box): the bottom-right corner has no room for it; not shown",
     ]
 
@@ -2395,6 +2477,18 @@ def test_opposite_corner_panels_that_overlap_hide_the_later_one():
     got, warnings = placed(box(width=1200, height=700), box("top-right", width=1200, height=700))
     assert got == [("bottom-left", "bottom", 1200, 690), None]
     assert "monitors.X.panels.1 (box): overlaps monitors.X.panels.0 (box)" in warnings[0]
+
+
+def test_a_hidden_corner_panel_takes_no_clearance():
+    # the top-right panel overlaps the bottom-left one and is hidden: the top edge's end is a
+    # plain screen corner again, so the bar sits at 1920 - 24 - 14 - 300 = 1582 (not 384)
+    got, warnings = placed(
+        box(width=1200, height=700),
+        box("top-right", width=1200, height=700),
+        panel("top", "end", 300, 56, "bar"),
+    )
+    assert got == [("bottom-left", "bottom", 1200, 690), None, ("top", 1582, 300)]
+    assert len(warnings) == 1 and "panels.1 (box): overlaps monitors.X.panels.0" in warnings[0]
 
 
 # ---- edge panels beside corner panels ----------------------------------------------------
@@ -2493,24 +2587,27 @@ Apply to `shell/panel_layout.py`:
 ```diff
 --- a/shell/panel_layout.py
 +++ b/shell/panel_layout.py
-@@ -36,6 +36,16 @@ between different groups (start / center / end) only the minimum `r1 + r2` is gu
+@@ -36,6 +36,19 @@ between different groups (start / center / end) only the minimum `r1 + r2` is gu
  not `r1 + r2 + gap` (the center group is pushed clear of the start and end groups by the
  minimum, and a fill sizes against the full spacing). Raised for a decision.
  
 +Corner panels (spec 19, `layout_corners`) are placed first, in config order: at most one per
 +screen corner (a later one in a taken corner is not shown); each is shrunk to fit beside the
 +corner panels already placed (along its edge: their free ends plus `r1 + r2 + gap`, or their
-+lifted screen-corner arc; across: the far corner's occupant), and not shown when less than
-+MIN_LENGTH px of body past the band or MIN_DEPTH px of depth remains. They then move the free
-+span of their two edges: on the edge a corner panel opens from, the span starts `along + r_c +
-+gap` from that corner (plus the panel's own `r`, as between neighbours); on the other edge the
-+screen-corner arc rides up by its depth, so the span starts `T + R + depth` from the corner
-+(plus `r`). The overlap check runs over the corner panels first, then the edge panels.
++lifted screen-corner arc; across: the far corner's occupant), and not shown when `along` falls
++below max(T + MIN_LENGTH, T + R + r) (so the outline never folds, whatever the theme radius)
++or less than MIN_DEPTH px of depth remains; a hidden panel gets only its "not shown" warning.
++A corner panel that overlaps one placed before it is hidden there too, so only the corner
++panels that are shown are held. They then move the free span of their two edges: on the edge
++a corner panel opens from, the span starts `along + r_c + gap` from that corner (plus the
++panel's own `r`, as between neighbours); on the other edge the screen-corner arc rides up by
++its depth, so the span starts `T + R + depth` from the corner (plus `r`). The overlap check
++then runs over the shown corner panels first, then the edge panels.
 +
  Every warning names the key path (`where`.panels.N (widget)).
  """
  
-@@ -47,10 +57,12 @@ from dataclasses import dataclass
+@@ -47,10 +60,12 @@ from dataclasses import dataclass
  from itertools import pairwise
  
  from shell import geometry
@@ -2525,7 +2622,7 @@ Apply to `shell/panel_layout.py`:
  CONTENT_PAD = 12  # body px on each side of a "content" panel's natural size
  EDGES: tuple[Edge, ...] = ("top", "right", "bottom", "left")
  
-@@ -58,9 +70,25 @@ Box = tuple[float, float, float, float]  # x0, y0, x1, y1
+@@ -58,9 +73,25 @@ Box = tuple[float, float, float, float]  # x0, y0, x1, y1
  Note = tuple[int, str]  # (config index, warning)
  
  
@@ -2552,7 +2649,7 @@ Apply to `shell/panel_layout.py`:
      warnings: list[str]
  
  
-@@ -69,10 +97,46 @@ def content_length(natural: int) -> int:
+@@ -69,10 +100,46 @@ def content_length(natural: int) -> int:
      return max(MIN_LENGTH, natural + 2 * CONTENT_PAD)
  
  
@@ -2603,7 +2700,7 @@ Apply to `shell/panel_layout.py`:
  
  
  @dataclass
-@@ -131,16 +195,19 @@ def layout_edge(
+@@ -131,16 +198,19 @@ def layout_edge(
      gap: int,
      natural: Mapping[int, int] | None = None,
      where: str = "monitor",
@@ -2626,7 +2723,7 @@ Apply to `shell/panel_layout.py`:
          if hi - lo < MIN_LENGTH:
              notes.append(
                  (index, f"{name}: the {req.edge} edge ({extent} px) has no room for it; not shown")
-@@ -271,12 +338,114 @@ def _grown_body(geo: PanelGeometry, width: int, height: int, thickness: int, r:
+@@ -271,12 +341,136 @@ def _grown_body(geo: PanelGeometry, width: int, height: int, thickness: int, r:
      return (width - across, a0, width + r, a1)
  
  
@@ -2665,10 +2762,12 @@ Apply to `shell/panel_layout.py`:
 +    gap: int,
 +    where: str = "monitor",
 +) -> tuple[dict[int, CornerGeometry | None], list[Note]]:
-+    """Resolve the corner panels (spec 19), in config order (see the module docstring)."""
++    """Resolve the corner panels (spec 19), in config order (see the module docstring). Only
++    corner panels that are shown are held: a hidden one takes no clearance from anything."""
 +    out: dict[int, CornerGeometry | None] = {}
 +    notes: list[Note] = []
 +    held: dict[Corner, tuple[int, CornerGeometry]] = {}
++    boxes: list[tuple[int, CornerGeometry, Box]] = []
 +    for index, req in entries:
 +        name = f"{where}.panels.{index} ({req.widget})"
 +        if req.corner in held:
@@ -2686,13 +2785,13 @@ Apply to `shell/panel_layout.py`:
 +        horizontal = geometry.is_horizontal(edge)
 +        along_key, across_key = ("width", "height") if horizontal else ("height", "width")
 +        extent_e, extent_f = (width, height) if horizontal else (height, width)
-+        along = max(getattr(req, along_key), thickness + MIN_LENGTH)
 +        depth = getattr(req, across_key) - thickness
++        shrunk: list[Note] = []  # reported only when the panel is shown
 +        # across: the screen-corner arc it lifts must stay clear of the far corner of `side`
 +        far_f = held.get(_far(req.corner, side), (None, None))[1]
 +        room = extent_f - thickness - radius - math.ceil(_reach(side, far_f, thickness, radius))
 +        if depth > room:
-+            notes.append(
++            shrunk.append(
 +                (
 +                    index,
 +                    f"{name}: {across_key} {depth + thickness} px does not fit the {side} edge; "
@@ -2701,11 +2800,15 @@ Apply to `shell/panel_layout.py`:
 +            )
 +            depth = room
 +        r = geometry.join_radius(depth, radius)
++        # the side from the lifted arc (T + R) to the free corner (along - r) never runs
++        # backwards, and the body keeps MIN_LENGTH px past the band, whatever the theme radius
++        need = max(thickness + MIN_LENGTH, thickness + radius + math.ceil(r))
++        along = max(getattr(req, along_key), need)
 +        # along: its free end must stay clear of the far corner of `edge`
 +        far_e = held.get(_far(req.corner, edge), (None, None))[1]
 +        room = math.floor(extent_e - corner_clearance(edge, far_e, thickness, radius, gap) - r)
 +        if along > room:
-+            notes.append(
++            shrunk.append(
 +                (
 +                    index,
 +                    f"{name}: {along_key} {along} px does not fit the {edge} edge; "
@@ -2713,7 +2816,7 @@ Apply to `shell/panel_layout.py`:
 +                )
 +            )
 +            along = room
-+        if depth < MIN_DEPTH or along - thickness < MIN_LENGTH:
++        if depth < MIN_DEPTH or along < need:
 +            notes.append((index, f"{name}: the {req.corner} corner has no room for it; not shown"))
 +            out[index] = None
 +            continue
@@ -2727,7 +2830,23 @@ Apply to `shell/panel_layout.py`:
 +            req.state,
 +            req.label,
 +        )
++        # a corner panel across the screen may still overlap one placed before it: hidden,
++        # and never held, so it takes no clearance from any edge panel
++        box = _corner_grown(geo, width, height, thickness, radius)
++        clash = next(((j, other) for j, other, b in boxes if _overlap(box, b)), None)
++        if clash is not None:
++            notes.append(
++                (
++                    index,
++                    f"{name}: overlaps {where}.panels.{clash[0]} ({clash[1].widget}) or leaves "
++                    "less than the minimum gap between their joins; not shown",
++                )
++            )
++            out[index] = None
++            continue
++        notes.extend(shrunk)
 +        held[req.corner] = (index, geo)
++        boxes.append((index, geo, box))
 +        out[index] = geo
 +    return out, notes
 +
@@ -2742,7 +2861,7 @@ Apply to `shell/panel_layout.py`:
      width: int,
      height: int,
      thickness: int,
-@@ -285,39 +454,62 @@ def layout_monitor(
+@@ -285,39 +479,62 @@ def layout_monitor(
      natural: Mapping[int, int] | None = None,
      where: str = "monitor",
  ) -> Layout:
@@ -2825,11 +2944,11 @@ Apply to `shell/panel_layout.py`:
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `scripts/py -m pytest -q tests/test_corner_layout.py tests/test_layout_resolver.py tests/test_panel_layout.py`
-Expected: all pass (`test_corner_layout.py`: 26). The Plan 2 resolver tests must pass unchanged: without corner requests every clearance is `T + R` and the overlap order is config order.
+Expected: all pass (`test_corner_layout.py`: 28). The Plan 2 resolver tests must pass unchanged: without corner requests every clearance is `T + R` and the overlap order is config order.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1357 passed`.
+Run VERIFY. Expected: `1378 passed`.
 
 ```bash
 git add shell/panel_layout.py tests/test_corner_layout.py
@@ -3087,7 +3206,7 @@ Expected: `18 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1375 passed`.
+Run VERIFY. Expected: `1396 passed`.
 
 ```bash
 git add shell/canvas/corner_sheet.py tests/test_corner_sheet.py
@@ -3140,12 +3259,12 @@ Columns, left to right: the corner panel at 0, 5, 15, 30, 60 and 100 % of its de
 3. **Extended (columns 5-6):** the block is a rectangle in the corner, fused to both bands. Its two free sides meet the two bands with concave curves: on one side the screen-corner-sized curve, on the other the join-sized fillet. It is not an L.
 4. **Neighbours:**
    - the edge panel on the corner panel's own edge sits beside it with a straight piece of frame between their fillets (the 8 px gap);
-   - the edge panel on the other edge sits just past the lifted corner curve at full depth, so the two never touch at any column.
+   - the edge panel on the other edge sits past the lifted corner curve at full depth, so the two never overlap at any column. At full depth (column 6) its fillet starts exactly where the lifted corner curve ends: there is no straight piece of frame between them, a stepped silhouette. That is valid geometry and what this plan builds (decision 10, option A). If Phil wants a straight piece there too, that is option B (the `gap` on the other edge as well): note it; option B's one-line change and its expected numbers (decision 10) then go into Task 6's code and tests, and Task 11's and Gate B's numbers, before Task 9.
 5. **Mirroring:** rows 1, 3, 5 and 7 mirror each other, as do rows 2, 4, 6 and 8.
 6. **Effects:** open `/tmp/edge-corners-fx.png`. The mint 2 px border runs as one unbroken line around every corner panel, its fillets and the lifted corner curve, and never over the dark mass. The soft shadow follows the same outline, including in columns 2-4.
 
 **On failure:**
-- A spike, notch or hole in one row and column: note the row, column and edge. Add that case to `test_a_corner_panel_matches_the_reference_union` (corner, edge, depth `fraction x 80` at `ALONG = 120`) first. It must fail. Then fix the matching branch of `trace_edge` (head, tail, lead or trail) and re-run Task 4's VERIFY, then re-render.
+- A spike, notch or hole in one row and column: note the row, column and edge. Add that case to `test_a_corner_panel_matches_the_reference_union` (a `(fraction x 80, R, ALONG)` row; the parametrized corner and edge cover the cell) first. It must fail. Then fix the matching branch of `trace_edge` (head, tail, lead or trail) and re-run Task 4's VERIFY, then re-render.
 - A neighbour too close or overlapping: add the cell's three requests to `tests/test_corner_layout.py` as a failing case, then fix `corner_clearance` or `layout_corners`.
 - A border gap or a shadow seam: compare with `test_the_border_never_touches_the_corner_panels_mass`. A border over the mass is a canvas regression: stop and report.
 - Phil prefers another geometry (decision 1's alternatives): stop here. The geometry decision changes Tasks 3-7.
@@ -3525,7 +3644,7 @@ Expected: all pass (`test_corner_panel.py`: 14). The Plan 3 handle tests pass un
 
 - [ ] **Step 6: VERIFY and commit**
 
-Run VERIFY. Expected: `1389 passed`.
+Run VERIFY. Expected: `1410 passed`.
 
 ```bash
 git add shell/edge_panel.py shell/corner_panel.py tests/test_edge_panel_handle.py tests/test_corner_panel.py
@@ -3744,7 +3863,7 @@ Expected: `66 passed`.
 
 - [ ] **Step 5: VERIFY and commit**
 
-Run VERIFY. Expected: `1398 passed`.
+Run VERIFY. Expected: `1419 passed`.
 
 ```bash
 git add shell/monitors.py tests/test_monitor_shell.py
@@ -3804,7 +3923,7 @@ def test_it_is_registered_as_the_spec_corner_panel():
     assert registry.widget_class("widget_panel") is wp.WidgetPanel
     assert issubclass(wp.WidgetPanel, CornerPanel)
     assert registry.widget_kind("widget_panel") == "corner"
-    assert registry._DEFAULTS["widget_panel"] == CornerDefaults(
+    assert registry.defaults("widget_panel") == CornerDefaults(
         corner="bottom-left", width=300, height=390, label="widget panel"
     )
 
@@ -4023,7 +4142,7 @@ The headless canvas run (`scripts/py -m shell.canvas.simulate --config examples/
 
 - [ ] **Step 6: VERIFY and commit**
 
-Run VERIFY. Expected: `1403 passed`.
+Run VERIFY. Expected: `1424 passed`.
 
 ```bash
 git add widgets/widget_panel.py widgets/__init__.py shell/theme.py examples/corner-test.toml tests/test_widget_panel.py
@@ -4092,11 +4211,12 @@ Edit `/tmp/edge-corner.toml` while it runs; each save applies within about a sec
 10. **Same corner:** append a sixth entry `widget = "widget_panel"` / `edge = "left"` and save. A "Panels adjusted" notification says `monitors.HDMI-A-1.panels.5 (widget_panel): the bottom-left corner already holds monitors.HDMI-A-1.panels.0 (widget_panel); not shown`. Remove it.
 11. **Resolution change (optional, as at Plan 2 Gate B):** switch HDMI-A-1 to 1280x720 in System Settings.
     - The log shows `re-laying out HDMI-A-1 for 1280x720`.
-    - The widget panel keeps its 300 x 390 size (it fits), and the system bar moves with the shorter edge.
-    - Switch back to 1920x1080.
+    - The widget panel keeps its 300 x 390 size (it fits), and the top-right panel too.
+    - The system bar no longer fits beside the lifted corner (the left edge is 720 px; 720 - 404 - 14 - 24 - 14 = 264 px remain): a "Panels adjusted" notification says `monitors.HDMI-A-1.panels.3 (system_bar): length 300 px does not fit the left edge; shrunk to 264`, and the bar sits at the top of the left edge, pos 38 (y 38-302).
+    - Switch back to 1920x1080: the bar is 300 px again at y 362-662, with no warning.
 12. **Stacking:** quit, start again, wait 10 s. Both corner panels' handles and the widget panel's content are visible (the delayed re-raise covers corner panels too).
 13. **Measurement:** `scripts/py main.py --config /tmp/edge-corner.toml --stats 10` (10 s, every panel toggling): fps while animating >= 55 and canvas damaged-draw p95 <= 8 ms (Plan 1-3 targets). Copy the printed report.
-14. The `-v` logs have no errors (the warnings of items 9 and 10 are expected).
+14. The `-v` logs have no errors (the warnings of items 9, 10 and 11 are expected: item 11's is the system bar's `shrunk to 264` at 1280x720).
 
 **On failure:**
 - **Items 1-2 the content or the handle in the wrong place.** Compare the live position with `cn.content_rect` / `cn.hit_rect` (Task 3) and `test_the_handle_rides_the_body_edge_centred_past_the_band` (Task 9). The margins must be set with start alignment.
@@ -4188,7 +4308,8 @@ connects to two edges ... it is not an L shaped panel window"). Plan:
   280 ms tween, fade.
 - **Handle.** On the free side parallel to the opening edge, centred on the body past the
   adjacent band; section 15's rules unchanged.
-- **Layout.** Corner panels first, one per corner, shrunk to fit beside each other; edge panels
+- **Layout.** Corner panels first, one per corner, shrunk to fit beside each other (`along` at
+  least max(T + 60, T + R + r); a corner panel hidden by an overlap takes no clearance); edge panels
   keep `along + r_c + gap + r` from a corner panel on their edge and `T + R + depth + r` from
   one on the neighbouring edge; the overlap check runs corners first.
 - **Config.** In `[[monitors.X.panels]]`; the kind comes from the widget (CornerDefaults);
@@ -4204,7 +4325,7 @@ Replace `RESULT_A`, `RESULT_B` and `STATS_B` with the recorded gate results: pas
 
 - [ ] **Step 3: Check and commit**
 
-Run: `scripts/py -m ruff check .` (docs are excluded; expect `All checks passed!`) and `scripts/py -m pytest -q` (expect `1403 passed`).
+Run: `scripts/py -m ruff check .` (docs are excluded; expect `All checks passed!`) and `scripts/py -m pytest -q` (expect `1424 passed`).
 
 ```bash
 git add README.md docs/superpowers/specs/2026-10-11-edge-shell-design.md
@@ -4225,9 +4346,10 @@ git commit -m "docs: corner panels in README and spec" -m "Co-Authored-By: Claud
   - section 6's validation with key paths and live reload kinds: Tasks 1, 2 and 10;
   - section 5's surfaces, exclusive zone, raise and input region: Task 9;
   - section 9's human gates on HDMI-A-1: Tasks 8 and 12;
-  - settings-window readiness (Plan 4): decision 6, Task 1's schema test, `widget_kind`.
+  - settings-window readiness (Plan 4): decision 6's contract, all public and tested: `registry.widget_kind(name)` and `registry.defaults(name)` (Task 2, `test_a_corner_widget_gives_a_corner_request`, `test_a_widgets_defaults_are_public`); `SHARED_KEYS`, `EDGE_ONLY_KEYS`, `CORNER_ONLY_KEYS` exported from `shell.config.models` and partitioning `PanelConfig` (Task 1, `test_the_key_sets_partition_the_panel_keys`); the corner's two edges as `corner.split("-")` with `default_edge(corner)` (Task 2); the schema (Task 1). The settings plan itself must be updated before it runs (Prerequisites: its 10 changes, and the merge conflicts with its Task 11).
+- **Review corrections applied** (independent review of the first draft): `along` floored to `max(T + 60, T + R + r)` (large theme radii folded the outline); corner-vs-corner overlap moved into `layout_corners`, so a hidden corner panel takes no clearance; one warning per hidden corner panel; `Extent` dropped for the existing `Length`; hover zone and peek clamped to the depth (as on edge panels, now tested); `registry.defaults` and `SHARED_KEYS` added; Gate B item 11 expects the system bar shrunk at 1280x720; Gate A item 4 describes the zero-length straight piece honestly, with option B left to Phil (decision 10).
 - **Placeholders:** none in code steps. Task 13's `RESULT_A`, `RESULT_B` and `STATS_B` are gate outputs that do not exist before the gates; Step 2 says exactly what goes there.
-- **Type consistency:** `CornerGeometry(widget, corner, edge, along, length, depth, state, label)` is used the same way in Tasks 2, 5, 6, 9 and 10. `CornerShape(corner, edge, along, depth)` and `CornerSpan = (corner, edge, along, depth, d)` match in Tasks 4, 5 and 7. `shell.corner` signatures match in Tasks 3, 5, 6 and 9. `corner_clearance(edge, held, thickness, radius, gap)` matches in Task 6.
+- **Type consistency:** `CornerGeometry(widget, corner, edge, along, length, depth, state, label)` is used the same way in Tasks 2, 5, 6, 9 and 10. `CornerShape(corner, edge, along, depth)` and `CornerSpan = (corner, edge, along, depth, d)` match in Tasks 4, 5 and 7. `shell.corner` signatures match in Tasks 3, 5, 6 and 9. `corner_clearance(edge, held, thickness, radius, gap)` matches in Task 6. The window stays one rectangle: **the corner panel window is a rectangle, not an L** (decisions 1 and 4, Global Constraints, Review Focus 1).
 - **Review Focus:** each of the six lines names its tests, all in this plan.
 
 ## Open questions for Phil
@@ -4238,3 +4360,4 @@ git commit -m "docs: corner panels in README and spec" -m "Co-Authored-By: Claud
 4. **Sizes** (decision 8): `width` and `height` measured from the screen corner with the frame bands included (the spec's 380 deep becomes `height = 390`). Agreed?
 5. **Content** (decision 7): the `widget_panel` v1 column (time, date, CPU, RAM). Enough for now, or should it host other widgets first?
 6. **Which widgets in corners** (decision 6): only corner widgets for now. Do you want a clock or dock in a corner panel later (about 1 task)?
+7. **Gap on the other edge** (decision 10): at full depth an edge panel on the corner panel's other edge starts right where the lifted corner curve ends, with no straight piece of frame between them (option A, planned). Or keep the 8 px gap there too (option B, a one-line change)?
