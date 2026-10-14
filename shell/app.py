@@ -330,7 +330,10 @@ class EdgeShellApp:
         if self._stats_seconds:
             self.recorder = StatsRecorder(GLib.get_monotonic_time)
         self.sync_monitors()
-        self.app = Application(APP_NAME, *self._early)
+        # open_client=False: no Fabric D-Bus client (org.Fabric.fabric.edge-shell's Execute /
+        # Evaluate run any Python sent by any session-bus client). The bus name itself stays
+        # owned (Gtk.Application), so _already_running still sees a running shell.
+        self.app = Application(APP_NAME, *self._early, open_client=False)
         self._early.clear()
         self.app.set_stylesheet_from_string(self.css(), compile=False)
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)

@@ -328,6 +328,35 @@ def test_run_refuses_a_second_instance_before_creating_windows(env, monkeypatch,
     assert "already running" in capsys.readouterr().err
 
 
+def test_the_fabric_dbus_client_is_off(env, monkeypatch):
+    """Fabric's org.Fabric.fabric.edge-shell Execute / Evaluate would run any Python sent by
+    any session-bus client inside the shell; nothing in Edge Shell uses it."""
+    app, _ = env
+    made = []
+
+    class FakeApplication:
+        def __init__(self, *args, **kwargs):
+            made.append((args, kwargs))
+
+        def set_stylesheet_from_string(self, *_a, **_k):
+            pass
+
+        def hold(self):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(app_mod, "_already_running", lambda: False)
+    monkeypatch.setattr(app_mod, "Application", FakeApplication)
+    monkeypatch.setattr(app, "start_watching", lambda: None)
+    monkeypatch.setattr(app, "watch_displays", lambda: None)
+    monkeypatch.setattr(app_mod.signal, "signal", lambda *_a: None)
+    assert app.run() == 0
+    ((args, kwargs),) = made
+    assert args[0] == app_mod.APP_NAME and kwargs == {"open_client": False}
+
+
 def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
     app, _ = env
     calls = []
