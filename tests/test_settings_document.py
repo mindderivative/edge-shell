@@ -241,10 +241,12 @@ def test_move_panel(index, to, order):
     }
 
 
-def test_move_panel_out_of_range_is_an_error():
+@pytest.mark.parametrize("index, to", [(5, 0), (0, 3), (0, 99), (0, -1), (2, -3)])
+def test_move_panel_out_of_range_is_an_error(index, to):
+    """`to` is a position in the list (0 to 2 here), not clamped like list.insert."""
     doc = UserDocument(USER)
     with pytest.raises(DocumentError):
-        doc.move_panel("HDMI-A-1", 5, 0)
+        doc.move_panel("HDMI-A-1", index, to)
     assert doc.text == USER
 
 
@@ -304,13 +306,33 @@ shell = "plasma"
 """
 
 
-def test_an_edit_that_would_lose_a_comment_above_a_table_is_refused():
+@pytest.mark.parametrize(
+    "text, path, comment",
+    [
+        ("# t\n[theme]\na = 1\n\n# l\n[layout]\ngap = 1\n", ("theme",), "# l"),
+        (  # a banner with a blank line under it counts too
+            "[theme]\na = 1\n\n# ---- banner ----\n\n[layout]\ngap = 1\n",
+            ("theme",),
+            "# ---- banner ----",
+        ),
+        (  # the closing comment of the file counts like one above a header
+            "[theme]\na = 1\n\n[layout]\ngap = 1\n# vim: ft=toml\n",
+            ("layout",),
+            "# vim: ft=toml",
+        ),
+        (
+            "[theme]\na = 1\n\n[layout]\ngap = 1\n\n# vim: ft=toml\n",
+            ("layout",),
+            "# vim: ft=toml",
+        ),
+    ],
+)
+def test_an_edit_that_would_lose_a_comment_above_a_table_is_refused(text, path, comment):
     """tomlkit keeps the comment lines above a header in the table before it: removing that
     whole table would delete the next table's label with it (the comment census)."""
-    text = "# t\n[theme]\na = 1\n\n# l\n[layout]\ngap = 1\n"
     doc = UserDocument(text)
-    with pytest.raises(DocumentError, match="losing the comment '# l'.*by hand"):
-        doc.unset(("theme",))
+    with pytest.raises(DocumentError, match=f"losing the comment '{comment}'.*by hand"):
+        doc.unset(path)
     assert doc.text == text
 
 
@@ -388,13 +410,109 @@ def test_comments_inside_a_removed_entry_may_go():
     assert "# the dock" not in doc.text
 
 
-def test_a_comment_above_a_table_can_move_but_stays():
-    """Pinned as it is today (decision 2): a key added at the end of the table before a
-    commented header lands below the comment; the comment is kept, the edit is allowed."""
-    doc = UserDocument(COMMENTED)
-    doc.set(("theme", "thickness"), 12)
-    lines = doc.text.splitlines()
-    assert lines[lines.index("# wide gaps on purpose") + 1] == "thickness = 12"
+# ---- a new key goes below the table's last line, above the next table's label ---------------
+@pytest.mark.parametrize(
+    "text, path, value, expected",
+    [
+        (  # tomlkit wrote it below "# wide gaps on purpose", between the label and [layout]
+            COMMENTED,
+            ("theme", "thickness"),
+            12,
+            COMMENTED.replace('accent = "#8fd3b6"\n', 'accent = "#8fd3b6"\nthickness = 12\n'),
+        ),
+        (  # a sub-table, the next one labelled
+            "[theme.border]\nwidth = 2\n\n# soft shadow\n[theme.shadow]\nelevation = 3\n",
+            ("theme", "border", "color"),
+            "#ffffff",
+            '[theme.border]\nwidth = 2\ncolor = "#ffffff"\n\n# soft shadow\n[theme.shadow]\n'
+            "elevation = 3\n",
+        ),
+        (  # a table split across the file: the new dotted key goes into its first part
+            "[theme]\naccent = 1\n\n# layout\n[layout]\ngap = 4\n\n[theme.shadow]\nelevation = 3\n",
+            ("theme", "border", "width"),
+            2,
+            "[theme]\naccent = 1\nborder.width = 2\n\n# layout\n[layout]\ngap = 4\n\n"
+            "[theme.shadow]\nelevation = 3\n",
+        ),
+        (  # a banner and a label: both stay above the next header
+            "[theme]\naccent = 1\n\n# ---- screens ----\n\n# the test monitor\n[monitors.X]\n"
+            'shell = "edge"\n',
+            ("theme", "thickness"),
+            12,
+            "[theme]\naccent = 1\nthickness = 12\n\n# ---- screens ----\n\n# the test monitor\n"
+            '[monitors.X]\nshell = "edge"\n',
+        ),
+        (  # the closing comment stays the last line
+            "[layout]\ngap = 4\n\n# vim: ft=toml\n",
+            ("layout", "inner"),
+            1,
+            "[layout]\ngap = 4\ninner = 1\n\n# vim: ft=toml\n",
+        ),
+        (  # a new monitor table too
+            "[layout]\ngap = 4\n\n# vim: ft=toml\n",
+            ("monitors", "X", "shell"),
+            "edge",
+            '[layout]\ngap = 4\n\n[monitors.X]\nshell = "edge"\n\n# vim: ft=toml\n',
+        ),
+        (  # a [monitors] header tomlkit adds above the first monitor goes above its label
+            '# my screens\n\n# the X screen\n[monitors.X]\nshell = "edge"\n',
+            ("monitors", "radius"),
+            12,
+            "# my screens\n\n[monitors]\nradius = 12\n\n# the X screen\n[monitors.X]\n"
+            'shell = "edge"\n',
+        ),
+    ],
+)
+def test_a_new_key_goes_above_the_next_tables_label(text, path, value, expected):
+    """tomlkit adds a new key at the end of the table's body, below the comments there, so
+    between the next table's label and its header; the label must stay directly above it."""
+    assert edited(lambda d: d.set(path, value), text)[0] == expected
+
+
+HAND = """\
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: dock
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]    # 1: clock
+widget = "clock"
+
+# DP-1 holds the Plasma panel
+[monitors.DP-1]
+shell = "plasma"
+"""
+_DOCK = '[[monitors.HDMI-A-1.panels]]    # 0: dock\nwidget = "dock"\n'
+_CLOCK = '[[monitors.HDMI-A-1.panels]]    # 1: clock\nwidget = "clock"\nedge = "left"\n'
+_DP1 = '# DP-1 holds the Plasma panel\n[monitors.DP-1]\nshell = "plasma"\n'
+_TOP = '[monitors.HDMI-A-1]\nshell = "edge"\n\n'
+
+
+@pytest.mark.parametrize(
+    "edit, expected",
+    [
+        (lambda d: d.remove_panel("HDMI-A-1", 1), _TOP + _DOCK + "\n" + _DP1),
+        (lambda d: d.move_panel("HDMI-A-1", 1, 0), _TOP + _CLOCK + "\n" + _DOCK + "\n" + _DP1),
+        (
+            lambda d: d.add_panel("HDMI-A-1", "bar"),
+            _TOP
+            + _DOCK
+            + "\n"
+            + _CLOCK
+            + '\n[[monitors.HDMI-A-1.panels]]\nwidget = "bar"\n\n'
+            + _DP1,
+        ),
+    ],
+)
+def test_a_key_set_on_the_last_panel_keeps_the_next_label_through_panel_edits(edit, expected):
+    """A new key on the last entry used to sit between the DP-1 label and its header: the label
+    then counted as the entry's body and went with a remove, a move or an add."""
+    doc = UserDocument(HAND)
+    doc.set(("monitors", "HDMI-A-1", "panels", 1, "edge"), "left")
+    assert doc.text == HAND.replace('widget = "clock"\n', 'widget = "clock"\nedge = "left"\n')
+    edit(doc)
+    assert doc.text == expected
 
 
 @pytest.mark.parametrize(
@@ -675,10 +793,60 @@ def test_an_emptied_inline_monitor_at_the_end_of_the_file_takes_its_label():
             lambda d: d.add_panel("X", "b"),
             '[[ monitors.X.panels ]]\nwidget = "a"\n[[ monitors.X.panels ]]\nwidget = "b"\n',
         ),
+        (  # a comment directly under the last entry stays under it; the new one goes below
+            '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[monitors.Y]\nshell = "e"\n',
+            lambda d: d.add_panel("X", "b"),
+            '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[[monitors.X.panels]]\n'
+            'widget = "b"\n\n[monitors.Y]\nshell = "e"\n',
+        ),
+        (  # also at the end of the file
+            '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# note\n',
+            lambda d: d.add_panel("X", "b"),
+            '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# note\n\n'
+            '[[monitors.X.panels]]\nwidget = "b"\n',
+        ),
+        (  # no blank line after the last entry: none above the new one either
+            '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n# Y\n'
+            '[monitors.Y]\nshell = "e"\n',
+            lambda d: d.add_panel("X", "b"),
+            '[monitors.X]\nshell = "e"\n\n[[monitors.X.panels]]\nwidget = "a"\n'
+            '[[monitors.X.panels]]\nwidget = "b"\n# Y\n[monitors.Y]\nshell = "e"\n',
+        ),
+        (  # two blank runs that meet keep the longer one, not three blank lines
+            '[theme]\na = 1\n\n\n[[monitors.X.panels]]\nwidget = "a"\n\n\n[[monitors.X.panels]]\n'
+            'widget = "b"\n',
+            lambda d: d.remove_panel("X", 0),
+            '[theme]\na = 1\n\n\n[[monitors.X.panels]]\nwidget = "b"\n',
+        ),
     ],
 )
 def test_panel_edits_leave_a_tidy_file(text, edit, expected):
     assert edited(edit, text)[0] == expected
+
+
+@pytest.mark.parametrize(
+    "text, monitor",
+    [
+        (HAND, "HDMI-A-1"),
+        (LABELLED, "HDMI-A-1"),
+        (COMMENTED, "HDMI-A-1"),
+        (BANNER, "DP-1"),
+        (HEAD_COMMENT, "DP-1"),
+    ],
+)
+def test_adding_then_removing_a_panel_restores_the_file(text, monitor):
+    doc = UserDocument(text)
+    doc.add_panel(monitor, "bar")
+    doc.remove_panel(monitor, -1)
+    assert doc.text == text
+
+
+def test_adding_then_removing_a_panel_below_a_comment_restores_the_file():
+    text = '[[monitors.X.panels]]\nwidget = "a"\n# note\n\n[monitors.Y]\nshell = "e"\n'
+    doc = UserDocument(text)
+    doc.add_panel("X", "b")
+    doc.remove_panel("X", 1)
+    assert doc.text == text
 
 
 # ---- layouts that used to crash or be refused ------------------------------------------------
@@ -768,6 +936,18 @@ NESTED_ARRAY = (
             '[[monitors."X".panels]]\nwidget = "b"\n',
             lambda d: d.unset(("extra", "x")),
             WRITTEN_BY_HAND,
+        ),
+        (  # the same, by removing the panel between two spellings of one monitor
+            '[[monitors.X.panels]]\nwidget = "a"\n\n[[monitors.Y.panels]]\nwidget = "y"\n\n'
+            '[[monitors."X".panels]]\nwidget = "b"\n',
+            lambda d: d.remove_panel("Y", 0),
+            WRITTEN_BY_HAND,
+        ),
+        (
+            USER,
+            lambda d: d.move_panel("HDMI-A-1", 0, 3),
+            "cannot move the panel to position 3: monitors.HDMI-A-1 has 3 panels "
+            "(positions 0 to 2)",
         ),
         (
             '[theme]\naccent = "#111111"\n',

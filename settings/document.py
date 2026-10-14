@@ -13,14 +13,24 @@ whole-line comments directly above its header (no blank line in between). A move
 its label with it, a removed entry takes only its own label, and an added entry goes below the
 last one (or below the monitor's last table), never between a comment and the header it labels.
 Blank lines, and comment blocks separated from a header by a blank line (a file's head comment,
-a section banner), belong to the place: they stay where they were.
+a section banner), belong to the place: they stay where they were. So does a comment directly
+under an entry's last line: it stays there, and an entry added after it goes below it (with a
+blank line in between), unless it is the next header's label. An added entry is spaced like
+the last one (the blank lines above it), unless no blank line follows the last entry.
+
+A new key (or table) set into a table goes right below the table's last line that is neither
+blank nor a comment: above the blank lines, banners and the label of the next header (or a
+closing comment), never between a label and its header.
 
 A table emptied by an edit (the last panel of a monitor removed, the only key of a table reset)
-loses its header line together with the header's own label; the next table's label stays.
+is removed: its header line goes together with the header's own label (except a label that
+starts the file: it may as well be the file's head comment, so it stays); the next table's
+label stays.
 
-Known and accepted (decision 2): a key added at the end of a table lands between a comment and
-the next header; a CRLF file may get "\n" endings on the lines tomlkit writes; a comment inside
-a multi-line array goes when the array is replaced; a set or reset sometimes drops a blank line.
+Known and accepted (decision 2): a CRLF file may get "\n" endings on the lines tomlkit writes;
+a comment inside a multi-line array goes when the array is replaced; a set or reset sometimes
+drops a blank line; unsetting a whole table leaves its own label behind (the census refuses it
+when the next table is labelled; the settings window only resets single keys).
 
 A path is a tuple of keys from the top of the file; an int indexes the panel list, e.g.
 ("monitors", "HDMI-A-1", "panels", 0, "handle", "shape").
@@ -29,6 +39,7 @@ A path is a tuple of keys from the top of the file; an int indexes the panel lis
 from __future__ import annotations
 
 import copy
+import difflib
 import math
 import re
 import tomllib
@@ -134,10 +145,16 @@ class UserDocument:
         )
 
     def move_panel(self, monitor: str, index: int, to: int) -> None:
-        """Move the entry at `index` so it ends up at `to` (config order decides ties)."""
+        """Move the entry at `index` so it ends up at `to`, an index into the list as it is
+        (0 to the number of panels - 1; anything else is refused)."""
 
         def plain(data):
             panels = _plain_panels(data, monitor)
+            if not 0 <= to < len(panels):
+                raise DocumentError(
+                    f"cannot move the panel to position {to}: monitors.{monitor} has "
+                    f"{len(panels)} panels (positions 0 to {len(panels) - 1})"
+                )
             panels.insert(to, panels.pop(index))
 
         self._edit(
@@ -238,10 +255,9 @@ def _same(a: Any, b: Any) -> bool:
 # or pruning that table would silently drop them. Whole-line comments above a header (blank
 # lines allowed in between) and at the end of the file must survive an edit; other comments
 # may go with the key or entry they sat in, and a removed panel entry (or the header of a table
-# emptied by the edit) takes its own label. A
-# comment can still MOVE (a key added at the end of the table before it lands below the
-# comment): see decision 2. The census counts comment texts, so it cannot tell two identical
-# comments apart (one surviving copy hides the loss of the other).
+# emptied by the edit) takes its own label. A key added at the end of a table is moved above
+# those comments (_below_last_line). The census counts comment texts, so it cannot tell two
+# identical comments apart (one surviving copy hides the loss of the other).
 
 
 def _comments(text: str) -> Counter[str]:
@@ -326,9 +342,13 @@ def _close_gap(lines: list[str], at: int) -> None:
     if at == 0:
         while lines and not lines[0].strip():
             del lines[0]
-    elif at < len(lines):
-        if not lines[at].strip() and not lines[at - 1].strip():
-            del lines[at]
+    elif at < len(lines):  # the longer of the two blank runs that meet there is kept
+        up = down = 0
+        while up < at and not lines[at - 1 - up].strip():
+            up += 1
+        while at + down < len(lines) and not lines[at + down].strip():
+            down += 1
+        del lines[at : at + min(up, down)]
     elif not lines[at - 1].strip():
         del lines[at - 1]
 
@@ -566,13 +586,23 @@ def _add_panel_text(text: str, data: dict, monitor: str, widget: str) -> str:
                 "add the panel by hand"
             )
         s = _Spans(lines, _panel_path(monitor), count)
-        at = s.end[-1]
-        # the blank lines above the last entry, none of the comments (the place's, not its)
+        # the place after the last entry stays as it is, directly under it: a comment run there
+        # stays under the last entry (unless it is the next header's label)
+        at = below = s.end[-1]
+        while below < len(lines) and _comment(lines[below]):
+            below += 1
+        if below == len(lines) or not lines[below].strip():
+            at = below
+        # the blank lines above the last entry, none of the comments (the place's, not its),
+        # when that place is spaced too (a file without blank lines between tables gets none)
         above = s.start[-1]
         while above > 0 and not lines[above - 1].strip():
             above -= 1
-        entry = _new_entry(text, _bracket(lines[s.head[-1]]), widget, False)
-        return "".join(lines[:at] + lines[above : s.start[-1]] + entry + lines[at:])
+        gap = lines[above : s.start[-1]] if at == len(lines) or not lines[at].strip() else []
+        # never directly below a comment (it would read as the new entry's label)
+        blank = at > s.end[-1] and not gap
+        entry = _new_entry(text, _bracket(lines[s.head[-1]]), widget, blank)
+        return "".join(lines[:at] + gap + entry + lines[at:])
     tail = len(lines)
     while tail > 0 and _blank_or_comment(lines[tail - 1]):
         tail -= 1
@@ -601,9 +631,35 @@ def _in_doc(edit: Callable[[Any], None]) -> Callable[[str], str]:
     def run(text: str) -> str:
         doc = tomlkit.parse(text)
         edit(doc)
-        return tomlkit.dumps(doc)
+        return _below_last_line(text, tomlkit.dumps(doc))
 
     return run
+
+
+def _below_last_line(old: str, new: str) -> str:
+    """tomlkit adds a new key (or table) at the END of a table's body, below the blank lines
+    and comments there, so below the label of the next header (or a closing comment): move
+    the added lines up, right below the table's last line that is neither blank nor a comment
+    (a value replaced by a table is removed from its line and added there too). Only lines
+    added just above a header or the end of the file are moved, and only past unchanged blank
+    lines and comments, so the data is the same."""
+    o, n = _lines(old), _lines(new)
+    out: list[str] = []
+    for tag, i1, _i2, j1, j2 in difflib.SequenceMatcher(None, o, n, autojunk=False).get_opcodes():
+        if tag == "insert" and (i1 == len(o) or _header(o[i1])):
+            top = i1
+            while top > 0 and _blank_or_comment(o[top - 1]):
+                top -= 1
+            if top == 0:  # only comments above: a header's own label stays directly above it
+                # (a [monitors] header tomlkit adds above its first monitor); a file of only
+                # comments keeps them above what is added at its end
+                top = i1 if i1 == len(o) else _label_start(o, i1)
+            below = len(out) - (i1 - top)  # where o[top:i1] went in out
+            if i1 > top and out[below:] == o[top:i1]:
+                out[below:below] = n[j1:j2]
+                continue
+        out += n[j1:j2]
+    return "".join(out)
 
 
 def _set(doc, path: Path_, value: Any) -> None:
