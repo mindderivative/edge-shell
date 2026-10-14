@@ -335,7 +335,8 @@ class MonitorShell:
         self, index: int, geo: PanelGeometry | CornerGeometry, theme, raise_later: bool
     ) -> EdgePanel:
         """Build one panel window (edge or corner: a CornerPanel is an EdgePanel) and its
-        canvas shape."""
+        canvas shape. The class comes from the widget's registration (`widget_class`), not from
+        the geometry type."""
         self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
         self.canvas.add_panel(key, shape_for(geo))
@@ -448,6 +449,6 @@ class MonitorShell:
         self._handles.clear()
 
 
-def _measure_key(req: PanelRequest) -> tuple[str, bool]:
+def _measure_key(req: PanelRequest | CornerRequest) -> tuple[str, bool]:
     """A measurement belongs to a widget at an orientation (along a horizontal edge or not)."""
     return req.widget, geometry.is_horizontal(req.edge)
