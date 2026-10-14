@@ -9,6 +9,8 @@ alongside Plasma and does not replace it.
 - [Implementation plan](docs/superpowers/plans/2026-10-11-edge-shell-core.md)
 - [Shape canvas plan](docs/superpowers/plans/2026-10-13-shape-canvas-and-effects.md)
 - [Layout and anchoring plan](docs/superpowers/plans/2026-10-13-layout-anchoring.md)
+- [Handle customization plan](docs/superpowers/plans/2026-10-13-handle-customization.md)
+- [Corner panel plan](docs/superpowers/plans/2026-10-14-corner-panel.md)
 
 **Status:** early development.
 
@@ -21,6 +23,7 @@ alongside Plasma and does not replace it.
 - Optional outer border and soft uniform shadow (`[theme.border]`, `[theme.shadow]`),
   live-reloadable and overridable per monitor.
 - Panels: `dock` (bottom), `clock` (top), `system_bar` (right).
+- Corner panels: a rectangular panel in a screen corner, joined to both frame bands (`widget_panel`: time, date, CPU and RAM in the bottom-left corner).
 - Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
@@ -45,6 +48,7 @@ scripts/py main.py --config examples/panels-test.toml -v   # frame + dock, clock
 scripts/py main.py --config examples/effects-test.toml -v  # with border and shadow
 scripts/py main.py --config examples/layout-test.toml -v        # several panels per edge
 scripts/py main.py --config examples/layout-sizes-test.toml -v  # fill, content, percent
+scripts/py main.py --config examples/corner-test.toml -v      # corner panels next to edge panels
 scripts/py main.py --config examples/panels-test.toml --stats 10  # 10 s measurement, then quit
 ```
 
@@ -132,6 +136,29 @@ The border adds to the overall size: the frame band keeps its thickness (a 10 px
 a 4 px border occupies 14 px), the shadow is measured from the outer border edge, and the
 frame strips reserve thickness plus border width while the border is enabled.
 
+### Corner panels
+
+A corner panel is a rectangle in a screen corner, joined to the frame along both of its
+corner's edges. It opens and closes like an edge panel, out of one of those edges:
+
+```toml
+[[monitors.HDMI-A-1.panels]]
+widget = "widget_panel"      # a corner widget (registered with CornerDefaults)
+corner = "bottom-left"       # top-left | top-right | bottom-left | bottom-right
+edge = "bottom"              # the edge it opens from: one of the corner's two edges
+width = 300                  # px from the corner, the frame bands included
+height = 390                 # 390 = 380 px past the 10 px bottom band
+state = "extended"
+handle.shape = "bar"         # handle and interaction work as on edge panels
+```
+
+Corner panels are laid out first: one per corner (a second one in the same corner is hidden
+with a "Panels adjusted" notification), shrunk to fit beside the other corner panels. Edge
+panels on the edge a corner panel opens from keep its join, the gap and their own join from
+it; on the other edge they start past the rounded corner, which rides up with the panel.
+`align`, `offset`, `order`, `length` and `depth` do not apply to corner panels, and `corner`,
+`width` and `height` do not apply to edge panels: both are rejected with the key path.
+
 ### Handles and interactions
 
 Each panel's handle and its three interactions can be set per panel entry; every key is
@@ -179,6 +206,7 @@ scripts/py -m ruff format . && scripts/py -m ruff check .
 scripts/py -m shell.canvas.simulate --elevation 50 --border 2   # headless canvas benchmark
 scripts/py -m shell.canvas.simulate --config examples/layout-test.toml   # a config's layout, headless
 scripts/py -m shell.handle_draw --sheet /tmp/handles.png        # every handle shape, enlarged
+scripts/py -m shell.canvas.corner_sheet --out /tmp/corners.png       # corner panels in every corner, enlarged
 ```
 
 `EDGE_SHELL_RAISE_MS=0` disables the startup re-raise of panels (debug switch only; the
@@ -193,7 +221,10 @@ that need `gi` or Fabric skip themselves there.
 ## Known limitations / planned
 
 - Plasma integration (workspaces panel, tray host, hiding Plasma's panel) is not built yet.
-- A settings window is not built yet.
+- A settings window is not built yet. It must use the corner panel contract: `registry.widget_kind`, `registry.defaults`, `SHARED_KEYS` / `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split('-')`, `default_edge` and `corner_has_edge` (the settings plan on branch `feat/settings-window` already depends on it).
+- Corner panels: one per corner; only corner widgets (`widget_panel`) can sit in a corner; no "content" length; a corner panel's sizes are fixed px (no percentages). Edge widgets (clock, dock) in corners are deferred. A corner request with a height below `T + 16` is hidden as "no room".
+- Corner panels, Gate B (live, HDMI-A-1, Phil): passed. `--stats 10` on `examples/corner-test.toml` gave a damaged-draw p95 of 9.70 ms (median 6.04, max 10.82), above the 8 ms target by 1.7 ms. The run's config copy still had the sixth same-corner entry and border and shadow were probably still enabled; Phil accepted it. Corner shapes with border and shadow cost about 50% more per damaged draw than the edge-only example (headless 6.5 ms against 4.2 ms), so the p95 exceeded 8 ms on Phil's machine in the effects configuration.
+- Corner panel watch items: the `widget_panel`'s first stats appear after about 1 s (`invoke_repeater` initial call); corner widgets read `/proc` per instance (no shared sysinfo service); option B (an 8 px gap on the other edge too, so the neighbouring edge panel no longer meets the lifted corner arc without a straight piece of frame) was offered at Gate A and not chosen; it would cost a `corner_clearance` condition, an extra `+ gap` in the corner layout's across check, and about 4 expected numbers (including Gate B's y 362-662 becoming 354-654).
 - Moving a panel (a layout change on reload or a resolution change) rebuilds its window; there
   is no in-place move yet. "content" panels are built twice at startup (default length, then
   measured); no startup flash was visible with content panels at Gate B, so an in-place resize stays

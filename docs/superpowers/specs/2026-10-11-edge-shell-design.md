@@ -61,6 +61,8 @@ All values are defaults. Any of them can be overridden per monitor in the config
 
 **Curved joins.** Each join is an `R`×`R` square, frame-colored outside a quarter circle, so the desktop corner beside a panel is convex while the frame stays one continuous shape. A corner-anchored panel has one free-edge join; its other join sits on the frame beside it.
 
+**Corner panels (section 19, implemented).** The widget_panel is a rectangle in the bottom-left corner: width 300 and height 390 px from the corner (the 10 px bands included, so 380 px past the bottom band), opening from the bottom edge.
+
 ## 4. Interaction model
 
 Three states per panel. Only **extended** shows content.
@@ -94,6 +96,7 @@ Each enabled monitor gets: one `ShapeCanvas`, 4 invisible `FrameEdge` strips, an
 | `ShapeCanvas` × 1 | top | 4 edges | −1 | None (`pass_through=True`) |
 | `FrameEdge` × 4 | bottom (invisible) | 3 edges | `auto` = T px (T + border width when the border is enabled) | None (`pass_through=True`) |
 | `EdgePanel` × N | top | 1 edge + margin (resolved `pos`) | −1 | Panel body (+ hover zone) only, updated each frame |
+| `CornerPanel` × N | top | 2 edges (its corner), margins 0 | −1 | Body rectangle (+ hover zone) only, updated each frame |
 
 Two Fabric details that change the design:
 
@@ -223,6 +226,8 @@ edge-shell/
 │   ├── panel_layout.py       # PURE: resolved positions, minimum geometry rules
 │   ├── frame.py              # FrameEdge (invisible zone strips)
 │   ├── edge_panel.py         # EdgePanel base
+│   ├── corner.py             # PURE: corner panel geometry
+│   ├── corner_panel.py       # CornerPanel(EdgePanel)
 │   └── registry.py
 ├── widgets/                  # clock, dock, system_bar, workspaces, widget_panel
 ├── services/plasma.py
@@ -282,7 +287,7 @@ Each is a throwaway script in `spikes/` that answers one question.
 | 5 | Remaining edge panels | Clock (top) and system bar (right) prove the other matrices; drag-to-open |
 | 6 | Live reload and hot-plug | Editing the TOML updates the shell; unplugging a monitor does not crash it |
 | 7 | Plasma integration | Workspaces panel, tray host, Plasma panel toggle with restore |
-| 8 | Corner widget panel, then the settings window | Last, once the schema is stable |
+| 8 | Corner widget panel, then the settings window (corner panels done: section 19) | Last, once the schema is stable |
 
 ## 13. Later: settings window
 
@@ -366,7 +371,7 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
    - Offsets that would push a panel past the free span are clamped inward.
    - **Minimum geometry rules (found by the shape-canvas spike):** the single-outline renderer self-intersects (fills overlap, about 20-30 wrong pixels) when two curves collide. Two cases: (a) a panel whose concave fillet lands inside a screen-corner arc, so the **corner clearance is `pos - r >= T + R`** where `r = min(R, depth/2)` is the current join radius; (b) neighbouring panels on one edge whose fillets overlap, so the **minimum gap between adjacent panels is `r1 + r2`** (up to `2R` = 28 px at full depth). The layout resolver enforces both (clamping, with a warning); a panel exactly at the clearance renders correctly.
    - **Implemented (2026-10-13, layout plan):** the free span is `T + R + r` from each end; `length` takes px, `"fill"` (equal shares of what the neighbours, offsets and spacing leave), `"content"` (the content's natural size plus 12 px each side, measured once after build in an idle callback, the widget's default until then; a one-off startup rebuild of content panels, an in-place resize is planned only if a flash is observed) or a percentage of the free span, then `min_length`/`max_length` and a 60 px floor; too long is shrunk with a warning and the content is clipped (not scrolled) at the body edge and kept centred, never drawn over the joins and frame. `MonitorShell` re-lays out on the monitor's `notify::geometry` (debounced 250 ms; a zero geometry while unplugging is ignored), so centred, percentage and fill panels follow resolution changes. Two panels meeting at a shared screen corner collide at offset 0 (one needs an offset of at least the other's depth + r - R); a panel hidden by an overlap keeps its slot space; a re-layout the shell starts itself that fails is logged and rebuilds that monitor once, with a "Panels rebuilt" notification.
-   - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), built later; they are the only panels that meet two edges.
+   - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), implemented, section 19; they are the only panels that meet two edges.
 
 **Design implications (for the future plan)**
 
@@ -415,3 +420,69 @@ Raised by Phil after the core PR; requirements are Phil's, the architecture opti
 - Pure drawing layer: `draw_outline(cr, shapes, border, shadow)` taking resolved geometry for the frame and each panel at their current depth; headless pixel tests like `draw.py`'s today.
 - Interplay: panel anchoring/sizing (section 17) produces the resolved panel rectangles the canvas draws; handle customization (section 15) stays on the content windows; layout (section 16) feeds the same resolved rectangles.
 - Reload: border/shadow changes are colour/parameter updates (a canvas redraw), not window rebuilds.
+
+## 19. Implemented: corner panels
+
+Asked by Phil before the settings window ("Did we plan for the corner panel? The one that
+connects to two edges of the frame?"; "the corner panel window should be a square that
+connects to two edges ... it is not an L shaped panel window"). Plan:
+`docs/superpowers/plans/2026-10-14-corner-panel.md`.
+
+- **Shape.** A rectangle in one screen corner, `width` x `height` px from the corner (both
+  frame bands included). Two sides lie on the screen edges; the two free sides meet the two
+  bands with concave fillets: the side parallel to the opening edge meets the other band with
+  the screen corner's own arc (radius R, lifted by the current depth, so depth 0 is the plain
+  corner); the other free side meets the opening edge's band with an edge panel's join
+  (min(R, d/2), convex free corner). The window, surface, body, content box and input region
+  are rectangles; only the canvas outline curves.
+- **Animation.** One depth, past the band of `edge` (the edge it opens from, default the
+  corner's top or bottom edge), exactly like an edge panel: peek, click, drag (50 % snap),
+  280 ms tween, fade.
+- **Handle.** On the free side parallel to the opening edge, centred on the body past the
+  adjacent band; section 15's rules unchanged.
+- **Layout.** Corner panels first, one per corner (a second one in the same corner is hidden
+  with a "Panels adjusted" notification), shrunk to fit beside each other (`along` at least
+  max(T + 60, T + R + r); a corner panel hidden by an overlap takes no clearance); edge panels
+  keep `along + r_c + gap + r` from a corner panel on their edge and `T + R + depth + r` from
+  one on the neighbouring edge; the overlap check runs corners first. Corner panels take
+  precedence over edge panels.
+- **Config.** In `[[monitors.X.panels]]`; the kind comes from the widget (CornerDefaults);
+  keys `corner`, `edge`, `width`, `height`; mixing kinds is rejected with the key path. Reload:
+  `panel-state`, `panel-handle` in place; size or corner changes rebuild.
+- **Content.** `widget_panel`: time, date, CPU, RAM.
+- **Decision recorded at Gate A.** Option A: at full depth the neighbouring edge panel on the
+  other edge has no straight piece of frame between its fillet and the lifted corner arc (a
+  stepped silhouette, valid geometry). Option B (an 8 px gap on the other edge too) was offered
+  and not chosen; it stays open. Its cost: a `corner_clearance` condition, an extra `+ gap` in
+  the corner layout's across check, and about 4 expected numbers (including Gate B's y 362-662
+  becoming 354-654).
+
+**Results.**
+
+- **Gate A** (Phil, the PNG review sheets, no shell): passed; option A confirmed (see above).
+- **Gate B** (Phil, live on HDMI-A-1): passed ("Gate B Passes"). From his log: the shell
+  started with 5 panels built; restyle (effects) and panel-handle reloads applied in place (no
+  `building panel` lines); `panel-state` in place; a width change rebuilt only panel 0
+  (`widget_panel`) and panel 2 (clock); a width of 3000 shrank to 1882 and hid the dock and
+  clock with warnings; invalid keys were rejected with key paths
+  (`panels[0].align: widget_panel is a corner panel ...`,
+  `panels[1].width: dock is an edge panel ...`, bad `state` and `align` values); a sixth entry
+  in the same corner gave the "already holds ... not shown" warning; the resolution change to
+  1280x720 logged `re-laying out HDMI-A-1 for 1280x720` with the system bar shrunk to 264
+  ("Panels adjusted"), and back at 1920x1080. Per-item observations beyond the log, and the
+  stacking check (item 12), were not recorded.
+- **`--stats 10`** on `examples/corner-test.toml`: fps while animating 55.4; canvas damaged
+  draws median 6.04 ms, p95 9.70 ms, max 10.82 ms; one full draw 15.13 ms; every panel 531-535
+  ticks in step with one skipped; CPU 0.57 of a core. **The p95 is above the 8 ms target by
+  1.7 ms.** The run's config copy still had the sixth same-corner entry and, judging by the 6 ms
+  median (the headless run with border and shadow gave p95 6.5-7.1 ms, without effects 0.29
+  ms), border and shadow were probably still enabled. Phil accepted the result.
+- **Known limitations.** Corner shapes with border and shadow cost about 50 % more per damaged
+  draw than the edge-only example (headless 6.5 ms against 4.2 ms), and the p95 exceeded 8 ms
+  on Phil's machine in the effects configuration. The `widget_panel`'s first stats appear after
+  about 1 s (`invoke_repeater` initial call). Corner widgets read `/proc` per instance (no
+  shared sysinfo service). Edge widgets (clock, dock) in corners are deferred. A corner request
+  with a height below T + 16 is hidden as "no room". The settings window must use the corner
+  contract (`registry.widget_kind`, `registry.defaults`, `SHARED_KEYS`, `EDGE_ONLY_KEYS`,
+  `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split('-')`, `default_edge`, `corner_has_edge`); the
+  settings plan (branch `feat/settings-window`, plan commit 427b1cd) already depends on it.
