@@ -206,11 +206,11 @@ that need `gi` or Fabric skip themselves there.
   live (built-in panels use `keyboard_mode = "none"`); the handle-draw and edge-panel tests are
   skipped in CI (no `gi`), the pure tests run.
 - Panel startup includes a brief re-raise (`raise_to_top`) about half a second after launch.
-  Live testing showed it is still needed: without it the collapsed handles are hidden
-  behind the canvas (the handle is drawn in the panel's own window). Whether the extended
-  content (dock icons, clock text, bar labels) is also hidden without the raise was not
-  recorded in the handle plan's raise-off run, so the re-raise stays on the existing evidence
-  (Plan 1 Gate 1). `EDGE_SHELL_RAISE_MS=0` turns it off for debugging.
+  Live testing showed it is still needed: with the raise off, the collapsed handles and the
+  extended content (dock icons, clock text, bar labels) were both hidden (Plan 3 Gate B
+  item 11, Phil), so the canvas covers the panel windows until the delayed re-raise; drawing
+  only the handle on the canvas could not remove the workaround. `EDGE_SHELL_RAISE_MS=0`
+  remains a debugging switch.
 - One layout gap per monitor (no per-edge gap). Resolution changes re-lay out panels (verified live on
   HDMI-A-1: 1920x1080 to 1280x720 and back, via `notify::geometry`, with no shell reopen and the
   collapsed handle dots intact); a scale change is not verified, and HiDPI drawing is not
