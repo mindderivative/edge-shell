@@ -1,6 +1,6 @@
 import pytest
 
-from shell.config.loader import load_config
+from shell.config.loader import OLD_FORMAT, load_config
 from shell.config.models import ConfigError
 
 
@@ -117,6 +117,20 @@ def test_an_entry_without_panel_names_the_new_format(tmp_path):
     assert 'monitors.HDMI-A-1.panels[1].panel: missing; use "edge", "corner" or "float"' in lines
     assert "monitors.HDMI-A-1.panels[0].name: Field required" in lines
     assert len([line for line in lines if "the old format" in line]) == 1  # once per file
+
+
+def test_the_old_format_hint_comes_first_and_survives_the_notification_cut(tmp_path):
+    """shell.app._notify cuts a message at 400 characters: the hint must be inside them."""
+    entries = "".join(
+        f'[[monitors.HDMI-A-1.panels]]\nwidget = "{w}"\n\n' for w in ("dock", "clock", "system_bar")
+    )
+    path = write(tmp_path / "old.toml", entries)
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    message = str(exc.value)
+    assert message.splitlines()[0] == OLD_FORMAT
+    assert OLD_FORMAT in message[:400]
+    assert len(message) > 400
 
 
 def test_panel_name_and_widget_are_required():

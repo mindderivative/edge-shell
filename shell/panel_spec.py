@@ -94,7 +94,7 @@ class PanelGeometry:
 
 def default_edge(corner: Corner) -> Edge:
     """The edge a corner panel opens from unless told otherwise: the corner's top or bottom
-    edge (the spec's widget_panel rises out of the bottom edge)."""
+    edge (the spec's summary panel rises out of the bottom edge)."""
     return corner.split("-")[0]  # type: ignore[return-value]
 
 

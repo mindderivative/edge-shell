@@ -24,7 +24,7 @@ Edit = Callable[[UserDocument], Any]
 
 
 def panel_title(index: int, req: PanelRequest | CornerRequest) -> str:
-    """'1. dock: bottom, center', or for a corner panel '2. widget_panel: bottom-left, from
+    """'1. dock: bottom, center', or for a corner panel '2. summary: bottom-left, from
     bottom, 300x390' (1-based, as the list reads)."""
     if isinstance(req, CornerRequest):
         where = f"{req.corner}, from {req.edge}, {req.width}x{req.height}"

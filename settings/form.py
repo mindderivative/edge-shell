@@ -108,7 +108,8 @@ def widget_choices(
     widgets: tuple[str, ...], corner_widgets: tuple[str, ...] = ()
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(choices, labels) of a widget combo: edge widgets first, then the corner widgets,
-    labelled as such (a new corner entry is just {"widget": NAME}; spec 19)."""
+    labelled as such (a new corner entry is {"panel": "corner", "name": ..., "widget": NAME};
+    spec 19)."""
     edge = tuple(w for w in widgets if w not in corner_widgets)
     corner = tuple(w for w in widgets if w in corner_widgets)
     return edge + corner, edge + tuple(f"{w} (corner panel)" for w in corner)

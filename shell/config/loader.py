@@ -50,8 +50,8 @@ def format_validation_error(err: ValidationError) -> str:
             lines.append(f"{path}: {MISSING_PANEL}")
         else:
             lines.append(f"{path}: {item['msg']}")
-    if old_format:  # once per file, however many entries lack it
-        lines.append(OLD_FORMAT)
+    if old_format:  # once per file, first: the notification cuts the message at 400 characters
+        lines.insert(0, OLD_FORMAT)
     return "\n".join(lines)
 
 

@@ -1075,3 +1075,15 @@ def test_add_panel_writes_the_entry_keys_in_order_one_per_line():
     assert doc.data["monitors"]["X"]["panels"] == [
         {"panel": "edge", "name": 'Clock "big"', "widget": "clock"}
     ]
+
+
+def test_add_panel_with_several_keys_on_a_monitor_without_a_header():
+    doc = UserDocument('monitors.X.shell = "edge"\n')
+    doc.add_panel("X", {"panel": "edge", "name": "Clock", "widget": "clock"})
+    entry = {"panel": "edge", "name": "Clock", "widget": "clock"}
+    assert tomllib.loads(doc.text)["monitors"]["X"] == {"shell": "edge", "panels": [entry]}
+    assert doc.data["monitors"]["X"]["panels"] == [entry]
+    assert doc.text == (
+        'monitors.X.shell = "edge"\n[[monitors.X.panels]]\npanel = "edge"\nname = "Clock"\n'
+        'widget = "clock"\n'
+    )
