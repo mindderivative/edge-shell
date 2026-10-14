@@ -96,6 +96,8 @@ def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: boo
     d = defaults(entry.widget)  # public registry API: never registry._DEFAULTS
     key = keys[0]
     if key == "interaction":
+        # always "default": no widget registers interaction defaults today (if one does, the
+        # label should become "widget default" for it)
         return FieldValue(getattr(req.interaction, keys[1]), is_set, _src(is_set, "default"))
     if key == "handle":
         sub = keys[1]
@@ -103,6 +105,10 @@ def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: boo
         if own is not None:
             return FieldValue(own, is_set, _src(is_set, "widget default"))
         theme = config.theme_for(name)
+        if sub == "shape" and not (
+            req.interaction.click or req.interaction.hover or req.interaction.drag
+        ):  # shell.handle.resolve_handle draws no theme shape on a panel nobody can act on
+            return FieldValue(theme.handle_style.shape, is_set, "none (all interactions off)")
         if sub == "color":
             return FieldValue(theme.handle, is_set, "theme")
         if sub == "hover_color":
@@ -114,7 +120,12 @@ def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: boo
         source = "widget default"
         if key in PLACEMENT_KEYS and any(getattr(entry, k) is not None for k in PLACEMENT_KEYS):
             source = PLACEMENT_DEFAULT  # the widget's own align / offset no longer apply
-        return FieldValue(getattr(req, key), is_set, _src(is_set, source), getattr(d, key, None))
+        if key == "order":
+            source = "default"  # PanelDefaults has no order: 0 is the shell's own default
+        value = getattr(req, key)
+        if key == "pos" and entry.pos is not None:
+            value = entry.pos  # the request turns "center" into None; show what the file says
+        return FieldValue(value, is_set, _src(is_set, source), getattr(d, key, None))
     if key in PANEL_OWN_KEYS:
         return FieldValue(getattr(entry, key), is_set, _src(is_set, "not set"))
     if key in CORNER_ONLY_KEYS:
@@ -143,18 +154,26 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
 
     - A widget of the other kind also unsets the keys only the old kind takes (a dock turned
       into a corner widget loses its align, length, ...; spec 19), else the shell rejects it.
+    - `value` None for "corner" is a reset: the key is unset and the widget's corner applies.
+    - An unknown widget is a plain set (the session's check rejects it, ConfigError).
     - A corner (or a corner widget whose corner) that does not contain the entry's edge also
       unsets that edge: the panel then opens from the widget's edge or the corner's default."""
-    ops: list[tuple[str, str, Any]] = [("set", key, value)]
+    if value is None and key == "corner":  # reset: back to the widget's corner
+        ops: list[tuple[str, str, Any]] = [("unset", key, None)]
+    else:
+        ops = [("set", key, value)]
     corner = None
     if key == "widget":
-        kind = widget_kind(value)
+        try:
+            kind = widget_kind(value)
+        except KeyError:  # unknown widget: the session's check rejects it with the shell's text
+            return ops
         stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
         ops += [("unset", k, None) for k in stale if k in entry]
         if kind == "corner":
             corner = entry.get("corner", defaults(value).corner)
     elif key == "corner":
-        corner = value
+        corner = value or defaults(entry["widget"]).corner
     edge = entry.get("edge")
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))

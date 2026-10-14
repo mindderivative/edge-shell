@@ -33,7 +33,7 @@
 9. **A panel's expander title** shows `N. widget: edge, align`, or for a corner panel `N. widget: corner, from edge, WIDTHxHEIGHT`; changing the widget, edge, align, corner, width or height (`TITLE_KEYS`) rebuilds the page so the title (and, for widget and corner, the rows) follows, and keeps that panel open. Adding a panel opens the new one, moving opens the moved one. *Cost:* none.
 10. **The right-click needs the handle to take input**: a panel with click, hover and drag all off takes no input while collapsed (spec 15), so its handle cannot open the window; any other handle, the CLI or the shortcut can. The frame band stays click-through (no frame click). *Cost:* none.
 11. **Corner panels in the settings window: the corner plan's contract, nothing private.** *Default pending Phil.* Each panel entry shows the rows of its widget's kind: `form.panel_for(registry.widget_kind(req.widget), corner)`. The edge section is `PanelConfig` without `CORNER_ONLY_KEYS`; the corner section is `PanelConfig` without `EDGE_ONLY_KEYS`, in the order widget, corner, edge, width, height, state; `SHARED_KEYS` and the handle and interaction tables are in both. A corner panel's edge row offers only the corner's two edges (`corner.split("-")`). Placeholders and defaults come from `registry.defaults(name)` (a `CornerDefaults` branch in `settings/values.py`), never `registry._DEFAULTS`. A new corner entry is just `{"widget": "widget_panel"}`. *Cost if Phil wants corner panels on their own page:* a second list editor per monitor (about half a task), against Plan 5's one panel list.
-12. **Changing a panel's widget kind or its corner is ONE compound edit.** *Default pending Phil.* `settings.values.panel_ops` turns one row change into steps applied to the same document and written once (one reload). A widget of the other kind also unsets the keys only the old kind takes (a dock turned into `widget_panel` loses `align`, `length`, …; the shell would otherwise reject the entry). A corner (or a corner widget landing in a corner) that does not contain the entry's `edge` also unsets that edge, so the panel opens from the widget's edge or the corner's default edge (`default_edge`). *Cost if Phil prefers to set the new edge explicitly:* one line in `panel_ops` (`("set", "edge", default_edge(corner))`) and two expected values.
+12. **Changing a panel's widget kind or its corner is ONE compound edit.** *Default pending Phil.* `settings.values.panel_ops` turns one row change into steps applied to the same document and written once (one reload). A widget of the other kind also unsets the keys only the old kind takes (a dock turned into `widget_panel` loses `align`, `length`, …; the shell would otherwise reject the entry). A corner (or a corner widget landing in a corner) that does not contain the entry's `edge` also unsets that edge, so the panel opens from the widget's edge or the corner's default edge (`default_edge`). Resetting a panel's `corner` is the same edit with the key unset (`panel_ops(entry, "corner", None)`; the edge check uses the widget's corner), so `_on_reset` sends a panel's own keys through `panel_ops` too. *Cost if Phil prefers to set the new edge explicitly:* one line in `panel_ops` (`("set", "edge", default_edge(corner))`) and two expected values.
 13. **The mouse wheel scrolls the page; it never edits a value.** *Default pending Phil.* Found by the independent review: with live apply, a wheel over DP-1's mode row set it to `edge` (an Edge Shell frame over the Plasma panel, against "never touch DP-1"), and over thickness it rebuilt the monitor. Every combo box and spin button gets `wheel_scrolls_the_page` (`settings/fields.py`), a `scroll-event` handler that stops the widget's own handling (`GObject.signal_stop_emission_by_name`) and returns False, so the page's `ScrolledWindow` scrolls instead. *Cost if Phil wants wheel edits back:* wheel edits only on the focused widget (a focus check in `_pass_scroll`), small.
 14. **One settings window per config file.** *Default pending Phil.* The id carries a hash of the resolved path: a second launch with another `--config` (e.g. the gate's `/tmp/edge-settings.toml` while the real config is open) opens its own window instead of silently raising the first one, which edits a different file. *Cost:* none.
 15. **Fabric's unauthenticated D-Bus client is switched off** (Task 12, its own commit). *Default pending Phil.* `fabric.Application` registers `org.Fabric.fabric.edge-shell` with `Execute` and `Evaluate` methods that run any Python inside the shell for any session-bus client, with no caller check (`fabric/core/application.py`, `DBusClient`); nothing in this repository uses them. `Application(APP_NAME, *self._early, open_client=False)` keeps the bus name (the `Gtk.Application` owns it, so `_already_running` still works) and drops the client. *Cost if Phil wants it back* (e.g. for `fabric-cli`): revert the one-line commit.
@@ -2560,18 +2560,27 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
 
     - A widget of the other kind also unsets the keys only the old kind takes (a dock turned
       into a corner widget loses its align, length, ...; spec 19), else the shell rejects it.
+    - `value` None for "corner" is a reset (Task 9's `_on_reset`): the key is unset and the
+      widget's corner applies, so the edge check uses that corner.
+    - An unknown widget is a plain set: the session's check rejects it (ConfigError).
     - A corner (or a corner widget whose corner) that does not contain the entry's edge also
       unsets that edge: the panel then opens from the widget's edge or the corner's default."""
-    ops: list[tuple[str, str, Any]] = [("set", key, value)]
+    if value is None and key == "corner":  # reset: back to the widget's corner
+        ops: list[tuple[str, str, Any]] = [("unset", key, None)]
+    else:
+        ops = [("set", key, value)]
     corner = None
     if key == "widget":
-        kind = widget_kind(value)
+        try:
+            kind = widget_kind(value)
+        except KeyError:  # unknown widget: the session's check rejects it with the shell's text
+            return ops
         stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
         ops += [("unset", k, None) for k in stale if k in entry]
         if kind == "corner":
             corner = entry.get("corner", defaults(value).corner)
     elif key == "corner":
-        corner = value
+        corner = value or defaults(entry["widget"]).corner
     edge = entry.get("edge")
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))
@@ -3593,6 +3602,15 @@ def test_reset_removes_the_key(make):
     assert "depth" not in path.read_text()
     assert row(view, DEPTH).source.get_text().endswith("widget default")
 
+    # resetting a corner also drops an edge the widget's corner cannot hold (one valid edit)
+    view._on_change((*P0, "widget"), "box")
+    view._on_change((*P0, "corner"), "top-right")
+    view._on_change((*P0, "edge"), "right")
+    view._on_reset((*P0, "corner"))  # back to the bottom-left corner: no right edge there
+    assert "corner =" not in path.read_text() and "edge =" not in path.read_text()
+    assert not view.banner.get_visible()
+    assert row(view, (*P0, "edge")).source.get_text().endswith("corner default")
+
 
 def test_adding_and_removing_panels_rebuilds_the_rows(make):
     view, path = make()
@@ -3987,7 +4005,11 @@ class SettingsView(Gtk.Box):
             self._expand.pop(path[1], None)
 
     def _on_reset(self, path: tuple) -> None:
-        self.apply(lambda d: d.unset(path), self._row(path))
+        if len(path) == 5 and path[2] == "panels":  # a panel's own key: resetting a corner
+            _, entry = lookup(self.session.user, path[:4])  # also drops an edge it cannot hold
+            self.apply(_panel_edit(path[:4], panel_ops(entry or {}, path[4], None)), self._row(path))
+        else:
+            self.apply(lambda d: d.unset(path), self._row(path))
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh

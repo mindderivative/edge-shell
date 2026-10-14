@@ -12,7 +12,9 @@ from settings.values import (
     monitor_names,
     panel_ops,
 )
+from shell.config.models import ConfigError
 from shell.outputs import Output
+from shell.registry import validate_widgets
 
 USER = {
     "theme": {"accent": "#112233", "border": {"width": 3}},
@@ -247,3 +249,145 @@ def test_layout_preview_reports_what_the_shell_would(make_config, fake_registry)
     warnings = layout_preview(too_long, "HDMI-A-1", 1920, 1080)
     assert len(warnings) == 1 and warnings[0].startswith("monitors.HDMI-A-1")
     assert layout_preview(too_long, "HDMI-A-1", 3840, 2160) == []
+
+
+def _applied(entry, ops):
+    """The entry after the ops (what the document would hold)."""
+    out = dict(entry)
+    for op, key, value in ops:
+        if op == "set":
+            out[key] = value
+        else:
+            out.pop(key, None)
+    return out
+
+
+def _valid(make_config, entry):
+    validate_widgets(make_config(monitors={"M": {"panels": [entry]}}))
+
+
+def test_every_edge_only_key_goes_when_the_widget_becomes_a_corner_widget(
+    make_config, corner_registry
+):
+    full = {
+        "widget": "dock",
+        "align": "end",
+        "offset": 4,
+        "order": 1,
+        "length": 300,
+        "min_length": 100,
+        "max_length": 900,
+        "depth": 80,
+    }
+    result = _applied(full, panel_ops(full, "widget", "box"))
+    assert result == {"widget": "box"}
+    _valid(make_config, result)
+    pos = {"widget": "dock", "pos": 300, "edge": "left"}
+    result = _applied(pos, panel_ops(pos, "widget", "box"))
+    assert result == {"widget": "box", "edge": "left"}  # left is an edge of bottom-left
+    _valid(make_config, result)
+
+
+def test_corner_keys_go_when_the_widget_becomes_an_edge_widget(make_config, corner_registry):
+    full = {"widget": "box", "corner": "top-left", "width": 200, "height": 100, "edge": "left"}
+    result = _applied(full, panel_ops(full, "widget", "dock"))
+    assert result == {"widget": "dock", "edge": "left"}
+    _valid(make_config, result)
+
+
+def test_an_unknown_widget_is_a_plain_set_for_the_session_to_reject(corner_registry):
+    assert panel_ops({"widget": "dock", "depth": 80}, "widget", "nope") == [
+        ("set", "widget", "nope")
+    ]
+
+
+RESET = """\
+[monitors.M]
+shell = "edge"
+
+[[monitors.M.panels]]
+widget = "box"
+corner = "top-right"
+edge = "right"
+"""
+
+
+def test_resetting_a_corner_keeps_the_entry_valid(tmp_path, corner_registry):
+    pytest.importorskip("tomlkit")
+    from settings.session import SettingsSession
+
+    path = tmp_path / "config.toml"
+    path.write_text(RESET)
+    session = SettingsSession(path)
+    entry = session.user["monitors"]["M"]["panels"][0]
+    ops = panel_ops(entry, "corner", None)
+    assert ops == [("unset", "corner", None), ("unset", "edge", None)]
+    base = ("monitors", "M", "panels", 0)
+
+    def edit(doc) -> None:
+        for op, key, value in ops:
+            doc.unset((*base, key)) if op == "unset" else doc.set((*base, key), value)
+
+    config = session.apply(edit)
+    assert len(session.history) == 1 and path.read_text() == session.text
+    assert session.user["monitors"]["M"]["panels"] == [{"widget": "box"}]
+    assert field_value(config, session.user, (*base, "corner")) == FieldValue(
+        "bottom-left", False, "widget default"
+    )
+    edge = field_value(config, session.user, (*base, "edge"))
+    assert (edge.value, edge.is_set, edge.source) == ("bottom", False, "corner default")
+
+
+def test_resetting_a_corner_that_holds_the_edge_unsets_only_the_corner(corner_registry):
+    entry = {"widget": "box", "corner": "top-right", "edge": "top"}
+    assert panel_ops(entry, "corner", None) == [("unset", "corner", None), ("unset", "edge", None)]
+    entry = {"widget": "box", "corner": "top-right", "edge": "left"}  # bottom-left has left
+    assert panel_ops(entry, "corner", None) == [("unset", "corner", None)]
+
+
+def test_an_unknown_widget_row_is_rejected_by_the_session(tmp_path, corner_registry):
+    pytest.importorskip("tomlkit")
+    from settings.session import SettingsSession
+
+    path = tmp_path / "config.toml"
+    path.write_text(RESET)
+    session = SettingsSession(path)
+    ops = panel_ops(session.user["monitors"]["M"]["panels"][0], "widget", "nope")
+    with pytest.raises(ConfigError):
+        session.apply(lambda doc: doc.set(("monitors", "M", "panels", 0, "widget"), "nope"))
+    assert ops == [("set", "widget", "nope")] and session.text == RESET
+
+
+def test_order_is_labelled_default_and_has_no_widget_default(make_config, fake_registry):
+    config = make_config(monitors={"M": {"panels": [{"widget": "dock"}]}})
+    p = ("monitors", "M", "panels", 0)
+    assert field_value(config, {}, (*p, "order")) == FieldValue(0, False, "default")
+    assert field_value(config, {}, (*p, "order")).default is None
+
+
+def test_handle_shape_with_every_interaction_off_says_nothing_is_drawn(make_config, fake_registry):
+    user = {
+        "monitors": {
+            "M": {
+                "panels": [
+                    {
+                        "widget": "dock",
+                        "interaction": {"click": False, "hover": False, "drag": False},
+                    }
+                ]
+            }
+        }
+    }
+    config = make_config(monitors=user["monitors"])
+    p = ("monitors", "M", "panels", 0)
+    shape = field_value(config, user, (*p, "handle", "shape"))
+    assert shape.value == "auto" and shape.source == "none (all interactions off)"
+    # another handle key keeps the plain theme label
+    assert field_value(config, user, (*p, "handle", "size")).source == "theme"
+
+
+def test_pos_center_shows_what_the_file_says(make_config, fake_registry):
+    user = {"monitors": {"M": {"panels": [{"widget": "bar", "pos": "center"}]}}}
+    config = make_config(monitors=user["monitors"])
+    p = ("monitors", "M", "panels", 0)
+    assert field_value(config, user, (*p, "pos")) == FieldValue("center", True, "your config")
