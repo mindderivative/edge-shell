@@ -40,6 +40,8 @@ class FakeDialogs:
         self.calls = []
         self.unsaved = Answer.CANCEL
         self.revert_ok = False
+        self.paths = {}  # what each file chooser "returns" by kind; missing: cancelled
+        self.chosen = None  # (kind, folder, suggested name) of the last chooser
 
     def ask_unsaved(self, _parent, path):
         self.calls.append(("unsaved", path))
@@ -49,6 +51,19 @@ class FakeDialogs:
         self.calls.append(("revert", text))
         return self.revert_ok
 
+    def _choose(self, kind, folder, name):
+        self.chosen = (kind, folder, name)
+        return self.paths.get(kind)
+
+    def choose_new(self, _parent, folder, name):
+        return self._choose("new", folder, name)
+
+    def choose_open(self, _parent, folder):
+        return self._choose("open", folder, None)
+
+    def choose_save_as(self, _parent, folder, name):
+        return self._choose("save-as", folder, name)
+
 
 @pytest.fixture
 def make(tmp_path, fake_registry):
@@ -57,12 +72,18 @@ def make(tmp_path, fake_registry):
     made = []
 
     def _make():
-        quits = []
+        quits, launches = [], []
         dialogs = FakeDialogs()
         c = SettingsController(
-            path, SettingsSession(path), [], dialogs, quit=lambda: quits.append(1)
+            path,
+            SettingsSession(path),
+            [],
+            dialogs,
+            quit=lambda: quits.append(1),
+            launch=launches.append,  # nothing is spawned
+            user_path=tmp_path / "home" / "edge-shell" / "config.toml",
         )
-        c.dialogs_, c.quits = dialogs, quits
+        c.dialogs_, c.quits, c.launches = dialogs, quits, launches
         made.append(c)
         return c, path
 
@@ -317,3 +338,160 @@ def test_exit_answered_save_where_the_save_fails_stays_and_says_so(make, monkeyp
     run(c, "exit")
     assert c.quits == [] and c.session.dirty
     assert c.view.banner.get_visible() and "Not saved" in c.view.banner_label.get_text()
+
+
+# ---- New, Open, Save As, Close (Task 6) ------------------------------------------------------
+def test_close_shows_the_empty_page_where_only_new_open_and_exit_work(make):
+    c, path = make()
+    run(c, "close")
+    assert c.view is None and c.session is None
+    assert c.body.get_visible_child_name() == "empty"
+    for name in ("save", "save-as", "close", "undo", "redo", "revert"):
+        assert not on(c, name), name
+    assert on(c, "new") and on(c, "open") and on(c, "exit")
+    c.file_changed()  # the watcher still reports the file: nothing to do
+    path.write_text(USER + "# by hand\n")
+    c.file_changed()
+    assert c.view is None
+
+
+def test_close_with_unsaved_changes_asks_and_cancel_keeps_the_config(make):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    run(c, "close")
+    assert c.view is not None and c.dialogs_.calls == [("unsaved", path)]
+    c.dialogs_.unsaved = Answer.DISCARD
+    run(c, "close")
+    assert c.view is None and path.read_text() == USER
+
+
+def test_open_shows_another_file_in_its_own_window_and_closes_this_one(make, tmp_path):
+    c, _ = make()
+    other = tmp_path / "other.toml"
+    other.write_text(USER)
+    c.dialogs_.paths["open"] = other
+    run(c, "open")
+    assert c.dialogs_.chosen == ("open", tmp_path / "home" / "edge-shell", None)
+    assert c.launches == [other] and c.quits == [1]
+
+
+def test_open_asks_about_unsaved_changes_first(make, tmp_path):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    other = tmp_path / "other.toml"
+    other.write_text(USER)
+    c.dialogs_.paths["open"] = other
+    run(c, "open")  # answered Cancel
+    assert c.launches == [] and c.quits == [] and c.dialogs_.calls == [("unsaved", path)]
+
+
+def test_a_cancelled_chooser_does_nothing(make):
+    c, _ = make()
+    for name in ("open", "new", "save-as"):
+        run(c, name)
+    assert c.launches == [] and c.quits == [] and c.view is not None
+
+
+def test_open_of_this_windows_own_file_only_says_so(make):
+    c, path = make()
+    c.dialogs_.paths["open"] = path
+    run(c, "open")
+    assert c.launches == [] and "already open" in c.view.banner_label.get_text()
+
+
+def test_open_refuses_a_file_it_cannot_read(make, tmp_path):
+    c, _ = make()
+    binary = tmp_path / "image.png"
+    binary.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
+    c.dialogs_.paths["open"] = binary
+    run(c, "open")
+    assert c.launches == [] and "Cannot open it" in c.view.banner_label.get_text()
+
+
+def test_new_creates_the_file_and_opens_it_in_its_own_window(make, tmp_path):
+    from settings.fileops import NEW_TEXT
+
+    c, _ = make()
+    new = tmp_path / "home" / "edge-shell" / "config.toml"
+    c.dialogs_.paths["new"] = new
+    run(c, "new")
+    assert c.dialogs_.chosen == ("new", new.parent, "config.toml")
+    assert new.read_text() == NEW_TEXT and c.launches == [new] and c.quits == [1]
+
+
+def test_new_never_replaces_a_file(make, tmp_path):
+    c, path = make()
+    c.dialogs_.paths["new"] = path
+    run(c, "new")
+    assert path.read_text() == USER and c.launches == []
+    assert "already exists" in c.view.banner_label.get_text()
+
+
+def test_save_as_copies_the_changes_and_puts_this_file_back_as_last_saved(make, tmp_path):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    copy = tmp_path / "copy.toml"
+    c.dialogs_.paths["save-as"] = copy
+    run(c, "save-as")
+    assert c.dialogs_.chosen == ("save-as", tmp_path / "home" / "edge-shell", "config.toml")
+    assert "depth = 90" in copy.read_text() and path.read_text() == USER
+    assert c.launches == [copy] and c.quits == [1]
+
+
+def test_save_as_onto_this_file_is_save(make):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    c.dialogs_.paths["save-as"] = path
+    run(c, "save-as")
+    assert not c.session.dirty and "depth = 90" in path.read_text() and c.launches == []
+
+
+def test_open_from_the_empty_page_shows_this_windows_file_here(make):
+    c, path = make()
+    run(c, "close")
+    c.dialogs_.paths["open"] = path
+    run(c, "open")
+    assert c.view is not None and c.launches == [] and c.quits == []
+    assert c.body.get_visible_child_name() == "config" and on(c, "close")
+
+
+def test_a_window_that_cannot_be_started_is_shown_and_this_one_stays(make, tmp_path):
+    c, _ = make()
+
+    def fail(_path):
+        raise OSError("no such interpreter")
+
+    c.launch = fail
+    other = tmp_path / "other.toml"
+    other.write_text(USER)
+    c.dialogs_.paths["open"] = other
+    run(c, "open")
+    assert c.quits == [] and "no such interpreter" in c.view.banner_label.get_text()
+
+
+def test_an_error_on_the_empty_page_is_shown_there(make, tmp_path):
+    c, _ = make()
+    run(c, "close")
+    c.dialogs_.paths["open"] = tmp_path / "missing.toml"
+    run(c, "open")
+    assert c.notice.get_visible() and "does not exist" in c.notice.get_text()
+
+
+def test_new_asks_about_unsaved_changes_before_creating_the_file(make, tmp_path):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    new = tmp_path / "home" / "edge-shell" / "fresh.toml"
+    c.dialogs_.paths["new"] = new
+    run(c, "new")  # answered Cancel
+    assert not new.exists() and c.launches == [] and c.dialogs_.calls == [("unsaved", path)]
+
+
+def test_the_empty_pages_error_goes_away_when_the_file_is_shown_again(make, tmp_path):
+    c, path = make()
+    run(c, "close")
+    c.dialogs_.paths["open"] = tmp_path / "missing.toml"
+    run(c, "open")
+    assert c.notice.get_visible()
+    c.dialogs_.paths["open"] = path
+    run(c, "open")
+    assert not c.notice.get_visible()

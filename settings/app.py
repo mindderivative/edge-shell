@@ -76,6 +76,10 @@ class SettingsApp(Gtk.Application):
             self.window = SettingsWindow(session, connected_outputs(), application=self)
             for action, accels in ACCELS.items():
                 self.set_accels_for_action(action, accels)
+        elif self.window.controller.session is None:
+            # launched again on this file (main.py --settings, a right-click on a panel handle)
+            # while File > Close left the window empty: show the file again
+            self.window.controller.reopen()
         self.window.present()
 
 

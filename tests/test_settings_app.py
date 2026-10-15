@@ -243,6 +243,16 @@ def test_activation_sets_the_undo_accel_watches_the_file_and_presents_once(gtk_a
     assert gtk_app.presented == [first, first]
 
 
+def test_a_launch_on_a_window_with_no_config_open_shows_its_file_again(gtk_app, tmp_path):
+    app = gtk_app(tmp_path / "c.toml")
+    app_mod.SettingsApp.do_activate(app)
+    controller = app.window.controller
+    controller.close_config()  # nothing changed: no question
+    assert controller.view is None
+    app_mod.SettingsApp.do_activate(app)  # main.py --settings on the same file
+    assert controller.view is not None and controller.session.path == tmp_path / "c.toml"
+
+
 def test_an_uncreatable_config_folder_exits_cleanly_without_a_window(gtk_app, capsys):
     app = gtk_app(Path("/proc/nope/c.toml"))
     app_mod.SettingsApp.do_activate(app)
