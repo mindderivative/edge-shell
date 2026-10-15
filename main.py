@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -83,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.settings:
+        # Native file dialogs (File > New, Open, Save As): GTK 3 asks the desktop portal (on
+        # Plasma: KDE's own dialog) only when told to, before GTK starts. GTK_USE_PORTAL=0 in
+        # the environment keeps GTK's own dialog.
+        os.environ.setdefault("GTK_USE_PORTAL", "1")
         # Before the ConfigStore: the window must open even when the file is invalid. It
         # imports the widgets itself, only when it is the first instance on this file.
         from settings.app import run_settings

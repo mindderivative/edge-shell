@@ -35,6 +35,18 @@ def test_settings_opens_even_when_the_config_is_invalid(tmp_path, opened):
     assert opened == [cfg]
 
 
+def test_settings_asks_gtk_for_the_native_file_dialogs(tmp_path, opened, monkeypatch):
+    import os
+
+    cfg = str(tmp_path / "c.toml")
+    monkeypatch.setenv("GTK_USE_PORTAL", "0")  # a user's own choice wins
+    main_mod.main(["--settings", "--config", cfg])
+    assert os.environ["GTK_USE_PORTAL"] == "0"
+    monkeypatch.delenv("GTK_USE_PORTAL")
+    main_mod.main(["--settings", "--config", cfg])
+    assert os.environ["GTK_USE_PORTAL"] == "1"
+
+
 def test_restore_config_puts_the_backup_back(tmp_path, capsys):
     cfg = tmp_path / "c.toml"
     cfg.write_text("broken\n")

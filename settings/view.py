@@ -16,6 +16,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
+from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
 from settings.fields import FieldRow
 from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
@@ -34,9 +35,16 @@ TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "he
 
 
 class SettingsView(Gtk.Box):
-    def __init__(self, session: SettingsSession, outputs: list[Output]):
+    def __init__(
+        self,
+        session: SettingsSession,
+        outputs: list[Output],
+        confirm_revert: Callable[[Any, str], bool] | None = None,
+    ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
+        # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
+        self._ask_revert = confirm_revert or GtkDialogs().confirm_revert
         self.outputs = {o.name: o for o in outputs}
         self.form = config_form(registry_widgets())
         self.rows: list[FieldRow] = []
@@ -54,13 +62,13 @@ class SettingsView(Gtk.Box):
         self.undo_button = Gtk.Button(label="Undo")
         self.undo_button.set_tooltip_text("Undo the last change (Ctrl+Z)")
         self.undo_button.connect("clicked", lambda _b: self.undo())
-        revert = Gtk.Button(label="Revert all")
-        revert.set_tooltip_text("Put back the file as it was when this window opened")
-        revert.connect("clicked", lambda _b: self._confirm_revert())
+        self.revert_button = Gtk.Button(label="Revert all")
+        self.revert_button.set_tooltip_text("Put back the file as it was when this window opened")
+        self.revert_button.connect("clicked", lambda _b: self.confirm_revert())
         where = Gtk.Label(label=str(session.path), xalign=1, selectable=True)
         where.get_style_context().add_class("dim-label")
         bar.pack_start(self.undo_button, False, False, 0)
-        bar.pack_start(revert, False, False, 0)
+        bar.pack_start(self.revert_button, False, False, 0)
         bar.pack_end(where, True, True, 0)
 
         self.banner = Gtk.InfoBar()
@@ -396,18 +404,9 @@ class SettingsView(Gtk.Box):
             )
         return text
 
-    def _confirm_revert(self) -> None:
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.OK_CANCEL,
-            text="Revert every change made in this window?",
-        )
-        dialog.format_secondary_text(self.revert_text())
-        answer = dialog.run()
-        dialog.destroy()
-        if answer == Gtk.ResponseType.OK:
+    def confirm_revert(self) -> None:
+        """Revert all, after the confirmation dialog (the button and Edit > Revert all)."""
+        if self._ask_revert(self.get_toplevel(), self.revert_text()):
             self.revert()
 
     def file_changed(self) -> None:
