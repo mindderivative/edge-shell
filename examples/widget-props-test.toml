@@ -20,7 +20,7 @@ widget = "dock"
 panel = "edge"
 name = "Clock"
 widget = "clock"
-length = "content"
+length = 320            # px, fixed: holds every format of the gate, even at 30 pt (one build)
 format = "ddd HH:mm:ss"
 font_size = 18
 

@@ -114,8 +114,9 @@ font_size = 14            # points, 6-96 (default: the theme's size)
 The format takes only the tokens listed: `HH` hour 00-23, `H` 0-23, `h` 1-12, `a` AM/PM, `mm`
 minute, `ss` second, `dd` day, `ddd` weekday, `MM` month, `MMM` month name, `yyyy` year.
 Text in single quotes is shown as written (`"HH 'h' mm"`), two single quotes (`''`) are one
-quote, and a quote that is not closed is an error. Any other letter is an error naming its
-position; digits, spaces, punctuation and `%` are shown as written (never through strftime).
+quote, and a quote that is not closed is an error. Any other ASCII letter is an error naming
+its position; digits, spaces, punctuation and `%` are shown as written (never through strftime).
+
 ### Errors, failures and reloads
 
 Errors name the entry's index in brackets (`monitors.HDMI-A-1.panels[2].format: ...`). A key
