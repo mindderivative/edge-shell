@@ -113,16 +113,21 @@ def menu_state(session: Any, clipboard: dict[str, bool] | None = None) -> MenuSt
 
 def enabled(state: MenuState) -> dict[str, bool]:
     """Action name -> enabled, for every action in MENUS. New, Open, Exit and About always
-    work; Save needs changes since the last save; Save As and Close need an open config;
-    Undo, Redo and Revert all need something to undo, redo or revert."""
+    work; Save, Save As, Close and Undo need an open config; Redo and Revert all need
+    something to redo or revert.
+
+    Save and Undo do not wait for `dirty` or a history: a value typed but not yet applied
+    (inside the spin's pause, a list without Enter) is no change in the session yet, yet both
+    apply it first. A disabled action lets its key through to the focused widget, which
+    ignores it, so Ctrl+S or Ctrl+Z right after typing would silently do nothing."""
     return {
         "new": True,
         "open": True,
-        "save": state.open and state.dirty,
+        "save": state.open,
         "save-as": state.open,
         "close": state.open,
         "exit": True,
-        "undo": state.open and state.can_undo,
+        "undo": state.open,
         "redo": state.open and state.can_redo,
         "cut": state.cut,
         "copy": state.copy,

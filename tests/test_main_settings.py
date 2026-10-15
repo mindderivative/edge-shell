@@ -9,8 +9,22 @@ import main as main_mod  # noqa: E402
 import settings.app as settings_app  # noqa: E402
 
 
+@pytest.fixture(autouse=True)  # autouse: set up before any monkeypatch, so checked after its undo
+def portal_env_restored():
+    """main(["--settings"]) sets GTK_USE_PORTAL for the settings process; a test must not leave
+    it in the test process."""
+    import os
+
+    before = os.environ.get("GTK_USE_PORTAL")
+    yield
+    assert os.environ.get("GTK_USE_PORTAL") == before
+
+
 @pytest.fixture
 def opened(monkeypatch):
+    # start unset (main sets it); the setenv makes monkeypatch undo whatever main then sets
+    monkeypatch.setenv("GTK_USE_PORTAL", "")
+    monkeypatch.delenv("GTK_USE_PORTAL")
     calls = []
     monkeypatch.setattr(settings_app, "run_settings", lambda path: calls.append(path) or 0)
     return calls

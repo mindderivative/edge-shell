@@ -6,6 +6,7 @@ modal message dialogs. Each method runs its dialog to the end and returns the an
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -29,6 +30,42 @@ class Dialogs(Protocol):
     def choose_open(self, parent: Any, folder: Path) -> Path | None: ...
 
     def choose_save_as(self, parent: Any, folder: Path, name: str) -> Path | None: ...
+
+
+def unsaved_answer(response: Gtk.ResponseType) -> Answer:
+    """The unsaved-changes dialog's response as an Answer; anything else (Escape, the close
+    button: DELETE_EVENT) is Cancel."""
+    answers = {Gtk.ResponseType.ACCEPT: Answer.SAVE, Gtk.ResponseType.REJECT: Answer.DISCARD}
+    return answers.get(response, Answer.CANCEL)
+
+
+def revert_confirmed(response: Gtk.ResponseType) -> bool:
+    """Only OK confirms Revert all; Cancel, Escape and the close button do not."""
+    return response == Gtk.ResponseType.OK
+
+
+def chosen_path(response: Gtk.ResponseType, filename: str | None) -> Path | None:
+    """The path a file chooser returns: only an ACCEPT with a local filename (the portal can
+    give a URI instead, and then there is none); a Cancel answers None whatever name is set."""
+    if response != Gtk.ResponseType.ACCEPT or not filename:
+        return None
+    return Path(filename)
+
+
+@dataclass(frozen=True)
+class ChooserSpec:
+    title: str
+    action: Gtk.FileChooserAction
+    accept: str  # the accept button's label
+    overwrite: bool  # ask before replacing an existing file (SAVE choosers only)
+
+
+CHOOSERS: dict[str, ChooserSpec] = {
+    # New never replaces a file (the window refuses an existing one): no overwrite question
+    "new": ChooserSpec("New config file", Gtk.FileChooserAction.SAVE, "_Create", False),
+    "open": ChooserSpec("Open a config file", Gtk.FileChooserAction.OPEN, "_Open", False),
+    "save_as": ChooserSpec("Save the config as", Gtk.FileChooserAction.SAVE, "_Save", True),
+}
 
 
 def _window(parent: Any) -> Gtk.Window | None:
@@ -59,8 +96,7 @@ class GtkDialogs:
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
         response = dialog.run()
         dialog.destroy()
-        answers = {Gtk.ResponseType.ACCEPT: Answer.SAVE, Gtk.ResponseType.REJECT: Answer.DISCARD}
-        return answers.get(response, Answer.CANCEL)  # Escape or the close button: Cancel
+        return unsaved_answer(response)
 
     def confirm_revert(self, parent: Any, text: str) -> bool:
         dialog = Gtk.MessageDialog(
@@ -73,52 +109,29 @@ class GtkDialogs:
         dialog.format_secondary_text(text)
         answer = dialog.run()
         dialog.destroy()
-        return answer == Gtk.ResponseType.OK
+        return revert_confirmed(answer)
 
     def choose_new(self, parent: Any, folder: Path, name: str) -> Path | None:
-        # no overwrite question: New never replaces a file (the window refuses an existing one)
-        return self._choose(
-            parent,
-            "New config file",
-            Gtk.FileChooserAction.SAVE,
-            "_Create",
-            folder,
-            name,
-            overwrite=False,
-        )
+        return self._choose(CHOOSERS["new"], parent, folder, name)
 
     def choose_open(self, parent: Any, folder: Path) -> Path | None:
-        return self._choose(
-            parent,
-            "Open a config file",
-            Gtk.FileChooserAction.OPEN,
-            "_Open",
-            folder,
-            None,
-            overwrite=False,
-        )
+        return self._choose(CHOOSERS["open"], parent, folder, None)
 
     def choose_save_as(self, parent: Any, folder: Path, name: str) -> Path | None:
-        return self._choose(
-            parent,
-            "Save the config as",
-            Gtk.FileChooserAction.SAVE,
-            "_Save",
-            folder,
-            name,
-            overwrite=True,
-        )
+        return self._choose(CHOOSERS["save_as"], parent, folder, name)
 
     @staticmethod
-    def _choose(parent, title, action, accept, folder, name, overwrite) -> Path | None:
-        chooser = Gtk.FileChooserNative.new(title, _window(parent), action, accept, "_Cancel")
+    def _choose(spec: ChooserSpec, parent, folder, name) -> Path | None:
+        chooser = Gtk.FileChooserNative.new(
+            spec.title, _window(parent), spec.action, spec.accept, "_Cancel"
+        )
         chooser.set_modal(True)
         if folder.is_dir():
             chooser.set_current_folder(str(folder))
         if name is not None:
             chooser.set_current_name(name)
-        if action == Gtk.FileChooserAction.SAVE:
-            chooser.set_do_overwrite_confirmation(overwrite)
+        if spec.action == Gtk.FileChooserAction.SAVE:
+            chooser.set_do_overwrite_confirmation(spec.overwrite)
         for label, pattern in TOML_FILTERS:
             choice = Gtk.FileFilter()
             choice.set_name(label)
@@ -129,6 +142,4 @@ class GtkDialogs:
             filename = chooser.get_filename()
         finally:
             chooser.destroy()
-        if response != Gtk.ResponseType.ACCEPT or not filename:
-            return None  # cancelled, or a file that is not local (the portal gave a URI)
-        return Path(filename)
+        return chosen_path(response, filename)
