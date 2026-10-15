@@ -46,9 +46,20 @@ def test_spawn_starts_its_own_session_and_reaps_the_child(monkeypatch, tmp_path)
     command, kw = started[0]
     assert command[-2:] == ["--config", str(tmp_path / "rel.toml")]  # absolute
     assert kw["start_new_session"] is True
+    assert kw["stdin"] is launch.subprocess.DEVNULL
     _prio, pid, callback, proc = watched[0]
     assert pid == 4242
     callback(4242, 0, proc)
     assert proc.returncode == 0
     callback(4242, 3 << 8, proc)  # GLib's raw wait status of an exit with code 3
     assert proc.returncode == 3
+
+
+def test_a_window_killed_by_a_signal_is_logged_with_a_negative_code(caplog):
+    proc = SimpleNamespace(returncode=None)
+    with caplog.at_level("WARNING"):
+        launch._reaped(1, 9, proc)  # raw wait status 9: killed by SIGKILL
+    assert proc.returncode == -9 and "status -9" in caplog.text
+    caplog.clear()
+    launch._reaped(1, 0, proc)
+    assert caplog.text == ""

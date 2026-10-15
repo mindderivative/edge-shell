@@ -495,3 +495,160 @@ def test_the_empty_pages_error_goes_away_when_the_file_is_shown_again(make, tmp_
     c.dialogs_.paths["open"] = path
     run(c, "open")
     assert not c.notice.get_visible()
+
+
+# ---- the review of Tasks 5 and 6 ---------------------------------------------------------------
+def _typed_depth(c, value=90):
+    """Depth typed into its spin and written (flushed); returns the value it showed before."""
+    widget = row(c, DEPTH).editor.widget
+    before = widget.get_value()
+    widget.set_value(value)
+    c.view.flush()
+    assert f"depth = {value}" in c.session.text
+    return before
+
+
+def test_a_discard_followed_by_a_window_that_cannot_start_shows_the_saved_values(make, tmp_path):
+    c, path = make()
+    before = _typed_depth(c)
+
+    def fail(_path):
+        raise OSError("no such interpreter")
+
+    c.launch = fail
+    other = tmp_path / "other.toml"
+    other.write_text(USER)
+    c.dialogs_.paths["open"] = other
+    c.dialogs_.unsaved = Answer.DISCARD
+    run(c, "open")
+    assert path.read_text() == USER and not c.session.dirty and c.quits == []
+    assert row(c, DEPTH).editor.widget.get_value() == before  # not the discarded 90
+    widget = row(c, DEPTH).editor.widget
+    widget.set_value(90)  # typing it again is a real change, not a no-op on a stale row
+    c.view.flush()
+    assert "depth = 90" in path.read_text()
+
+
+def test_new_onto_an_existing_file_asks_nothing_and_keeps_the_edits(make):
+    c, path = make()
+    _typed_depth(c)
+    c.dialogs_.paths["new"] = path
+    c.dialogs_.unsaved = Answer.DISCARD
+    run(c, "new")
+    assert c.dialogs_.calls == [] and "depth = 90" in path.read_text() and c.session.dirty
+    assert "already exists" in c.view.banner_label.get_text() and c.launches == []
+
+
+def test_new_adds_toml_to_a_name_without_a_suffix(make, tmp_path):
+    c, _ = make()
+    folder = tmp_path / "home" / "edge-shell"
+    c.dialogs_.paths["new"] = folder / "fresh"
+    run(c, "new")
+    assert (folder / "fresh.toml").exists() and not (folder / "fresh").exists()
+    assert c.launches == [folder / "fresh.toml"]
+
+
+def test_save_as_applies_a_pending_value_first(make, pending, tmp_path):
+    c, _ = make()
+    row(c, DEPTH).editor.widget.set_value(120)  # typed, inside the spin's pause
+    copy = tmp_path / "copy.toml"
+    c.dialogs_.paths["save-as"] = copy
+    run(c, "save-as")
+    assert "depth = 120" in copy.read_text()
+
+
+@pytest.mark.parametrize("failure", ["config", "outside"])
+def test_save_as_where_the_file_cannot_be_put_back_stays_and_says_so(make, tmp_path, failure):
+    from settings.session import ChangedOutside
+    from shell.config.models import ConfigError
+
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    copy = tmp_path / "copy.toml"
+    c.dialogs_.paths["save-as"] = copy
+    error = ConfigError("denied") if failure == "config" else ChangedOutside("changed")
+
+    def boom():
+        raise error
+
+    c.session.discard = boom
+    run(c, "save-as")
+    assert "depth = 90" in copy.read_text()  # the copy was written
+    assert c.launches == [] and c.quits == []  # but the window stays
+    text = c.view.banner_label.get_text()
+    assert "was not put back" in text and str(copy) in text
+
+
+def test_save_as_stops_when_the_flush_was_refused(make, pending, tmp_path):
+    c, path = make()
+    row(c, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))  # by hand
+    copy = tmp_path / "copy.toml"
+    c.dialogs_.paths["save-as"] = copy
+    run(c, "save-as")
+    assert c.dialogs_.chosen is None and not copy.exists() and c.launches == []
+
+
+def test_save_as_does_not_copy_a_file_changed_by_hand_while_the_chooser_was_open(make, tmp_path):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    copy = tmp_path / "copy.toml"
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
+
+    def choose(_parent, _folder, _name):
+        path.write_text(hand)  # by hand, while the chooser was open
+        return copy
+
+    c.dialogs_.choose_save_as = choose
+    run(c, "save-as")
+    assert not copy.exists() and c.launches == [] and c.quits == []
+    assert path.read_text() == hand and not c.session.changed_outside()
+    assert row(c, SHELL).editor.widget.get_active_id() == "both"  # shown from the hand edit
+    assert "changed outside" in c.view.banner_label.get_text()
+
+
+def test_save_as_of_an_unreadable_file_says_so(make, tmp_path, monkeypatch):
+    from shell.config.models import ConfigError
+
+    c, _ = make()
+    c.dialogs_.paths["save-as"] = tmp_path / "copy.toml"
+
+    def boom():
+        raise ConfigError("unreadable")
+
+    monkeypatch.setattr(c.session, "changed_outside", boom)
+    run(c, "save-as")
+    assert not (tmp_path / "copy.toml").exists() and "Not saved" in c.view.banner_label.get_text()
+
+
+def test_dropping_the_view_discards_its_rows_and_cancels_its_deferred_rebuild(make):
+    from gi.repository import GLib
+
+    c, _ = make()
+    view, rows = c.view, list(c.view.rows)
+    view._rebuild_soon(defer=True)  # an idle rebuild is waiting
+    source = view._rebuild_idle
+    assert source and GLib.MainContext.default().find_source_by_id(source) is not None
+    c._drop_view()
+    assert view._rebuild_idle == 0
+    assert GLib.MainContext.default().find_source_by_id(source) is None
+    assert rows and all(r._discarding for r in rows)
+    assert view.get_parent() is None  # out of the stack
+    view.destroy()
+
+
+def test_reopen_of_a_file_that_cannot_be_read_shows_an_error(make):
+    c, path = make()
+    run(c, "close")
+    path.unlink()
+    path.mkdir()  # reading it now raises
+    c.reopen()
+    assert c.view is None and c.notice.get_visible()
+    assert "Cannot open it" in c.notice.get_text()
+
+
+def test_a_new_session_clears_the_leave_warning(make):
+    c, path = make()
+    c._leave_warned = True
+    c.open_session(SettingsSession(path))
+    assert c._leave_warned is False

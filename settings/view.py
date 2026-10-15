@@ -97,12 +97,15 @@ class SettingsView(Gtk.Box):
         invalid (the pages are then insensitive)."""
         return self.session.config or check_text("", self.session.default_path)
 
+    def cancel_deferred_rebuild(self) -> None:
+        if self._rebuild_idle:
+            GLib.source_remove(self._rebuild_idle)
+            self._rebuild_idle = 0
+
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
         or a hand edit); keeps the visible page."""
-        if self._rebuild_idle:  # a deferred rebuild is overtaken by this one
-            GLib.source_remove(self._rebuild_idle)
-            self._rebuild_idle = 0
+        self.cancel_deferred_rebuild()  # overtaken by this one
         visible = self.stack.get_visible_child_name()
         window = self.get_toplevel()
         focus = window.get_focus() if isinstance(window, Gtk.Window) else None

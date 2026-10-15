@@ -15,6 +15,7 @@ from settings.fileops import (
     default_folder,
     leave,
     new_name,
+    new_path,
     same_file,
     save_copy,
     unsaved_question,
@@ -187,3 +188,50 @@ def test_save_as_into_an_unwritable_folder_is_an_error(tmp_path):
             save_copy(tmp_path / "missing.toml", USER, folder / "x.toml")
     finally:
         os.chmod(folder, 0o700)
+
+
+def test_new_name_goes_on_past_three(tmp_path):
+    for name in ("config.toml", "config-2.toml", "config-3.toml"):
+        (tmp_path / name).write_text("")
+    assert new_name(tmp_path) == "config-4.toml"
+
+
+def test_new_adds_toml_to_a_name_without_a_suffix(tmp_path):
+    assert new_path(tmp_path / "work") == tmp_path / "work.toml"
+    assert new_path(tmp_path / "work.toml") == tmp_path / "work.toml"
+    assert new_path(tmp_path / "work.conf") == tmp_path / "work.conf"  # another suffix is kept
+    assert create_new(tmp_path / "plain") == tmp_path / "plain.toml"
+    assert (tmp_path / "plain.toml").read_text() == NEW_TEXT and not (tmp_path / "plain").exists()
+    assert create_new(tmp_path / "x.conf") == tmp_path / "x.conf"
+
+
+def test_only_regular_files_are_read(tmp_path):
+    """A FIFO would block the GTK loop for ever (never opened here), a device has no end."""
+    fifo = tmp_path / "pipe.toml"
+    os.mkfifo(fifo)
+    with pytest.raises(ConfigError, match="not a regular file"):
+        check_openable(fifo)
+    with pytest.raises(ConfigError, match="not a regular file"):
+        check_openable(tmp_path)
+    with pytest.raises(ConfigError, match="not a regular file"):
+        check_openable(Path("/dev/zero"))
+    link = tmp_path / "link.toml"
+    link.symlink_to(fifo)  # also through a symlink
+    with pytest.raises(ConfigError, match="not a regular file"):
+        check_openable(link)
+    real = tmp_path / "real.toml"
+    real.write_text(USER)
+    ok = tmp_path / "ok.toml"
+    ok.symlink_to(real)
+    check_openable(ok)  # a symlink to a regular file is fine
+
+
+def test_save_as_never_reads_a_target_that_is_not_a_regular_file(tmp_path):
+    source = tmp_path / "config.toml"
+    source.write_text(USER)
+    fifo = tmp_path / "pipe.toml"
+    os.mkfifo(fifo)
+    with pytest.raises(ConfigError, match="not a regular file"):
+        save_copy(source, USER, fifo)
+    with pytest.raises(ConfigError, match="not a regular file"):
+        save_copy(source, USER, tmp_path)

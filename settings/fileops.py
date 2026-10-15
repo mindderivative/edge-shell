@@ -77,18 +77,39 @@ def same_file(a: Path, b: Path) -> bool:
     return a.resolve() == b.resolve()
 
 
-def create_new(path: Path) -> None:
-    """File > New: write NEW_TEXT at `path` (missing folders are created). Never replaces a
-    file: an existing path is refused."""
+def new_path(path: Path) -> Path:
+    """The file File > New creates for a chosen name: .toml is added when the name has no
+    suffix (a name with another suffix is kept)."""
+    return path if path.suffix else path.with_name(path.name + ".toml")
+
+
+def check_new(path: Path) -> None:
+    """File > New never replaces a file: an existing path (also a dangling symlink) is
+    refused, before anything is asked or written."""
     if path.exists() or path.is_symlink():
         raise ConfigError(
             f"{path} already exists; New never replaces a file: choose another name, or open "
             "it with File > Open"
         )
+
+
+def create_new(path: Path) -> Path:
+    """File > New: write NEW_TEXT at `path` (see new_path; missing folders are created) and
+    return the file written. Never replaces a file: an existing path is refused."""
+    path = new_path(path)
+    check_new(path)
     try:
         files.write_atomic(path, NEW_TEXT)
     except OSError as exc:
         raise ConfigError(f"cannot create {path}: {exc}") from None
+    return path
+
+
+def require_regular(path: Path) -> None:
+    """Only a regular file (after following symlinks) is read: a FIFO would block the window
+    for ever, a device never ends. Raises ConfigError; a missing path passes (callers check)."""
+    if path.exists() and not stat.S_ISREG(path.stat().st_mode):
+        raise ConfigError(f"{path} is not a regular file")
 
 
 def check_openable(path: Path) -> None:
@@ -97,6 +118,7 @@ def check_openable(path: Path) -> None:
     its error), as at start."""
     if not path.exists():
         raise ConfigError(f"{path} does not exist")
+    require_regular(path)
     files.read_text(path)  # ConfigError for a folder, no permission or a binary file
 
 
@@ -109,6 +131,7 @@ def save_copy(source: Path, text: str, target: Path) -> Path | None:
     mode = None
     try:
         if target.exists():
+            require_regular(target)  # before keep_copy reads it
             kept = files.keep_copy(target, ".before-save-as")
         elif source.exists():
             mode = stat.S_IMODE(source.stat().st_mode)

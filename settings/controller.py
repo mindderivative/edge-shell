@@ -22,11 +22,14 @@ from gi.repository import Gio, GLib, Gtk
 
 from settings.dialogs import Dialogs
 from settings.fileops import (
+    Answer,
+    check_new,
     check_openable,
     create_new,
     default_folder,
     leave,
     new_name,
+    new_path,
     same_file,
     save_copy,
 )
@@ -128,6 +131,7 @@ class SettingsController(Gtk.Box):
     def _drop_view(self) -> None:
         view, self.view, self.session = self.view, None, None
         if view is not None:
+            view.cancel_deferred_rebuild()  # it would rebuild a view that is gone
             for row in view.rows:
                 row.discard()
             self.body.remove(view)
@@ -157,7 +161,15 @@ class SettingsController(Gtk.Box):
         and open it in its own window (this one closes, after the unsaved question)."""
         folder = default_folder(self.user_path)
         path = self.dialogs.choose_new(self.get_toplevel(), folder, new_name(folder))
-        if path is None or not self.can_leave():
+        if path is None:
+            return
+        path = new_path(path)
+        try:
+            check_new(path)  # before the unsaved question: a refusal never costs the edits
+        except ConfigError as exc:
+            self.tell(str(exc))
+            return
+        if not self.can_leave():
             return
         try:
             create_new(path)
@@ -205,6 +217,19 @@ class SettingsController(Gtk.Box):
             return
         if same_file(target, session.path):
             self.save()
+            return
+        try:
+            outside = session.changed_outside()  # the copy must match the file as it stands
+        except ConfigError as exc:
+            self.tell(f"Not saved: {exc}")
+            return
+        if outside:
+            self.view.file_changed()  # re-read: the hand edit is shown
+            self.tell(
+                f"Nothing was saved as {target}: {session.path} was changed outside this "
+                "window and has been re-read. Choose Save As again.",
+                Gtk.MessageType.WARNING,
+            )
             return
         try:
             kept = save_copy(session.path, session.text, target)
@@ -271,10 +296,19 @@ class SettingsController(Gtk.Box):
             self._leave_warned = True
             return False
         session = self.session
+        answers: list[Answer] = []
+
+        def ask() -> Answer:
+            answers.append(self.dialogs.ask_unsaved(self.get_toplevel(), session.path))
+            return answers[-1]
+
         try:
-            return leave(
-                session, lambda: self.dialogs.ask_unsaved(self.get_toplevel(), session.path)
-            )
+            allowed = leave(session, ask)
+            if allowed and Answer.DISCARD in answers:
+                # the saved text is back in the file: the rows must show it too, in case the
+                # window stays (a New or Open that then fails)
+                self.view.rebuild()
+            return allowed
         except ChangedOutside as exc:
             self.view.rebuild()
             self.view.show_banner(str(exc), Gtk.MessageType.WARNING)

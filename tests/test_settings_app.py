@@ -253,6 +253,18 @@ def test_a_launch_on_a_window_with_no_config_open_shows_its_file_again(gtk_app, 
     assert controller.view is not None and controller.session.path == tmp_path / "c.toml"
 
 
+def test_a_second_launch_on_an_open_window_only_presents_it(gtk_app, tmp_path):
+    app = gtk_app(tmp_path / "c.toml")
+    app_mod.SettingsApp.do_activate(app)
+    controller = app.window.controller
+    view, session = controller.view, controller.session
+    session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    app_mod.SettingsApp.do_activate(app)
+    assert controller.view is view and controller.session is session  # not reopened
+    assert session.history and session.dirty  # undo and the unsaved changes survive
+    assert gtk_app.presented == [app.window, app.window]
+
+
 def test_an_uncreatable_config_folder_exits_cleanly_without_a_window(gtk_app, capsys):
     app = gtk_app(Path("/proc/nope/c.toml"))
     app_mod.SettingsApp.do_activate(app)
