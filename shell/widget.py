@@ -11,9 +11,10 @@ from pydantic import BaseModel, ConfigDict
 class WidgetProps(BaseModel):
     """A widget's own properties: the keys of a panel entry that are not panel keys
     (shell.config.models.FRAMEWORK_KEYS), validated by shell.registry.validate_widgets. Every
-    property has a default (an entry may leave any of them out); unknown keys are rejected."""
+    property has a default (an entry may leave any of them out); unknown keys are rejected and
+    values are not coerced (strict: "4" is not an int, True is not an int, 1 is not a bool)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 NO_PROPS = WidgetProps()  # the properties of a widget that has none

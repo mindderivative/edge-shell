@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 
 import pytest
-from pydantic import Field, create_model
+from pydantic import AliasChoices, ConfigDict, Field, create_model
 
 from shell.config.diff import Change, diff_configs
 from shell.config.models import ConfigError, PanelConfig
@@ -140,6 +140,30 @@ class NoDefault(WidgetProps):
     text: str
 
 
+class LooseFrozen(WidgetProps):
+    model_config = ConfigDict(frozen=False)
+
+
+class LooseExtra(WidgetProps):
+    model_config = ConfigDict(extra="allow")
+
+
+class IgnoreExtra(WidgetProps):
+    model_config = ConfigDict(extra="ignore")
+
+
+class Aliased(WidgetProps):
+    label: str = Field("x", alias="edge")
+
+
+class AliasedIn(WidgetProps):
+    label: str = Field("x", validation_alias="name")
+
+
+class AliasedChoice(WidgetProps):
+    label: str = Field("x", validation_alias=AliasChoices("fine", "depth"))
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -152,7 +176,15 @@ class NoDefault(WidgetProps):
         ({"corner": EDGE}, "corner defaults must be CornerDefaults"),
         ({"edge": EDGE, "title": ""}, "title must be 1-40 characters"),
         ({"edge": EDGE, "title": "T" * 41}, "title must be 1-40 characters"),
-        ({"edge": EDGE, "title": "a\nb"}, "control characters"),
+        ({"edge": EDGE, "title": "a\nb"}, "widget 'bad': title must not contain control"),
+        ({"edge": EDGE, "title": " a"}, "widget 'bad': title must not start or end with white"),
+        ({"edge": EDGE, "title": 5}, "title must be a string"),
+        ({"edge": EDGE, "props": LooseFrozen}, "widget 'bad': props must stay frozen"),
+        ({"edge": EDGE, "props": LooseExtra}, "widget 'bad': props must forbid extra"),
+        ({"edge": EDGE, "props": IgnoreExtra}, "widget 'bad': props must forbid extra"),
+        ({"edge": EDGE, "props": Aliased}, "property 'label' has the alias 'edge'"),
+        ({"edge": EDGE, "props": AliasedIn}, "property 'label' has the alias 'name'"),
+        ({"edge": EDGE, "props": AliasedChoice}, "property 'label' has the alias 'depth'"),
     ],
 )
 def test_a_bad_registration_fails_at_import(fake_registry, kwargs, message):
@@ -184,6 +216,8 @@ class Nested(WidgetProps):
     [
         (float, 1.0, "type float"),
         (float | None, None, "type float | None"),
+        (int | str, 1, "type int | str"),
+        (int | float, 1, "type int | float"),
         (list[str], [], "type list"),
         (dict[str, int], {}, "type dict"),
         (Literal[1, 2], 1, "Literal[1, 2]"),
@@ -221,3 +255,35 @@ def test_the_property_types_the_settings_window_shows_are_accepted(
         type("FineWidget", (Widget,), {})
     )
     assert fake_registry.widget_props_model("fine") is model
+
+
+def test_bad_properties_name_the_widget_and_list_key_message_lines(tile):
+    cfg = PanelConfig(**entry(size=5, text=3))
+    for call in (tile.request_for, tile.widget_props):
+        with pytest.raises(ConfigError) as exc:
+            call(cfg)
+        text = str(exc.value)
+        assert text.startswith("tile properties:")
+        assert "size: Input should be greater than or equal to 6" in text
+        assert "text: Input should be a valid string" in text
+        assert "pydantic.dev" not in text and "validation error" not in text
+
+
+def test_a_property_is_not_coerced_from_another_type(tile, fake_registry):
+    class Flags(WidgetProps):
+        on: bool = False
+        n: int = 1
+
+    fake_registry.register_widget("flags", title="Flags", props=Flags, edge=EDGE)(
+        type("Flags", (Widget,), {})
+    )
+    for keys in ({"size": "4"}, {"size": True}):
+        with pytest.raises(ConfigError, match="size"):
+            tile.widget_props(PanelConfig(**entry(**keys)))
+    for keys in ({"on": 1}, {"on": "true"}, {"n": True}, {"n": "2"}):
+        with pytest.raises(ConfigError):
+            fake_registry.widget_props(PanelConfig(**entry(widget="flags", **keys)))
+    assert fake_registry.widget_props(PanelConfig(**entry(widget="flags", on=True, n=3))) == Flags(
+        on=True, n=3
+    )
+    assert tile.widget_props(PanelConfig(**entry(size=12))) == TileProps(size=12)

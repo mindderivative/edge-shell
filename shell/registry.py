@@ -49,8 +49,8 @@ class WidgetInfo:
 
 
 _WIDGETS: dict[str, WidgetInfo] = {}
-# The property types the settings window has a row for (settings.form: a text row, a spin
-# button, a switch; a Literal of strings is a combo): anything else is refused at registration.
+# The property types the settings window has a row for (settings.form: a text row (Task 7), a
+# spin button, a switch; a Literal of strings is a combo): anything else is refused at registration.
 FORM_TYPES = (str, int, bool)
 FORM_TYPES_TEXT = "str, int, bool, a Literal of strings, or one of these | None"
 _PLACEMENT = ("pos", "align", "offset")
@@ -94,6 +94,14 @@ def form_type_ok(annotation: object) -> bool:
     return annotation in FORM_TYPES
 
 
+def _aliases(field) -> list[str]:
+    """The names a property is read from besides its own (alias, validation_alias, choices)."""
+    found = [field.alias]
+    choices = field.validation_alias
+    found += [choices] if isinstance(choices, str) else getattr(choices, "choices", [])
+    return [a for a in found if isinstance(a, str)]
+
+
 def _check_registration(
     widget_id: str,
     title: str,
@@ -107,16 +115,33 @@ def _check_registration(
         raise ValueError(f"widget {widget_id!r}: edge defaults must be PanelDefaults")
     if corner is not None and not isinstance(corner, CornerDefaults):
         raise ValueError(f"widget {widget_id!r}: corner defaults must be CornerDefaults")
+    if not isinstance(title, str):
+        raise ValueError(f"widget {widget_id!r}: title must be a string")
     if not 1 <= len(title) <= 40:
         raise ValueError(f"widget {widget_id!r}: title must be 1-40 characters")
-    check_panel_name(title)  # it becomes a new panel's name
+    try:
+        check_panel_name(title)  # it becomes a new panel's name
+    except ValueError as exc:
+        raise ValueError(f"widget {widget_id!r}: title {exc}") from None
     if not (isinstance(props, type) and issubclass(props, WidgetProps)):
         raise ValueError(f"widget {widget_id!r}: props must be a WidgetProps model")
-    clash = sorted(set(props.model_fields) & (FRAMEWORK_KEYS | {"widget_props"}))
+    if props.model_config.get("frozen") is not True:
+        raise ValueError(f"widget {widget_id!r}: props must stay frozen (frozen=True)")
+    if props.model_config.get("extra") != "forbid":
+        raise ValueError(f"widget {widget_id!r}: props must forbid extra keys (extra='forbid')")
+    reserved = FRAMEWORK_KEYS | {"widget_props"}
+    clash = sorted(set(props.model_fields) & reserved)
     if clash:
         raise ValueError(
             f"widget {widget_id!r}: property {clash[0]!r} has the name of a panel key; rename it"
         )
+    for name, field in props.model_fields.items():
+        for alias in _aliases(field):
+            if alias in reserved:
+                raise ValueError(
+                    f"widget {widget_id!r}: property {name!r} has the alias {alias!r}, the name "
+                    "of a panel key; rename it"
+                )
     for name, field in props.model_fields.items():
         if not form_type_ok(field.annotation):
             kind = field.annotation
@@ -200,7 +225,8 @@ def widget_props(cfg: PanelConfig) -> WidgetProps:
     try:
         return _WIDGETS[cfg.widget].props.model_validate(cfg.widget_props)
     except ValidationError as exc:
-        raise ConfigError(f"{cfg.widget} properties: {exc}") from None
+        lines = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()]
+        raise ConfigError(f"{cfg.widget} properties:\n" + "\n".join(lines)) from None
 
 
 def _in_a(kind: str) -> str:
