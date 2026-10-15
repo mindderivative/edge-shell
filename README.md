@@ -12,6 +12,7 @@ alongside Plasma and does not replace it.
 - [Handle customization plan](docs/superpowers/plans/2026-10-13-handle-customization.md)
 - [Corner panel plan](docs/superpowers/plans/2026-10-14-corner-panel.md)
 - [Settings window plan](docs/superpowers/plans/2026-10-14-settings-window.md)
+- [Settings menus plan](docs/superpowers/plans/2026-10-15-settings-menus.md)
 
 **Status:** early development.
 
@@ -58,7 +59,7 @@ scripts/py main.py --config examples/widget-props-test.toml -v  # panel names, c
 scripts/py main.py --config examples/panels-test.toml --stats 10  # 10 s measurement, then quit
 scripts/py main.py --settings                              # the settings window (user config)
 scripts/py main.py --settings --config /tmp/edge.toml      # ... on another file
-scripts/py main.py --restore-config                        # undo the last settings session
+scripts/py main.py --restore-config                        # put back config.toml.bak (the last Save)
 ```
 
 `scripts/py` runs the shared venv; override it with `EDGE_SHELL_PYTHON=/path/to/python`.
@@ -305,6 +306,34 @@ running shell's config file. There is one settings window per config file: openi
 the same file brings it forward; `--config` with another file opens a second window for that
 file.
 
+- **Menus.** **File**: New… (Ctrl+N), Open… (Ctrl+O), Save (Ctrl+S), Save As… (Shift+Ctrl+S),
+  Close (Ctrl+W), Exit (Ctrl+Q). **Edit**: Undo (Ctrl+Z), Redo (Shift+Ctrl+Z or Ctrl+Y), Cut,
+  Copy, Paste (Ctrl+X, Ctrl+C, Ctrl+V: in the focused text field; greyed out elsewhere),
+  Revert all. **Help**: About Edge Shell (name, version, website, authors and the MIT licence).
+  The Undo and Revert all buttons stay above the pages. Ctrl+Z in a text field undoes the last
+  change to the file (the typed text is applied first); Ctrl+X/C/V work in text fields as
+  everywhere in GTK.
+- **Saving.** Changes still apply at once (the shell follows them). **Save** marks the file as
+  it is now as saved and copies it to `config.toml.bak` (what `--restore-config` puts back);
+  the title shows the file with a `*` while it has changes since the last save (or since it was
+  opened). Close, Exit, New, Open and the window's close button ask **Save / Discard / Cancel**
+  when there are such changes: Discard puts the file back as it was last saved (the shell
+  follows; an invalid text it replaces is kept as `config.toml.before-revert`), Cancel stays.
+  Undo back to the saved state is not a change. A hand edit made while the window is open
+  counts as saved (it was saved in your editor): Discard never writes over it.
+- **Files.** One window per config file. Open and New show the chosen file in its own window
+  and close this one (after the question above). New writes a file with no keys (every value is
+  a default), adds `.toml` to the name and never replaces an existing file. Save As writes the
+  current settings to the chosen file (a file it replaces is kept as `NAME.before-save-as`,
+  `.2`, `.3`, ...), puts this file back as it was last saved, and shows the copy in its own
+  window. Close leaves an empty window with New and Open; `main.py --settings` on its file (or
+  a right-click on a panel handle) shows the file again. The shell reads only its own config
+  (`~/.config/edge-shell/config.toml`, or its `--config` file): a window on another file says
+  so once.
+- **File dialogs** start in `~/.config/edge-shell` and are KDE's own, through the desktop
+  portal (the settings process sets `GTK_USE_PORTAL=1` unless it is already set; start it with
+  `GTK_USE_PORTAL=0 scripts/py main.py --settings` for GTK's own dialog).
+
 - **Theme** page: every theme key, the border, the shadow, the handle style and the layout gap.
   One page per monitor (connected monitors and the ones in your config): the shell mode
   (`edge`, `plasma`, `both`, `none`), the panels (add, remove, move up or down; every panel key
@@ -331,8 +360,8 @@ file.
   scrolls the page and never changes a value, so scrolling past a monitor's mode cannot switch
   it.
 - **Undo** (Ctrl+Z) steps back one change; **Revert all** puts the file back as it was when
-  the window opened, or after your last hand edit. Before its first change the window copies
-  the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
+  the window opened, or after your last hand edit. Before its first change, and at every Save,
+  the window copies the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
   that copy back (the replaced file is kept as `config.toml.before-restore`, or `.2`, `.3`, ...
   after an earlier restore). A hand edit that left the file invalid is not a starting point:
   Revert all then returns to the last valid state and keeps the invalid text as
@@ -404,6 +433,12 @@ that need `gi` or Fabric skip themselves there.
   expands it); the first instance imports the widgets, which loads Fabric's typelibs (no layer
   surface is created); closing the window while the last write failed keeps it open once, so
   the error is seen, and the next close closes it; a right-click on a handle opens the window.
+- Settings window, files: New, Open and Save As start a new settings process for the chosen
+  file (the window may take a few seconds to appear: `kscreen-doctor`); this window closes as
+  soon as it is started, so a window that fails to start shows nothing (run
+  `scripts/py main.py --settings --config FILE` in a terminal to see why). Revert all and
+  Discard cannot be undone; Revert all still goes back to the file as the window opened it
+  (not to the last Save).
 - The shell no longer exposes Fabric's D-Bus `Execute` / `Evaluate` methods (its D-Bus client
   is switched off, so `fabric-cli` cannot run code in it).
 - Corner panels: one per corner; only widgets registered for corners (`summary`) can sit in a corner; no "content" length; a corner panel's sizes are fixed px (no percentages). Edge widgets (clock, dock) in corners are deferred. A corner request with a height below `T + 16` is hidden with a warning that names the height.
@@ -440,3 +475,7 @@ that need `gi` or Fabric skip themselves there.
 - The "Panels adjusted" notification is not repeated after an unplug and replug that yields
   identical layout warnings.
 - On a dark wallpaper the border and shadow are faint; raise the shadow alpha or elevation.
+
+## Licence
+
+MIT (see `LICENSE`). Help > About in the settings window shows it.

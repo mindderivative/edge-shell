@@ -46,8 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument(
         "--restore-config",
         action="store_true",
-        help="put back the config as it was before the last settings-window session changed "
-        "it (config.toml.bak; the replaced file is kept as config.toml.before-restore)",
+        help="put back the config as it was at the last File > Save in the settings window, "
+        "or before that window's first change (config.toml.bak; the replaced file is kept as "
+        "config.toml.before-restore)",
     )
     parser.add_argument(
         "--stats",
