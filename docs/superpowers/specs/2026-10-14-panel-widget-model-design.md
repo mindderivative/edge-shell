@@ -112,6 +112,8 @@ The window keeps working on the new model; its layout is redesigned in plans 2-4
 
 ### 3.8 Gate (Phil, HDMI-A-1)
 
+Results (2026-10-14): passed; see the main spec, section 20.
+
 Implemented by `docs/superpowers/plans/2026-10-14-panel-widget-model.md`; recorded in the main
 spec, section 20. A single live gate: the converted examples run on HDMI-A-1 (edge and corner panels, names in logs); the clock's `format`, `font`, `font_size` apply live from the window and from a hand edit (`panel-rebuild`); duplicate name, missing `panel`, `float`, a widget on an unsupported kind and a bad widget value produce the notifications in section 3.2 and keep the previous layout; the window lists widgets by display name, adds a panel with a unique name, shows the Widget section for the clock, switches widget on a panel without leaving stale keys; DP-1 untouched. The checklist is written in the plan.
 
