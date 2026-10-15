@@ -318,14 +318,16 @@ file.
   the title shows the file with a `*` while it has changes since the last save (or since it was
   opened). Close, Exit, New, Open and the window's close button ask **Save / Discard / Cancel**
   when there are such changes: Discard puts the file back as it was last saved (the shell
-  follows; an invalid text it replaces is kept as `config.toml.before-revert`), Cancel stays.
+  follows; if the text it replaces is an invalid hand edit made while the window was open, that
+  text is first kept as `config.toml.before-revert`; the file as it was when the window opened
+  is not copied, it is the file as opened), Cancel stays.
   Undo back to the saved state is not a change. A hand edit made while the window is open
   counts as saved (it was saved in your editor): Discard never writes over it.
 - **Files.** One window per config file. Open and New show the chosen file in its own window
   and close this one (after the question above). New writes a file with no keys (every value is
   a default), adds `.toml` to the name and never replaces an existing file. Save As writes the
   current settings to the chosen file (a file it replaces is kept as `NAME.before-save-as`,
-  `.2`, `.3`, ...), puts this file back as it was last saved, and shows the copy in its own
+  `.2`, `.3`, ..., next to the resolved file when NAME is a symlink), puts this file back as it was last saved, and shows the copy in its own
   window. Close leaves an empty window with New and Open; `main.py --settings` on its file (or
   a right-click on a panel handle) shows the file again. The shell reads only its own config
   (`~/.config/edge-shell/config.toml`, or its `--config` file): a window on another file says
