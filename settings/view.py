@@ -40,11 +40,15 @@ class SettingsView(Gtk.Box):
         session: SettingsSession,
         outputs: list[Output],
         confirm_revert: Callable[[Any, str], bool] | None = None,
+        on_state: Callable[[], None] | None = None,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
         self._ask_revert = confirm_revert or GtkDialogs().confirm_revert
+        # called after every refresh and rebuild (each write, undo, revert or re-read): the
+        # window updates its menu items and title
+        self._on_state = on_state or (lambda: None)
         self.outputs = {o.name: o for o in outputs}
         self.form = config_form(registry_widgets())
         self.rows: list[FieldRow] = []
@@ -131,6 +135,7 @@ class SettingsView(Gtk.Box):
                 Gtk.MessageType.ERROR,
             )
         self.undo_button.set_sensitive(bool(self.session.history))
+        self._on_state()
 
     def _page(self, name: str, title: str, content: Gtk.Widget, sensitive: bool) -> None:
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -220,6 +225,7 @@ class SettingsView(Gtk.Box):
             label.set_text("\n".join(warnings))
             label.set_visible(bool(warnings))
         self.undo_button.set_sensitive(bool(self.session.history))
+        self._on_state()
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
         self.banner.set_message_type(kind)
@@ -358,6 +364,28 @@ class SettingsView(Gtk.Box):
         if self._file_action(self.session.undo):
             self.hide_banner()
             self.rebuild()
+
+    def redo(self) -> None:
+        """Put back what the last Undo took away. A pending value is applied first, like for
+        Undo: it is a new change, so it ends the redo line and Redo then does nothing."""
+        self.flush()
+        if self.refused_outside:
+            return
+        if self._file_action(self.session.redo):
+            self.hide_banner()
+            self.rebuild()
+
+    def save(self) -> bool:
+        """File > Save: pending values are applied first, then the file is the saved point
+        (and config.toml.bak). True when saved; a hand edit or a failed copy is shown."""
+        self.flush()
+        if self.refused_outside:
+            return False
+        if not self._file_action(lambda: self.session.save() or True):
+            return False
+        self.hide_banner()
+        self._on_state()
+        return True
 
     def revert(self) -> None:
         # no flush: a pending value is about to be reverted, and applying it first would

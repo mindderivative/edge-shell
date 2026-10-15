@@ -15,6 +15,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
+from settings.menus import ACCELS
 from shell.config.loader import DEFAULT_PATH
 from shell.outputs import Output, parse_kscreen, read_kscreen_json
 
@@ -73,7 +74,8 @@ class SettingsApp(Gtk.Application):
                 return
             self._watcher = watcher
             self.window = SettingsWindow(session, connected_outputs(), application=self)
-            self.set_accels_for_action("win.undo", ["<Control>z"])
+            for action, accels in ACCELS.items():
+                self.set_accels_for_action(action, accels)
         self.window.present()
 
 

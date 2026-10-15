@@ -599,19 +599,6 @@ def test_undo_after_a_refused_flush_does_nothing_more(make, pending):
     assert path.read_text() == USER and not view.session.history
 
 
-def test_close_stays_open_once_after_a_refused_flush(make, pending):
-    from types import SimpleNamespace
-
-    from settings.window import SettingsWindow
-
-    view, path = make()
-    row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
-    win = SimpleNamespace(view=view, _close_warned=False)
-    assert SettingsWindow._on_delete(win) is True  # stays open once, the warning is on screen
-    assert SettingsWindow._on_delete(win) is False  # closing again closes anyway
-
-
 FONT = ("theme", "font")
 
 
@@ -797,3 +784,14 @@ def test_the_panel_list_buttons_do_not_take_the_focus_on_click(make):
         and (w.get_tooltip_text() in ours or w.get_label() == "Add panel")
     ]
     assert len(buttons) == 4 and not any(b.get_focus_on_click() for b in buttons)
+
+
+def test_the_view_reports_every_change_of_state_including_a_save(make):
+    view, _ = make()
+    states = []
+    view._on_state = lambda: states.append(1)
+    view._on_change(DEPTH, 90)
+    assert states  # a write refreshes
+    states.clear()
+    assert view.save() is True
+    assert states  # the saved point moved

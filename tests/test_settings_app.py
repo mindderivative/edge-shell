@@ -131,24 +131,37 @@ def test_closing_the_window_flushes_and_ctrl_z_undoes(tmp_path, fake_registry):
 
     if not Gtk.init_check()[0]:
         pytest.skip("no display")
+    from settings.fileops import Answer
     from settings.session import SettingsSession
     from settings.view import SettingsView
     from settings.window import TITLE, SettingsWindow
 
     assert TITLE == "Edge Shell settings"
     calls = []
+
+    class Cancel:  # the unsaved-changes question, answered Cancel (no dialog runs)
+        def ask_unsaved(self, _parent, _path):
+            calls.append("asked")
+            return Answer.CANCEL
+
+        def confirm_revert(self, _parent, _text):
+            return False
+
     monkey = pytest.MonkeyPatch()
     monkey.setattr(SettingsView, "flush", lambda self: calls.append("flush"))
     monkey.setattr(SettingsView, "undo", lambda self: calls.append("undo"))
     try:
         cfg = tmp_path / "c.toml"
         cfg.write_text("")
-        win = SettingsWindow(SettingsSession(cfg), [])
+        session = SettingsSession(cfg)
+        session.apply(lambda d: d.set(("theme", "accent"), "#112233"))  # something to undo
+        win = SettingsWindow(session, [], dialogs=Cancel())
         assert win.get_title() == TITLE
-        win.lookup_action("undo").activate(None)
+        win.controller.actions.lookup_action("undo").activate(None)
         assert calls == ["undo"]
-        assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is False
-        assert calls == ["undo", "flush"]
+        # unsaved changes, answered Cancel: the window stays open
+        assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is True
+        assert calls == ["undo", "flush", "asked"]
     finally:
         monkey.undo()
         win.destroy()
@@ -216,6 +229,9 @@ def test_activation_sets_the_undo_accel_watches_the_file_and_presents_once(gtk_a
     app = gtk_app(tmp_path / "sub" / "c.toml")
     app_mod.SettingsApp.do_activate(app)
     assert app.get_accels_for_action("win.undo") == ["<Primary>z"]
+    assert app.get_accels_for_action("win.redo") == ["<Primary><Shift>z", "<Primary>y"]
+    assert app.get_accels_for_action("win.save") == ["<Primary>s"]
+    assert app.get_accels_for_action("win.copy") == []  # the focused widget's own binding
     assert app._watcher is not None
     first = app.window
     seen = []
