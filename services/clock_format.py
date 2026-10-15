@@ -7,7 +7,9 @@ Text in single quotes is shown as written, letters included ('at', 'Uhr'); two s
 ('') are one quote, inside or outside quoted text; a quote that is never closed is an error.
 Every other letter is an error; any other character (digits, spaces, punctuation, `%`, other
 scripts) is shown as it is. The longest token wins: "MMM" is the month name, "MMMM" is MMM
-then an M on its own, which is an error. Literal text never goes through strftime.
+then an M on its own, which is an error. Literal text never goes through strftime, and the
+day and month names are fixed English tables: the output never follows the locale.
+Control characters are an error, and so is a format with nothing visible in it.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from datetime import datetime
 TOKENS = ("HH", "mm", "ss", "H", "h", "a", "ddd", "dd", "MMM", "MM", "yyyy")
 _LONGEST_FIRST = sorted(TOKENS, key=len, reverse=True)
 Part = tuple[bool, str]  # (is a token, the token or the literal text)
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # datetime.weekday() order
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def _quoted(text: str, start: int) -> tuple[str, int]:
@@ -38,8 +42,11 @@ def _quoted(text: str, start: int) -> tuple[str, int]:
 
 
 def parse_clock_format(text: str) -> tuple[Part, ...]:
-    """The format as tokens and literal text; ValueError naming the first unknown letter or
-    an unterminated quote."""
+    """The format as tokens and literal text; ValueError naming the first unknown letter, a
+    control character, an unterminated quote, or a format with nothing visible."""
+    for position, char in enumerate(text, 1):
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            raise ValueError(f"control character {char!r} at position {position}")
     parts: list[Part] = []
 
     def literal(chars: str) -> None:
@@ -71,6 +78,8 @@ def parse_clock_format(text: str) -> tuple[Part, ...]:
             )
         literal(char)
         i += 1
+    if not any(is_token or not value.isspace() for is_token, value in parts):
+        raise ValueError("the format shows nothing visible; add a token or some text")
     return tuple(parts)
 
 
@@ -91,11 +100,11 @@ def _token(token: str, now: datetime) -> str:
         case "dd":
             return f"{now.day:02d}"
         case "ddd":
-            return now.strftime("%a")  # a fixed strftime string, never the user's text
+            return WEEKDAYS[now.weekday()]
         case "MM":
             return f"{now.month:02d}"
         case "MMM":
-            return now.strftime("%b")
+            return MONTHS[now.month - 1]
         case "yyyy":
             return f"{now.year:04d}"
     raise ValueError(f"unknown token {token!r}")

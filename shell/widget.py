@@ -24,7 +24,10 @@ class Widget:
     """The content of one panel. The panel window (shell.edge_panel.EdgePanel, or CornerPanel
     for a corner panel) gets a new instance, calls build(props) once for its content and
     destroy() once when the window is destroyed (a config reload rebuilds panels, a hot-plug
-    closes a monitor): stop timers and watches there."""
+    closes a monitor): stop timers and watches there. `theme_fonts` is the panel's theme font
+    list, set before build(): the fallback for a widget that sets its own font."""
+
+    theme_fonts: tuple[str, ...] = ()
 
     def build(self, props: WidgetProps) -> Any:
         """The content: a Gtk.Widget, centred in the panel's body."""

@@ -786,3 +786,34 @@ def test_a_monitor_that_is_plugged_in_again_notifies_again(
     app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "edge"}})  # plugged in again
     app.sync_monitors()
     assert notes == [(title, "HDMI-A-1: the same problem")] * 2
+
+
+def test_a_panel_that_fails_again_after_an_in_place_apply_failure_is_notified_again(
+    renv, monkeypatch
+):
+    app, store, _, _, make_config = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    failure = "HDMI-A-1: panel 'dock' (dock) could not be built and is not shown: boom"
+    monkeypatch.setattr(FakeShell, "build_failures", [failure])
+    app._report_layout("HDMI-A-1", app.shells["HDMI-A-1"])
+    FakeShell.fail_apply = {"HDMI-A-1"}
+    store.pending = make_config(
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
+    )
+    app.reload()  # the apply fails, the shell is dropped and rebuilt with the same failure
+    assert notes == [failure, failure]
+
+
+def test_a_panel_that_fails_again_after_a_relayout_rebuild_is_notified_again(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append(msg))
+    failure = "HDMI-A-1: panel 'dock' (dock) could not be built and is not shown: boom"
+    monkeypatch.setattr(FakeShell, "build_failures", [failure])
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    shell.on_error(shell)
+    assert notes.count(failure) == 2

@@ -99,3 +99,38 @@ def test_literal_text_is_kept_together():
         (False, ":"),
         (True, "mm"),
     )
+
+
+class _NoStrftime(datetime):
+    def strftime(self, fmt):  # the names must not come from the process locale
+        raise AssertionError(f"strftime({fmt!r}) called")
+
+
+def test_day_and_month_names_are_fixed_english_whatever_the_locale():
+    # strftime's %a and %b follow LC_TIME once Gtk has called setlocale: no token uses it
+    assert fmt("ddd MMM", _NoStrftime(2026, 10, 14)) == "Wed Oct"
+    names = [fmt("ddd", datetime(2026, 10, 12 + i)) for i in range(7)]
+    assert names == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    months = [fmt("MMM", datetime(2026, m, 1)) for m in range(1, 13)]
+    assert months == "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
+
+def test_the_year_is_zero_padded_to_four_digits():
+    assert fmt("yyyy", datetime(5, 1, 1)) == "0005"
+    assert fmt("yyyy", datetime(2026, 1, 1)) == "2026"
+
+
+@pytest.mark.parametrize("text", ["HH\nmm", "HH\tmm", "'a\x00b' HH", "HH\x7f", "\x1b[0m HH"])
+def test_control_characters_are_an_error(text):
+    with pytest.raises(ValueError, match="control character"):
+        parse_clock_format(text)
+
+
+@pytest.mark.parametrize("text", ["", " ", "   ", "' '", "' ' ' '", "\u00a0"])
+def test_a_format_with_nothing_visible_is_an_error(text):
+    with pytest.raises(ValueError, match="nothing visible"):
+        parse_clock_format(text)
+
+
+def test_a_format_needs_one_visible_character_not_a_token():
+    assert fmt("-") == "-" and fmt(" HH ") == " 09 " and fmt("''") == "'"

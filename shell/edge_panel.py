@@ -179,6 +179,7 @@ class EdgePanel(WaylandWindow):
         """The content: the widget's build(props); an empty box without a widget."""
         if self._widget is None:
             return Box()
+        self._widget.theme_fonts = tuple(self._theme.font)
         return self._widget.build(self._props)
 
     def _on_destroy(self, *_args) -> None:

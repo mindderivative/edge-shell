@@ -60,7 +60,7 @@ def test_the_panel_builds_its_widget_with_the_props():
         text: str = "x"
 
     w, props = Recorder(), Own(text="y")  # not NO_PROPS: dropping the props must show
-    panel = SimpleNamespace(_widget=w, _props=props)
+    panel = SimpleNamespace(_widget=w, _props=props, _theme=SimpleNamespace(font=["f"]))
     assert ep.EdgePanel.build_content(panel) == "content" and w.built == [props]
 
 

@@ -94,6 +94,13 @@ def test_font_names_with_css_metacharacters_rejected(make_config, bad):
     assert "font name" in str(exc.value)
 
 
+@pytest.mark.parametrize("bad", ["Hack\nNerd", "a\tb", "a\x00b", "a\x7fb", "a\x1fb"])
+def test_font_names_with_control_characters_rejected(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"font": ["Hack", bad]})
+    assert "control character" in str(exc.value)
+
+
 def test_font_override_with_bad_name_fails_at_load(make_config):
     with pytest.raises(ValidationError, match="monitors.HDMI-A-1.theme"):
         make_config(monitors={"HDMI-A-1": {"theme": {"font": ["a;b"]}}})

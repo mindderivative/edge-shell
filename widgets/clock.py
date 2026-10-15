@@ -23,6 +23,7 @@ from shell.theme import label_font_css
 from shell.widget import Widget, WidgetProps
 
 REFRESH_MS = 1000  # the minute rolls over within a second of the real change
+SECONDS_REFRESH_MS = 250  # a format with `ss`: the second changes within a quarter second
 # Above the app's stylesheet (Fabric adds it at USER priority): the label's own font wins.
 FONT_PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_USER + 1
 
@@ -70,12 +71,14 @@ class ClockWidget(Widget):
     def build(self, props: ClockProps):
         self._parts = parse_clock_format(props.format)
         self._time = Label(name="clock-time", label=self._text(datetime.now()))
-        css = label_font_css(props.font, props.font_size)
+        css = label_font_css(props.font, props.font_size, self.theme_fonts)
         if css:
             provider = Gtk.CssProvider()
             provider.load_from_data(css.encode())
             self._time.get_style_context().add_provider(provider, FONT_PRIORITY)
-        self._repeater_id = invoke_repeater(REFRESH_MS, self._refresh)
+        shows_seconds = (True, "ss") in self._parts
+        interval = SECONDS_REFRESH_MS if shows_seconds else REFRESH_MS
+        self._repeater_id = invoke_repeater(interval, self._refresh)
         return Box(name="clock", h_align="center", v_align="center", children=self._time)
 
     def _text(self, now: datetime) -> str:

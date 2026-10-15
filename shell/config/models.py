@@ -26,6 +26,7 @@ CORNERS: tuple[str, ...] = get_args(Corner)  # the settings window's choices
 
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")  # and a control character fails the CSS load
 COLOR_FIELDS = (
     "frame",
     "text",
@@ -48,6 +49,8 @@ class _Strict(BaseModel):
 def check_font_name(name: str) -> str:
     """A font family name: it goes unescaped into generated CSS (the theme's font list, a
     widget's font property), so CSS metacharacters are refused."""
+    if _CONTROL.search(name):
+        raise ValueError(f"font name {name!r} must not contain a control character")
     if _FONT_FORBIDDEN.search(name):
         raise ValueError(
             f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"

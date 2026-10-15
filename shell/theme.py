@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from shell.config.models import COLOR_FIELDS, Theme
 
@@ -39,13 +40,14 @@ def _font_stack(fonts: list[str]) -> str:
     return ", ".join(f if f in _GENERIC_FONTS else f'"{f}"' for f in fonts)
 
 
-def label_font_css(font: str | None, size: int | None) -> str:
+def label_font_css(font: str | None, size: int | None, fallback: Sequence[str] = ()) -> str:
     """CSS for one label's own font (a widget's font and font_size properties; None: the
     theme's), for a provider on that label only; "" when both are None. The font name was
-    checked by shell.config.models.check_font_name."""
+    checked by shell.config.models.check_font_name. `fallback` (the theme's fonts) follows the
+    widget's font, so a family that is not installed falls back to the theme's fonts."""
     rules = []
     if font is not None:
-        rules.append(f"font-family: {_font_stack([font])};")
+        rules.append(f"font-family: {_font_stack([font, *fallback])};")
     if size is not None:
         rules.append(f"font-size: {size}pt;")
     return f"label {{ {' '.join(rules)} }}" if rules else ""
