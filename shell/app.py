@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import signal
@@ -98,12 +99,22 @@ class EdgeShellApp:
         close, open_ = plan.reconcile(active, desired)
         for name in close:
             log.info("closing Edge Shell on %s", name)
-            self.shells.pop(name).close()
+            self._close_shell(name)
         for name in open_:
             self._open_shell(name, desired[name])
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
+
+    def _close_shell(self, name: str) -> None:
+        self._forget_reports(name)
+        self.shells.pop(name).close()
+
+    def _forget_reports(self, name: str) -> None:
+        """A closed shell's notified lists are stale: the monitor, plugged in again with the
+        same failing panel, notifies again."""
+        self._layout_reported.pop(name, None)
+        self._failures_reported.pop(name, None)
 
     def _open_shell(self, name: str, monitor) -> None:
         log.info("opening Edge Shell on %s", name)
@@ -189,7 +200,7 @@ class EdgeShellApp:
         log.info("config reloaded: %d change(s): %s", len(changes), kinds)
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
         for name in rebuild & set(self.shells):
-            self.shells.pop(name).close()
+            self._close_shell(name)
         # Shells opened here are built from the new config already: never apply onto them.
         _, opened = self.sync_monitors()
         grouped: dict[str, list] = defaultdict(list)
@@ -209,6 +220,7 @@ class EdgeShellApp:
                 self._report_error(f"{name}: could not apply the config in place; rebuilt it")
                 failed = True
                 shell = self.shells.pop(name)
+                self._forget_reports(name)
                 try:
                     shell.close()
                 except Exception:
@@ -263,6 +275,7 @@ class EdgeShellApp:
         log.error("re-layout of %s failed; rebuilding its panels", name)
         self._notify("Panels rebuilt", f"{name}: laying out the panels failed; rebuilt them")
         self.shells.pop(name)
+        self._forget_reports(name)
         try:
             shell.close()
         except Exception:
@@ -321,7 +334,10 @@ class EdgeShellApp:
 
     def _notify(self, title: str, message: str) -> None:
         try:
-            subprocess.Popen(["notify-send", "-a", "Edge Shell", "--", title, message[:400]])
+            # notify-send bodies are markup (an `&` or `<b>` in a panel name must show as typed).
+            # Cut first, then escape: the cut can never split an entity such as `&amp;`.
+            body = html.escape(message[:400], quote=False)
+            subprocess.Popen(["notify-send", "-a", "Edge Shell", "--", title, body])
         except OSError:
             pass  # no notify-send; the log line is enough
 

@@ -1352,3 +1352,65 @@ def test_a_removed_failed_panel_is_forgotten_so_a_new_entry_there_is_tried(
     assert shell.panels == [] and shell.build_failures == []
     shell.apply(make_config(monitors=edge(entry)), [])  # the same entry added again
     assert len(calls) == 2
+
+
+def test_a_failed_panel_whose_kind_changes_is_tried_again(
+    build, corner_registry, make_config, monkeypatch
+):
+    from shell.panel_spec import CornerDefaults
+
+    corner_registry.register_widget(
+        "both",
+        title="Both",
+        edge=PanelDefaults(edge="bottom", length=300, depth=50, label="both"),
+        corner=CornerDefaults(corner="bottom-left", width=300, height=390, label="both"),
+    )(type("Both", (Widget,), {}))
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    shell, _, _ = build(edge({"panel": "edge", "name": "A", "widget": "both"}))
+    shell.apply(make_config(monitors=edge({"panel": "edge", "name": "A", "widget": "both"})), [])
+    assert len(calls) == 1  # the same entry: not tried again
+    shell.apply(make_config(monitors=edge({"panel": "corner", "name": "A", "widget": "both"})), [])
+    assert len(calls) == 2  # only the kind changed (name, widget and properties are the same)
+
+
+def test_a_failed_name_that_is_used_again_after_a_rename_is_tried_again(
+    build, make_config, monkeypatch
+):
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    real = mon_mod.widget_class
+
+    def entry(name):
+        return edge({"panel": "edge", "name": name, "widget": "clock"})
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    shell, _, _ = build(entry("Clock"))
+    assert len(calls) == 1
+    monkeypatch.setattr(mon_mod, "widget_class", real)
+    shell.apply(make_config(monitors=entry("Clock 2")), [])  # renamed: builds
+    assert shell.panels[0] is not None and shell.build_failures == []
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    shell.apply(make_config(monitors=entry("Clock")), [])  # renamed back: not skipped as failed
+    assert len(calls) == 2 and shell.panels == [None]
+    assert "panel 'Clock'" in shell.build_failures[0] and len(shell.build_failures) == 1
+
+
+def test_a_build_failure_without_a_message_still_names_its_cause(build, monkeypatch):
+    def explode(*a, **k):
+        raise ValueError
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    shell, _, _ = build(edge({"panel": "edge", "name": "Dock", "widget": "dock"}))
+    assert shell.build_failures == [
+        "HDMI-A-1: panel 'Dock' (dock) could not be built and is not shown: ValueError"
+    ]

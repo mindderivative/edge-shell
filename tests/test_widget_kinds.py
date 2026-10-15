@@ -88,12 +88,39 @@ def test_the_destroy_handler_is_connected_before_the_content_is_built():
     )
 
 
-def test_a_build_that_fails_destroys_the_half_built_window():
-    # EdgePanel.__init__ creates the window before the content; a widget that raises in
-    # build() must not leave that window behind (MonitorShell then skips the panel)
-    import inspect
+@pytest.mark.parametrize("returns", [None, "a string", "raises"])
+def test_a_widget_that_misbehaves_in_build_destroys_the_half_built_window(
+    make_config, monkeypatch, returns
+):
+    """EdgePanel.__init__ creates the window before the content: whatever goes wrong after it
+    (build() raising, returning None or a non-widget) destroys the window once, and with it
+    the widget and any timer its build() started; the error reaches MonitorShell."""
+    destroyed = []
 
-    src = inspect.getsource(ep.EdgePanel.__init__)
-    build = src.index("inner = self.build_content()")
-    assert src.rindex("try:", 0, build) > src.rindex("super().__init__(", 0, build)
-    assert src.index("self.destroy()", build) < src.index("raise", build)
+    class Bad(Widget):
+        def __init__(self):
+            self.stopped = 0
+
+        def build(self, props):
+            if returns == "raises":
+                raise RuntimeError("widget broke")
+            return returns
+
+        def destroy(self):
+            self.stopped += 1
+
+    def destroy(self):  # what Gtk does: the "destroy" signal reaches _on_destroy
+        destroyed.append(self)
+        ep.EdgePanel._on_destroy(self)
+
+    monitor = SimpleNamespace(get_geometry=lambda: SimpleNamespace(width=1920, height=1080))
+    monkeypatch.setattr(ep.WaylandWindow, "__init__", lambda _self, **_kw: None)
+    monkeypatch.setattr(ep.GtkLayerShell, "set_exclusive_zone", lambda *_a: None)
+    monkeypatch.setattr(ep.EdgePanel, "connect", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ep.EdgePanel, "destroy", destroy)
+    monkeypatch.setattr(ep, "monitor_index", lambda _m: 0)
+    spec = PanelGeometry("dock", "bottom", 680, 560, 64, "extended", "dock")
+    widget = Bad()
+    with pytest.raises((RuntimeError, AttributeError)):
+        ep.EdgePanel(spec, make_config().theme, monitor, 0, "s", widget=widget, props=NO_PROPS)
+    assert len(destroyed) == 1 and widget.stopped == 1

@@ -142,34 +142,37 @@ class EdgePanel(WaylandWindow):
         # that _place_content sizes and positions (a Box packs children at the start).
         try:
             inner = self.build_content()
+            inner.set_hexpand(True)
+            inner.set_vexpand(True)
+            inner.set_halign(Gtk.Align.CENTER)
+            inner.set_valign(Gtk.Align.CENTER)
+            self._inner = inner
+            self._content = Box(name="panel-content", children=[clip_container(inner)])
+            self._handle = self._build_handle()
+            self._size_handle()
+            # Transparent base: the body is painted by the shape canvas underneath this window.
+            self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
+
+            # Allocated once at full size; animation never resizes the layer surface.
+            self.set_size_request(*size)
+            self._place_content()
+
+            self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+            self.connect("enter-notify-event", self._on_enter)
+            self.connect("leave-notify-event", self._on_leave)
+
+            self._tween = Tween(self, self._apply_depth, theme.duration_ms)
+            self._fade = Tween(self, self._content.set_opacity, 170, delay_ms=110)
+            self.show_all()
+            self._tween.jump_to(spec.depth if self._extended else 0)
+            self._fade.jump_to(1.0 if self._extended else 0.0)
+            self._sync_handle()
         except Exception:
-            self.destroy()  # never leave a half-built window behind (its widget stops too)
+            # Anything after the window exists: a widget that raises in build() or returns a
+            # non-widget, a failed Tween. Never leave a half-built window behind (its widget
+            # and its timers stop with it).
+            self.destroy()
             raise
-        inner.set_hexpand(True)
-        inner.set_vexpand(True)
-        inner.set_halign(Gtk.Align.CENTER)
-        inner.set_valign(Gtk.Align.CENTER)
-        self._inner = inner
-        self._content = Box(name="panel-content", children=[clip_container(inner)])
-        self._handle = self._build_handle()
-        self._size_handle()
-        # Transparent base: the body is painted by the shape canvas underneath this window.
-        self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
-
-        # Allocated once at full size; animation never resizes the layer surface.
-        self.set_size_request(*size)
-        self._place_content()
-
-        self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        self.connect("enter-notify-event", self._on_enter)
-        self.connect("leave-notify-event", self._on_leave)
-
-        self._tween = Tween(self, self._apply_depth, theme.duration_ms)
-        self._fade = Tween(self, self._content.set_opacity, 170, delay_ms=110)
-        self.show_all()
-        self._tween.jump_to(spec.depth if self._extended else 0)
-        self._fade.jump_to(1.0 if self._extended else 0.0)
-        self._sync_handle()
 
     # ---- content ---------------------------------------------------------------
     def build_content(self) -> Gtk.Widget:

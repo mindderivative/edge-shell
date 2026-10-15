@@ -733,3 +733,56 @@ def test_panels_that_could_not_be_built_are_notified_by_name_once(renv, monkeypa
         shell.build_failures = failures
         app._report_layout("HDMI-A-1", shell)
     assert notes == [("Panel not shown", failure), ("Panel not shown", failure)]
+
+
+def test_several_panels_that_could_not_be_built_are_all_in_the_notification(renv, monkeypatch):
+    app, _, _, _, _ = renv
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
+    )
+    shell = app.shells["HDMI-A-1"]
+    shell.build_failures = ["HDMI-A-1: panel 'A' failed", "HDMI-A-1: panel 'B' failed"]
+    app._report_layout("HDMI-A-1", shell)
+    assert notes == [("Panel not shown", "HDMI-A-1: panel 'A' failed\nHDMI-A-1: panel 'B' failed")]
+
+
+def test_the_notification_body_is_shown_literally(env, monkeypatch):
+    app, _ = env
+    calls = []
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda argv: calls.append(argv))
+    app._notify("t", "panel 'A & B' <b>x</b>")
+    assert calls[0][-1] == "panel 'A &amp; B' &lt;b&gt;x&lt;/b&gt;"
+    assert calls[0][-3:-1] == ["--", "t"]
+
+
+def test_the_notification_is_cut_before_it_is_escaped(env, monkeypatch):
+    app, _ = env
+    calls = []
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda argv: calls.append(argv))
+    app._notify("t", "a" * 399 + "&" + "zz")  # the cut falls right after the "&"
+    assert calls[0][-1] == "a" * 399 + "&amp;"  # never a split "&am"
+
+
+@pytest.mark.parametrize(
+    ("attr", "title"),
+    [("build_failures", "Panel not shown"), ("layout_warnings", "Panels adjusted")],
+)
+def test_a_monitor_that_is_plugged_in_again_notifies_again(
+    env, make_config, monkeypatch, attr, title
+):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
+    )
+    monkeypatch.setattr(FakeShell, attr, ["HDMI-A-1: the same problem"])
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    app.sync_monitors()
+    assert len(notes) == 1  # unchanged: once
+    app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "plasma"}})  # unplugged
+    app.sync_monitors()
+    app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "edge"}})  # plugged in again
+    app.sync_monitors()
+    assert notes == [(title, "HDMI-A-1: the same problem")] * 2

@@ -399,7 +399,7 @@ class MonitorShell:
             )
             message = (
                 f"{self.name}: panel {req.name!r} ({geo.widget}) could not be built and is not "
-                f"shown: {exc}"
+                f"shown: {str(exc) or type(exc).__name__}"
             )
             self.build_failures.append(message)
             self._failed[index] = (_entry_key(req), message)
