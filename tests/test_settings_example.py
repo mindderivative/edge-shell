@@ -27,3 +27,21 @@ def test_the_settings_example_is_valid_and_keeps_its_comments():
     doc = UserDocument(text)
     doc.set(("theme", "accent"), "#d3a68f")
     assert "# mint" in doc.text and 'accent = "#d3a68f"' in doc.text
+
+
+def test_the_real_widgets_make_a_form_and_the_clock_has_its_widget_rows():
+    from settings.form import config_form, registry_widgets
+
+    form = config_form(registry_widgets())
+    widget = form.edge_panel.field("widget")
+    assert widget.labels == ("Clock", "Dock", "Summary", "System bar")
+    clock = form.widget_props("clock")
+    assert [(f.key, f.kind) for f in clock.fields] == [
+        ("format", "text"),
+        ("font", "text"),
+        ("font_size", "int"),
+    ]
+    assert (clock.field("font_size").minimum, clock.field("font_size").maximum) == (6, 96)
+    assert clock.field("format").hint.startswith("HH mm ss")
+    assert clock.field("font_size").hint.startswith("pt")  # the size is in points
+    assert all(form.widget_props(w) is None for w in ("dock", "summary", "system_bar"))

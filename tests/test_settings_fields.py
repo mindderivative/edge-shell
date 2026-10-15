@@ -397,6 +397,35 @@ def test_a_text_row_shows_an_unset_value_as_empty():
     assert row.editor.widget.get_text() == "" and not row.editor.dirty() and changes == []
 
 
+def test_a_disabled_choice_is_greyed_out_and_never_sent():
+    spec = FieldSpec(
+        "panel",
+        "Panel type",
+        "enum",
+        choices=("edge", "corner", "float"),
+        labels=("Edge", "Corner", "Float (coming soon)"),
+        disabled=("float",),
+        required=True,
+    )
+    row, changes, _ = row_for(spec, "edge")
+    combo = row.editor.widget
+    model, (cell,) = combo.get_model(), combo.get_cells()
+    sensitive = []
+    for i in range(3):
+        row.editor._grey_out(combo, cell, model, model.get_iter(i))
+        sensitive.append(cell.get_property("sensitive"))
+    assert sensitive == [True, True, False]
+    combo.set_active_id("float")  # chosen anyway (the keyboard): not sent, edge comes back
+    assert changes == [] and combo.get_active_id() == "edge"
+    combo.set_active_id("corner")
+    assert changes == [(("theme", "x"), "corner")]
+
+
+def test_a_required_key_has_no_reset_button():
+    row, _, _ = row_for(FORM.edge_panel.field("name"), "Dock", is_set=True)
+    assert not row.reset.get_sensitive()
+
+
 def test_a_text_row_takes_no_more_characters_than_the_schema_allows():
     name = FORM.edge_panel.field("name")
     assert name.max_length == 40

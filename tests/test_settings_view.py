@@ -2,8 +2,10 @@
 plain Gtk.Box: no window is created."""
 
 import os
+from typing import Annotated
 
 import pytest
+from pydantic import Field
 
 gi = pytest.importorskip("gi")
 gi.require_version("Gtk", "3.0")
@@ -19,6 +21,8 @@ from settings.panels import PanelEditor  # noqa: E402
 from settings.session import SettingsSession  # noqa: E402
 from settings.view import SettingsView  # noqa: E402
 from shell.outputs import Output  # noqa: E402
+from shell.panel_spec import CornerDefaults, PanelDefaults  # noqa: E402
+from shell.widget import Widget, WidgetProps  # noqa: E402
 
 USER = """\
 # gate config
@@ -221,7 +225,7 @@ def test_a_dock_turned_into_a_corner_widget_is_one_edit(make, corner_registry):
     assert row(view, (*P0, "corner")).editor.widget.get_active_id() == "bottom-left"
     assert not any(r.path == (*P0, "align") for r in view.rows)
     expander = panel_editor(view).expanders[0]
-    assert expander.get_label() == "1. box: bottom-left, from bottom, 300x390"
+    assert expander.get_label() == "1. dock: bottom-left, from bottom, 300x390"  # its name stays
     assert expander.get_expanded()
 
 
@@ -599,6 +603,85 @@ def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
     old.editor.commit()  # the focus-out of the retired entry
     old.flush()
     assert "Typed Font" not in path.read_text() and not view.session.history
+
+
+TILE_USER = """\
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Tile"
+widget = "tile"
+size = 12
+"""
+
+
+class TileProps(WidgetProps):
+    size: Annotated[int, Field(ge=6, le=96)] = 10
+
+
+@pytest.fixture
+def tile_view(tmp_path, corner_registry):
+    corner_registry.register_widget(
+        "tile",
+        title="Tile",
+        props=TileProps,
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="tile"),
+        corner=CornerDefaults(corner="top-right", width=240, height=200, label="tile"),
+    )(type("Tile", (Widget,), {}))
+    path = tmp_path / "config.toml"
+    path.write_text(TILE_USER)
+    return SettingsView(SettingsSession(path), [HDMI]), path
+
+
+def test_renaming_a_panel_retitles_it_and_keeps_it_open(make):
+    view, path = make()
+    view._on_change((*P0, "name"), "Bottom dock")
+    expander = panel_editor(view).expanders[0]
+    assert expander.get_label() == "1. Bottom dock: bottom, center" and expander.get_expanded()
+    assert 'name = "Bottom dock"' in path.read_text()
+
+
+def test_a_name_used_twice_is_not_written(make):
+    view, path = make()
+    panel_editor(view).add("clock")  # a new panel named after the widget's title: "Clock"
+    assert 'name = "Clock"' in path.read_text()
+    name = ("monitors", "HDMI-A-1", "panels", 1, "name")
+    view._on_change(name, "dock")
+    assert "names must be unique: 'dock' is used by panels[0] and panels[1]" in (
+        row(view, name).error.get_text()
+    )
+    assert path.read_text().count('name = "dock"') == 1
+
+
+def test_a_widget_property_is_a_row_and_a_key_of_the_entry(tile_view):
+    view, path = tile_view
+    size = (*P0, "size")
+    assert row(view, size).editor.widget.get_value() == 12
+    view._on_change(size, 30)
+    assert "size = 30" in path.read_text()
+    view._on_change(size, 2)  # below the model's bound: refused under the row
+    assert "greater than or equal to 6" in row(view, size).error.get_text()
+    assert "size = 30" in path.read_text()
+
+
+def test_switching_the_widget_drops_its_property_keys_in_one_write(tile_view):
+    view, path = tile_view
+    view._on_change((*P0, "widget"), "dock")
+    text = path.read_text()
+    assert 'widget = "dock"' in text and "size" not in text and 'name = "Tile"' in text
+    assert len(view.session.history) == 1
+    assert not any(r.path == (*P0, "size") for r in view.rows)  # the Widget rows went too
+
+
+def test_the_panel_type_of_a_two_kind_widget_is_switched_in_one_write(tile_view):
+    view, path = tile_view
+    view._on_change((*P0, "panel"), "corner")
+    assert 'panel = "corner"' in path.read_text() and len(view.session.history) == 1
+    assert panel_editor(view).expanders[0].get_label() == "1. Tile: top-right, from top, 240x200"
+    view._on_change((*P0, "panel"), "float")  # listed, greyed out; refused if it gets through
+    assert "float panels are not implemented yet" in row(view, (*P0, "panel")).error.get_text()
 
 
 def test_the_widget_list_shows_the_display_names(tmp_path, corner_registry):

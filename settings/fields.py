@@ -139,19 +139,40 @@ class BoolEditor(_Editor):
 
 
 class ChoiceEditor(_Editor):
-    def __init__(self, choices: tuple[str, ...], emit: Emit, labels: tuple[str, ...] = ()):
+    """A combo box. `disabled` choices are listed greyed out and are never sent (float panels:
+    "coming soon"); if one gets chosen anyway (the keyboard), the shown value comes back."""
+
+    def __init__(
+        self,
+        choices: tuple[str, ...],
+        emit: Emit,
+        labels: tuple[str, ...] = (),
+        disabled: tuple[str, ...] = (),
+    ):
         self.widget = Gtk.ComboBoxText()
+        self.disabled = disabled
+        self._shown: str | None = None
         for choice, label in zip(choices, labels or choices, strict=True):
             self.widget.append(choice, label)
+        if disabled:
+            (cell,) = self.widget.get_cells()
+            self.widget.set_cell_data_func(cell, self._grey_out)
         wheel_scrolls_the_page(self.widget)
         self.widget.connect("changed", self._on_changed, emit)
 
-    @staticmethod
-    def _on_changed(combo: Gtk.ComboBoxText, emit: Emit) -> None:
-        if combo.get_active_id() is not None:
-            emit(combo.get_active_id())
+    def _grey_out(self, _layout, cell, model, it, _data=None) -> None:
+        cell.set_property("sensitive", model[it][1] not in self.disabled)  # column 1: the id
+
+    def _on_changed(self, combo: Gtk.ComboBoxText, emit: Emit) -> None:
+        active = combo.get_active_id()
+        if active in self.disabled:
+            self.set(self._shown)
+            return
+        if active is not None:
+            emit(active)
 
     def set(self, value: str) -> None:
+        self._shown = value
         if not self.widget.set_active_id(value):
             self.widget.set_active(-1)  # not a choice: show none, never the previous one
 
@@ -290,7 +311,7 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
     if spec.kind == "bool":
         return BoolEditor(emit)
     if spec.kind in ("enum", "widget"):
-        return ChoiceEditor(spec.choices, emit, spec.labels)
+        return ChoiceEditor(spec.choices, emit, spec.labels, spec.disabled)
     if spec.kind == "fonts":
         return FontsEditor(emit)
     if spec.kind == "text":
@@ -369,7 +390,7 @@ class FieldRow(Gtk.Box):
     def _show_note(self, value: FieldValue) -> None:
         note = value.source if not self.spec.hint else f"{self.spec.hint} · {value.source}"
         self.source.set_text(note)
-        self.reset.set_sensitive(value.is_set and self.spec.kind != "widget")
+        self.reset.set_sensitive(value.is_set and not self.spec.required)  # name, widget, panel
 
     def show_error(self, message: str | None) -> None:
         self.error.set_text(message or "")

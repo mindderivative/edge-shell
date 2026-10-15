@@ -27,9 +27,10 @@ from shell.outputs import Output
 from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
-# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind;
-# corner: the edge choices): a change rebuilds the page and keeps that panel open
-TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")
+# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
+# and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
+# the page and keeps that panel open
+TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "height")
 
 
 class SettingsView(Gtk.Box):
