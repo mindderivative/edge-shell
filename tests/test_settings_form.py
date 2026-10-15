@@ -1,6 +1,9 @@
 """settings.form: the form description generated from the JSON schema (pure)."""
 
+from typing import Annotated, Literal
+
 import pytest
+from pydantic import Field, create_model
 
 from settings import form as form_module
 from settings.form import (
@@ -8,10 +11,12 @@ from settings.form import (
     HINTS,
     LABELS,
     MODE_HINTS,
+    WidgetChoice,
     config_form,
     format_fonts,
     join_length,
     parse_fonts,
+    props_section,
     rgba_to_hex,
     section_for,
     split_length,
@@ -26,8 +31,13 @@ from shell.config.models import (
     Config,
     PanelConfig,
 )
+from shell.widget import WidgetProps
 
-WIDGETS = ("clock", "dock", "system_bar")
+WIDGETS = (
+    WidgetChoice("clock", "Clock"),
+    WidgetChoice("dock", "Dock"),
+    WidgetChoice("system_bar", "System bar"),
+)
 
 
 @pytest.fixture
@@ -81,8 +91,16 @@ def test_monitor_section_is_the_shell_mode_only(form):
 
 def test_panel_fields(form):
     p = form.panel_for("edge")
-    assert p is form.edge_panel and not {"corner", "width", "height"} & {f.key for f in p.fields}
-    assert p.field("widget").kind == "widget" and p.field("widget").choices == WIDGETS
+    keys = [f.key for f in p.fields]
+    assert keys[:2] == ["name", "widget"] and "panel" not in keys  # one kind: no kind row
+    assert not {"corner", "width", "height"} & set(keys)
+    name = p.field("name")
+    assert (name.kind, name.required, name.label) == ("text", True, "Name")
+    widget = p.field("widget")
+    assert widget.kind == "widget" and widget.required
+    assert widget.choices == ("clock", "dock", "system_bar")
+    assert widget.labels == ("Clock", "Dock", "System bar")
+    assert not p.field("edge").required
     assert p.field("edge").choices == ("top", "bottom", "left", "right")
     assert p.field("align").choices == ("start", "center", "end")
     assert (p.field("offset").minimum, p.field("offset").maximum) == (-20000, 20000)
@@ -102,7 +120,15 @@ def test_panel_fields(form):
 def test_corner_panel_fields(form):
     """A corner widget's entry (spec 19): SHARED_KEYS plus CORNER_ONLY_KEYS."""
     p = form.panel_for("corner")
-    assert [f.key for f in p.fields] == ["widget", "corner", "edge", "width", "height", "state"]
+    assert [f.key for f in p.fields] == [
+        "name",
+        "widget",
+        "corner",
+        "edge",
+        "width",
+        "height",
+        "state",
+    ]
     assert p.field("corner").choices == CORNERS
     width = p.field("width")
     assert (width.kind, width.minimum, width.maximum) == ("int", 60, 4000)
@@ -113,9 +139,8 @@ def test_corner_panel_fields(form):
 def test_the_panel_sections_split_the_panel_keys_by_kind(form):
     edge = {f.key for f in form.edge_panel.fields} | {s.key for s in form.edge_panel.sections}
     corner = {f.key for f in form.corner_panel.fields} | {s.key for s in form.corner_panel.sections}
-    no_rows = {"panel", "name", "widget_props"}  # not shown as rows (yet)
-    assert edge & corner == set(SHARED_KEYS) - no_rows
-    assert edge | corner == set(PanelConfig.model_fields) - no_rows
+    assert edge & corner == set(SHARED_KEYS)
+    assert edge | corner == set(PanelConfig.model_fields) - {"widget_props"}
     assert edge - corner == set(EDGE_ONLY_KEYS) and corner - edge == set(CORNER_ONLY_KEYS)
 
 
@@ -130,11 +155,18 @@ def test_the_edge_of_a_corner_panel_offers_only_its_corners_edges(form, corner, 
         form.panel_for("middle")
 
 
-def test_corner_widgets_are_listed_after_edge_widgets_and_labelled():
-    form = config_form(("bar", "box", "clock"), corner_widgets=("box",))
+def test_widgets_are_listed_by_their_display_name():
+    form = config_form(
+        (
+            WidgetChoice("system_bar", "System bar"),
+            WidgetChoice("summary", "Summary", ("corner",)),
+            WidgetChoice("dock", "Dock"),
+            WidgetChoice("x"),  # no title: its id
+        )
+    )
     widget = form.edge_panel.field("widget")
-    assert widget.choices == ("bar", "clock", "box")
-    assert widget.labels == ("bar", "clock", "box (corner panel)")
+    assert widget.choices == ("dock", "summary", "system_bar", "x")
+    assert widget.labels == ("Dock", "Summary", "System bar", "x")
     assert form.corner_panel.field("widget").choices == widget.choices
 
 
@@ -173,7 +205,17 @@ def test_a_new_corner_key_does_not_break_the_form(monkeypatch):
         form_module, "EDGE_ONLY_KEYS", tuple(k for k in EDGE_ONLY_KEYS if k != "order")
     )
     rows = [f.key for f in config_form(WIDGETS).corner_panel.fields]
-    assert rows == ["widget", "corner", "edge", "width", "height", "state", "order"]
+    assert rows == [
+        "name",
+        "widget",
+        "panel",
+        "corner",
+        "edge",
+        "width",
+        "height",
+        "state",
+        "order",
+    ]
 
 
 def test_every_hint_and_label_names_a_schema_key():
@@ -263,3 +305,93 @@ def test_fonts_round_trip():
     ]
     assert format_fonts(["A", "b c"]) == "A, b c"
     assert parse_fonts("  ") == []
+
+
+# ---- panel type and widget properties (panel/widget spec 3.7) -------------------------
+
+
+class TileProps(WidgetProps):
+    text: str = Field("hi", description="what it says")
+    size: Annotated[int, Field(ge=6, le=96)] | None = None
+    mode: Literal["a", "b"] = "a"
+    on: bool = False
+
+
+TILE = WidgetChoice("tile", "Tile", ("edge", "corner"), TileProps)
+
+
+def test_a_widget_with_properties_gets_a_widget_section():
+    form = config_form((TILE, WidgetChoice("dock", "Dock", props=WidgetProps)))
+    section = form.widget_props("tile")
+    assert (section.key, section.label, section.sections) == ("", "Widget", ())
+    assert [f.key for f in section.fields] == ["text", "size", "mode", "on"]
+    text, size, mode, on = section.fields
+    assert (text.kind, text.hint, text.label, text.required) == (
+        "text",
+        "what it says",
+        "Text",
+        False,
+    )
+    assert (size.kind, size.minimum, size.maximum) == ("int", 6, 96)
+    assert (mode.kind, mode.choices) == ("enum", ("a", "b"))
+    assert on.kind == "bool"
+    assert form.widget_props("dock") is None  # no properties: no section
+    assert form.widget_props("nope") is None
+
+
+def test_the_panel_type_row_shows_only_for_a_widget_of_several_kinds(form):
+    assert "panel" not in [f.key for f in form.panel_for("edge", kinds=("edge",)).fields]
+    both = form.panel_for("corner", "top-left", kinds=("edge", "corner"))
+    assert [f.key for f in both.fields][:3] == ["name", "widget", "panel"]
+    kind = both.field("panel")
+    assert kind.choices == ("edge", "corner", "float") and kind.required
+    assert kind.labels == ("Edge", "Corner", "Float (coming soon)")
+    assert kind.disabled == ("float",)  # float is listed, never chosen
+    assert both.field("edge").choices == ("top", "left")
+    corner_only = form.panel_for("corner", kinds=("corner", "edge"))
+    assert corner_only.field("panel").disabled == ("float",)
+
+
+def test_the_registry_widgets_for_the_form(corner_registry):
+    from settings.form import registry_widgets
+
+    got = {w.id: (w.label, w.kinds, w.props) for w in registry_widgets()}
+    assert got["box"] == ("Box", ("corner",), WidgetProps)
+    assert got["dock"] == ("Dock", ("edge",), WidgetProps)
+
+
+class Inner(WidgetProps):
+    size: int = 1
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        str,
+        int,
+        bool,
+        Literal["a", "b"],
+        str | None,
+        Annotated[int, Field(ge=1, le=9)] | None,
+        float,
+        float | None,
+        list[str],
+        dict[str, int],
+        Literal[1, 2],
+        int | str,
+        Inner,
+    ],
+    ids=repr,
+)
+def test_the_registry_refuses_exactly_the_property_types_the_form_cannot_show(annotation):
+    """shell.registry.form_type_ok (checked at registration) and props_section (the settings
+    window) must agree, so a registered widget always gets its Widget rows."""
+    from shell.registry import form_type_ok
+
+    model = create_model("Props", __base__=WidgetProps, font=(annotation, None))
+    try:
+        props_section(model)
+        shown = True
+    except ValueError:
+        shown = False
+    assert form_type_ok(model.model_fields["font"].annotation) is shown

@@ -241,7 +241,8 @@ CORNER_ONLY_KEYS = ("corner", "width", "height")
 FRAMEWORK_KEYS = frozenset((*SHARED_KEYS, *EDGE_ONLY_KEYS, *CORNER_ONLY_KEYS))
 PanelKind = Literal["edge", "corner", "float"]  # float: reserved, the registry rejects it
 PANEL_KINDS: tuple[str, ...] = get_args(PanelKind)  # the settings window's choices
-PanelName = Annotated[str, Field(min_length=1, max_length=40)]
+NAME_MAX_LENGTH = 40
+PanelName = Annotated[str, Field(min_length=1, max_length=NAME_MAX_LENGTH)]
 
 
 _BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A)))

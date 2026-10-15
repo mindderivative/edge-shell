@@ -178,6 +178,31 @@ class FontsEditor(_Editor):
         self.widget.set_text(format_fonts(value))
 
 
+class TextEditor(_Editor):
+    """A line of text (a panel's name, a widget's text property): sent on Enter or when the
+    entry loses focus, like the font list."""
+
+    def __init__(self, emit: Emit):
+        self.widget = Gtk.Entry(width_chars=30)
+        self._shown = ""
+        self._emit = emit
+        self.widget.connect("activate", lambda *_a: self.commit())
+        self.widget.connect("focus-out-event", lambda *_a: self.commit() or False)
+
+    def dirty(self) -> bool:
+        return self.widget.get_text() != self._shown
+
+    def commit(self) -> None:
+        text = self.widget.get_text()
+        if text != self._shown:
+            self._shown = text
+            self._emit(text)
+
+    def set(self, value: str | None) -> None:
+        self._shown = "" if value is None else str(value)
+        self.widget.set_text(self._shown)
+
+
 class LengthEditor(_Editor):
     """A mode (px, fill, content, percent) and a number for px and percent. Switching to px or
     percent uses the last number that mode had (shown or typed), else `fallback_px` (the
@@ -266,6 +291,8 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
         return ChoiceEditor(spec.choices, emit, spec.labels)
     if spec.kind == "fonts":
         return FontsEditor(emit)
+    if spec.kind == "text":
+        return TextEditor(emit)
     if spec.kind == "length":
         return LengthEditor(emit)
     if spec.kind == "deprecated":

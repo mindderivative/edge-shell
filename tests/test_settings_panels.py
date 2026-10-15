@@ -15,10 +15,18 @@ if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
 from settings.document import UserDocument  # noqa: E402
-from settings.form import config_form  # noqa: E402
+from settings.form import WidgetChoice, config_form  # noqa: E402
 from shell.registry import requests_for  # noqa: E402
 
-FORM = config_form(("bar", "clock", "dock"))
+FORM = config_form(tuple(WidgetChoice(w) for w in ("bar", "clock", "dock")))
+CORNER_FORM = config_form(
+    (
+        WidgetChoice("bar", "Bar"),
+        WidgetChoice("box", "Box", ("corner",)),
+        WidgetChoice("clock", "Clock"),
+        WidgetChoice("dock", "Dock"),
+    )
+)
 USER = (
     '[[monitors.M.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
     '[[monitors.M.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
@@ -104,7 +112,7 @@ def test_first_cannot_move_up_and_last_cannot_move_down(editor):
 def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_registry):
     """Spec 19: a corner widget's entry shows corner, edge (only its corner's two), width and
     height, never align or length; its title names the corner, the edge and the size."""
-    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    form = CORNER_FORM
     entries = [
         {"panel": "edge", "name": "dock", "widget": "dock"},
         {"panel": "corner", "name": "box", "widget": "box"},
@@ -125,15 +133,18 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     ]
     dock, box, moved = sections
     assert "align" in {f.key for f in dock.fields} and "corner" not in {f.key for f in dock.fields}
-    assert [f.key for f in box.fields] == ["widget", "corner", "edge", "width", "height", "state"]
+    assert [f.key for f in box.fields] == [
+        "name",
+        "widget",
+        "corner",
+        "edge",
+        "width",
+        "height",
+        "state",
+    ]
     assert box.field("edge").choices == ("bottom", "left")
     assert moved.field("edge").choices == ("top", "right")
-    assert [row[0] for row in ed.widget_choice.get_model()] == [
-        "bar",
-        "clock",
-        "dock",
-        "box (corner panel)",
-    ]
+    assert [row[0] for row in ed.widget_choice.get_model()] == ["Bar", "Box", "Clock", "Dock"]
     edits = []
     ed._on_edit = lambda edit, open_index: edits.append((edit, open_index))
     ed.add("box")
@@ -141,7 +152,7 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     edits[0][0](doc)
     assert (
         doc.data
-        == {"monitors": {"M": {"panels": [{"panel": "corner", "name": "box", "widget": "box"}]}}}
+        == {"monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}}
         and edits[0][1] == 3
     )
 
@@ -220,17 +231,17 @@ def test_add_panel_button_writes_the_edge_widgets_id_and_opens_it(make_config, f
 
 
 def test_add_panel_button_writes_a_corner_widgets_id_not_its_label(make_config, corner_registry):
-    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    form = CORNER_FORM
     ed, edits = three_panel_editor(make_config, form)
     ed.widget_choice.set_active_id("box")
-    assert ed.widget_choice.get_active_text() == "box (corner panel)"
+    assert ed.widget_choice.get_active_text() == "Box"
     click_add(ed)
     ((edit, open_index),) = edits
     assert open_index == 3
     doc = UserDocument("")
     edit(doc)
     assert doc.data == {
-        "monitors": {"M": {"panels": [{"panel": "corner", "name": "box", "widget": "box"}]}}
+        "monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}
     }
 
 

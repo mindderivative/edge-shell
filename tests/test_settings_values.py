@@ -2,7 +2,7 @@
 
 import pytest
 
-from settings.form import config_form
+from settings.form import WidgetChoice, config_form
 from settings.values import (
     PLACEMENT_DEFAULT,
     FieldValue,
@@ -16,7 +16,9 @@ from settings.values import (
 )
 from shell.config.models import ConfigError
 from shell.outputs import Output
+from shell.panel_spec import CornerDefaults, PanelDefaults
 from shell.registry import validate_widgets
+from shell.widget import Widget, WidgetProps
 
 USER = {
     "theme": {"accent": "#112233", "border": {"width": 3}},
@@ -160,7 +162,12 @@ def test_corner_panel_values(corners):
 def test_every_panel_form_field_has_a_value(corners):
     """Every row of both panel sections, on every entry of either kind: a value, no KeyError
     (the view refreshes every row it built)."""
-    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    form = config_form(
+        (
+            *(WidgetChoice(w) for w in ("bar", "clock", "dock")),
+            WidgetChoice("box", kinds=("corner",)),
+        )
+    )
 
     def paths(section, prefix):
         for spec in section.fields:
@@ -530,6 +537,24 @@ def test_unique_name_numbers_a_taken_name():
     assert unique_name("Clock", ["clock"]) == "Clock"  # names are case-sensitive
 
 
+def test_unique_name_stays_within_the_name_limit():
+    from shell.config.models import NAME_MAX_LENGTH
+
+    base = "x" * NAME_MAX_LENGTH
+    assert unique_name(base, []) == base
+    second = unique_name(base, [base])
+    assert second == "x" * (NAME_MAX_LENGTH - 2) + " 2" and len(second) == NAME_MAX_LENGTH
+    taken = [base, second]
+    assert unique_name(base, taken) == "x" * (NAME_MAX_LENGTH - 2) + " 3"
+    names = [base]
+    for _ in range(11):  # " 10" and " 11" are one character longer than " 2"
+        names.append(unique_name(base, names))
+    assert len(set(names)) == 12 and all(len(n) <= NAME_MAX_LENGTH for n in names)
+    assert names[-1] == "x" * (NAME_MAX_LENGTH - 3) + " 12"
+    assert unique_name("x" * 60, []) == base  # a title over the limit is cut
+    assert unique_name("y" * 38 + " z", ["y" * 38 + " z"]) == "y" * 38 + " 2"  # no stray blank
+
+
 def test_a_new_panel_entry_has_its_kind_and_a_free_name(corner_registry):
     user = {
         "monitors": {
@@ -541,11 +566,80 @@ def test_a_new_panel_entry_has_its_kind_and_a_free_name(corner_registry):
             }
         }
     }
+    user["monitors"]["M"]["panels"][1]["name"] = "Dock"  # the title, as the window writes
     assert new_panel_entry(user, "M", "dock") == {
         "panel": "edge",
-        "name": "dock 3",
+        "name": "Dock 2",
         "widget": "dock",
     }
-    assert new_panel_entry(user, "M", "box") == {"panel": "corner", "name": "box", "widget": "box"}
-    assert new_panel_entry(user, "N", "dock")["name"] == "dock"  # another monitor: free
+    assert new_panel_entry(user, "M", "box") == {"panel": "corner", "name": "Box", "widget": "box"}
+    assert new_panel_entry(user, "N", "dock")["name"] == "Dock"  # another monitor: free
     assert new_panel_entry({}, "M", "nope") == {"panel": "edge", "name": "nope", "widget": "nope"}
+
+
+# ---- name, panel type and widget properties (panel/widget spec 3.7) -------------------
+
+
+class TileProps(WidgetProps):
+    text: str = "hi"
+    size: int | None = None
+
+
+@pytest.fixture
+def tile(corner_registry):
+    """corner_registry plus "tile": edge and corner, two properties."""
+    corner_registry.register_widget(
+        "tile",
+        title="Tile",
+        props=TileProps,
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="tile"),
+        corner=CornerDefaults(corner="top-right", width=240, height=200, label="tile"),
+    )(type("Tile", (Widget,), {}))
+    return corner_registry
+
+
+def test_name_panel_and_widget_property_values(tile, make_config):
+    entry = {"panel": "corner", "name": "T", "widget": "tile", "size": 12}
+    config = make_config(monitors={"M": {"panels": [entry]}})
+    user = {"monitors": {"M": {"panels": [entry]}}}
+    p = ("monitors", "M", "panels", 0)
+    assert field_value(config, user, (*p, "name")) == FieldValue("T", True, "your config")
+    assert field_value(config, user, (*p, "panel")) == FieldValue("corner", True, "your config")
+    size = field_value(config, user, (*p, "size"))
+    assert size == FieldValue(12, True, "your config") and size.default is None
+    text = field_value(config, user, (*p, "text"))
+    assert text == FieldValue("hi", False, "widget default") and text.default == "hi"
+    with pytest.raises(KeyError):
+        field_value(config, user, (*p, "colour"))
+
+
+def test_a_new_widget_drops_the_old_widgets_keys(tile, make_config):
+    entry = {"panel": "edge", "name": "T", "widget": "tile", "text": "x", "size": 9, "depth": 80}
+    ops = panel_ops(entry, "widget", "dock")
+    assert ops == [("set", "widget", "dock"), ("unset", "text", None), ("unset", "size", None)]
+    result = _applied(entry, ops)
+    assert result == {"panel": "edge", "name": "T", "widget": "dock", "depth": 80}
+    _valid(make_config, result)
+
+
+def test_a_widget_of_both_kinds_keeps_the_entrys_kind(tile, make_config):
+    entry = {"panel": "corner", "name": "B", "widget": "box", "corner": "top-left"}
+    assert panel_ops(entry, "widget", "tile") == [("set", "widget", "tile")]
+    _valid(make_config, _applied(entry, panel_ops(entry, "widget", "tile")))
+
+
+def test_a_new_panel_type_drops_the_old_kinds_keys(tile, make_config):
+    entry = {"panel": "edge", "name": "T", "widget": "tile", "align": "end", "edge": "left"}
+    ops = panel_ops(entry, "panel", "corner")
+    assert ops == [("set", "panel", "corner"), ("unset", "align", None), ("unset", "edge", None)]
+    _valid(make_config, _applied(entry, ops))  # left is not an edge of top-right: it goes
+    back = {"panel": "corner", "name": "T", "widget": "tile", "corner": "top-left", "width": 300}
+    ops = panel_ops(back, "panel", "edge")
+    assert ops == [("set", "panel", "edge"), ("unset", "corner", None), ("unset", "width", None)]
+    _valid(make_config, _applied(back, ops))
+
+
+@pytest.mark.parametrize("kind", ["float", "corner"])
+def test_a_panel_type_the_widget_cannot_take_is_a_plain_set_for_the_session(tile, kind):
+    entry = {"panel": "edge", "name": "D", "widget": "dock", "align": "end"}
+    assert panel_ops(entry, "panel", kind) == [("set", "panel", kind)]
