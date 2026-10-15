@@ -421,3 +421,18 @@ def test_the_window_destroys_itself_on_exit_of_a_clean_config(shortcut_window):
     win.connect("destroy", lambda _w: destroyed.append(1))
     win.controller.exit()
     assert destroyed == [1]
+
+
+def test_moving_the_focus_refreshes_cut_copy_and_paste(shortcut_window):
+    from gi.repository import Gtk
+
+    win = shortcut_window()
+    actions = win.controller.actions
+    assert not actions.lookup_action("paste").get_enabled()  # nothing focused
+    spin = next(
+        w for r in win.view.rows for w in [r.editor.widget] if isinstance(w, Gtk.SpinButton)
+    )
+    spin.grab_focus()
+    assert actions.lookup_action("paste").get_enabled()
+    win.set_focus(None)
+    assert not actions.lookup_action("paste").get_enabled()

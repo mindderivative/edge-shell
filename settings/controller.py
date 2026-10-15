@@ -35,7 +35,7 @@ from settings.fileops import (
 )
 from settings.launch import spawn_settings
 from settings.menubar import build_menubar
-from settings.menus import ACTIONS, enabled, menu_state
+from settings.menus import ACTIONS, clipboard_enabled, enabled, menu_state
 from settings.session import ChangedOutside, SettingsSession
 from settings.view import SettingsView
 from shell.config.loader import USER_PATH
@@ -79,6 +79,9 @@ class SettingsController(Gtk.Box):
             "exit": self.exit,
             "undo": self.undo,
             "redo": self.redo,
+            "cut": lambda: self._clip("cut-clipboard"),
+            "copy": lambda: self._clip("copy-clipboard"),
+            "paste": lambda: self._clip("paste-clipboard"),
             "revert": self.revert,
         }
         self.actions = Gio.SimpleActionGroup()
@@ -89,6 +92,9 @@ class SettingsController(Gtk.Box):
                 self.actions.add_action(action)
         self.insert_action_group("win", self.actions)
         self.menubar, self.menus = build_menubar()
+        # Cut, Copy and Paste follow the focused widget: refreshed when the Edit menu opens
+        # (the window also refreshes them when the focus moves)
+        self.menus["Edit"].connect("show", lambda _m: self.sync_clipboard())
         self.body = Gtk.Stack()
         self.body.add_named(self._empty_page(), "empty")
         self.pack_start(self.menubar, False, False, 0)
@@ -331,6 +337,32 @@ class SettingsController(Gtk.Box):
     def revert(self) -> None:
         if self.view is not None:
             self.view.confirm_revert()
+
+    def focus_widget(self) -> Gtk.Widget | None:
+        """The window's focused widget (None outside a window, as in tests)."""
+        top = self.get_toplevel()
+        return top.get_focus() if isinstance(top, Gtk.Window) else None
+
+    def sync_clipboard(self) -> None:
+        """Cut, Copy and Paste from what the focused widget allows (a text entry or text view;
+        anything else turns all three off)."""
+        widget = self.focus_widget()
+        if isinstance(widget, Gtk.Entry):  # also a spin button
+            state = (True, widget.get_editable(), bool(widget.get_selection_bounds()))
+        elif isinstance(widget, Gtk.TextView):
+            state = (True, widget.get_editable(), widget.get_buffer().get_has_selection())
+        else:
+            state = (False, False, False)
+        self._clipboard = clipboard_enabled(*state)
+        self.sync()
+
+    def _clip(self, signal: str) -> None:
+        """Edit > Cut, Copy, Paste: the focused text widget's own clipboard signal, the one
+        its Ctrl+X/C/V key binding emits (so the menu and the keys do exactly the same)."""
+        widget = self.focus_widget()
+        if isinstance(widget, Gtk.Entry | Gtk.TextView):
+            widget.emit(signal)
+        self.sync_clipboard()
 
     # ---- the file on disk ------------------------------------------------------------------
     def file_changed(self) -> None:

@@ -652,3 +652,92 @@ def test_a_new_session_clears_the_leave_warning(make):
     c._leave_warned = True
     c.open_session(SettingsSession(path))
     assert c._leave_warned is False
+
+
+# ---- Cut, Copy, Paste (Task 7) ---------------------------------------------------------------
+def clip_on(c):
+    return {name for name in ("cut", "copy", "paste") if on(c, name)}
+
+
+def focus(c, widget):
+    c.focus_widget = lambda: widget
+    c.sync_clipboard()
+
+
+def recording(widget):
+    """Record the widget's clipboard signals and stop them there: the real clipboard (Phil's
+    desktop) is never touched."""
+    from gi.repository import GObject
+
+    seen = []
+
+    def record(w, name):
+        seen.append(name)
+        GObject.signal_stop_emission_by_name(w, name)
+
+    for name in ("cut-clipboard", "copy-clipboard", "paste-clipboard"):
+        widget.connect(name, record, name)
+    return seen
+
+
+def test_cut_copy_and_paste_follow_the_focused_entry(make):
+    c, _ = make()
+    entry = Gtk.Entry(text="Sans, Noto Sans")
+    focus(c, entry)
+    assert clip_on(c) == {"paste"}  # nothing selected
+    entry.select_region(0, 4)
+    focus(c, entry)
+    assert clip_on(c) == {"cut", "copy", "paste"}
+    entry.set_editable(False)
+    focus(c, entry)
+    assert clip_on(c) == {"copy"}
+    focus(c, Gtk.Button(label="Add"))
+    assert clip_on(c) == set()
+    focus(c, None)
+    assert clip_on(c) == set()
+
+
+def test_a_spin_button_and_a_text_view_count_as_text(make):
+    c, _ = make()
+    spin = Gtk.SpinButton.new_with_range(0, 100, 1)
+    focus(c, spin)
+    assert "paste" in clip_on(c)
+    view = Gtk.TextView()
+    buffer = view.get_buffer()
+    buffer.set_text("hello")
+    buffer.select_range(buffer.get_start_iter(), buffer.get_iter_at_offset(2))
+    focus(c, view)
+    assert clip_on(c) == {"cut", "copy", "paste"}
+
+
+def test_the_items_emit_the_focused_widgets_own_clipboard_signals(make):
+    c, _ = make()
+    entry = Gtk.Entry(text="Sans")
+    entry.select_region(0, 2)
+    seen = recording(entry)
+    focus(c, entry)
+    for name in ("copy", "cut", "paste"):
+        run(c, name)
+    assert seen == ["copy-clipboard", "cut-clipboard", "paste-clipboard"]
+
+
+def test_with_no_text_focused_the_items_do_nothing(make):
+    c, _ = make()
+    entry = Gtk.Entry(text="Sans")
+    seen = recording(entry)
+    focus(c, Gtk.Button())
+    run(c, "paste")  # disabled: nothing runs
+    c._clip("paste-clipboard")  # and even if called, only a text widget is asked
+    assert seen == []
+
+
+def test_opening_the_edit_menu_refreshes_cut_copy_and_paste(make):
+    c, _ = make()
+    entry = Gtk.Entry(text="Sans")
+    entry.select_region(0, 2)
+    c.focus_widget = lambda: entry  # the focus moved, nothing refreshed yet
+    assert clip_on(c) == set()
+    edit = c.menus["Edit"]
+    edit.show()  # what popping the menu up does first (its popup window stays hidden)
+    assert clip_on(c) == {"cut", "copy", "paste"}
+    edit.hide()

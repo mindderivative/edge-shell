@@ -36,6 +36,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
         # group from the focused widget up, so with nothing focused it must have it itself
         self.insert_action_group("win", self.controller.actions)
         self.connect("delete-event", self._on_delete)
+        # Cut, Copy and Paste follow the focused widget (after the default handler: the new
+        # focus is set by then)
+        self.connect_after("set-focus", lambda *_a: self.controller.sync_clipboard())
         self.controller.show_all()
 
     @property
