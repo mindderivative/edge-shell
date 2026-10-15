@@ -6,6 +6,12 @@ atomically; the running shell picks it up through its file watcher. A change the
 reject is never written. Before the first write of a session the file is copied to
 config.toml.bak (`main.py --restore-config` puts it back).
 
+The saved point (File > Save): live apply stays, every change is still written at once. Save
+records the current text as the saved point and copies the file to config.toml.bak; the
+session is `dirty` while its text differs from the saved point (an Undo back to it is not
+dirty). Discard writes the saved point back. A hand edit, valid or not, becomes the saved
+point: it was saved, in another editor, so Discard never writes over it.
+
 Limits, by design: the file is read with universal newlines, so the first edit rewrites CRLF
 line endings as LF (the .bak stays byte-exact) and `changed_outside` cannot see a hand edit
 that only changes line endings. When the config file is missing at open, an older
@@ -49,6 +55,7 @@ class SettingsSession:
         self.path = path
         self.default_path = default_path
         self.history: list[str] = []  # texts before each write, for undo
+        self.redo_history: list[str] = []  # texts an undo (or redo) replaced, for redo
         self.backed_up = False
         self.start_text = ""
         self.text = ""
@@ -59,6 +66,12 @@ class SettingsSession:
         # An invalid file at open has no valid baseline; keep its text so Revert all is a no-op
         # (a later valid hand edit becomes the baseline through rebase).
         self.start_text = self.text
+        self.saved_text = self.text  # the saved point: Save moves it, Discard writes it back
+
+    @property
+    def dirty(self) -> bool:
+        """The file differs from the saved point (Close, Exit, New and Open ask first)."""
+        return self.text != self.saved_text
 
     def reload(self) -> None:
         """(Re)read the file. An invalid file is kept as it is: `error` says why, `config` is
@@ -79,17 +92,21 @@ class SettingsSession:
     def rebase(self) -> None:
         """Re-read a file that was changed outside the window (a hand edit): a valid hand edit
         becomes the new starting point (Revert all goes back to it, never past it) and the
-        undo history, which led to a file that no longer exists, is cleared. An INVALID hand
-        edit does not: the last valid baseline stays, so Revert all (confirmed by the user)
-        is a way out of a broken file instead of rewriting the same broken text."""
+        undo and redo histories, which led to a file that no longer exists, are cleared. An
+        INVALID hand edit does not: the last valid baseline stays, so Revert all (confirmed by
+        the user) is a way out of a broken file instead of rewriting the same broken text.
+        Any hand edit, valid or not, is the new saved point (it was saved, in an editor)."""
         self.reload()
         self.history.clear()
+        self.redo_history.clear()
+        self.saved_text = self.text
         if self.config is not None:
             self.start_text = self.text
 
     def apply(self, edit: Edit) -> Config:
         """Apply one change and write it; returns the new config. Raises ChangedOutside (the
-        session re-read the file: a new baseline) or ConfigError (nothing written)."""
+        session re-read the file: a new baseline) or ConfigError (nothing written). A written
+        change ends the redo line."""
         if self.changed_outside():
             self.rebase()
             raise ChangedOutside(
@@ -107,21 +124,65 @@ class SettingsSession:
             self.backed_up = True
         self._write_file(lambda: files.write_atomic(self.path, doc.text))
         self.history.append(self.text)
+        self.redo_history.clear()
         self.text, self.user = doc.text, tomllib.loads(doc.text)
         self.config, self.error = config, None
         return config
 
     def undo(self) -> bool:
         """Put back the text before the last change; False when there is nothing to undo."""
-        if not self.history:
+        return self._step(self.history, self.redo_history)
+
+    def redo(self) -> bool:
+        """Put back the text the last Undo replaced; False when there is nothing to redo
+        (a new change, Revert all, Discard or a hand edit ends the redo line)."""
+        return self._step(self.redo_history, self.history)
+
+    def _step(self, source: list[str], target: list[str]) -> bool:
+        """Write the last text of `source`; the text it replaces goes onto `target`."""
+        if not source:
             return False
         if self.changed_outside():
             self.rebase()
             raise ChangedOutside(f"{self.path} was changed outside the settings window")
-        self._write_file(lambda: files.write_atomic(self.path, self.history[-1]))
-        self.history.pop()
+        self._write_file(lambda: files.write_atomic(self.path, source[-1]))
+        source.pop()
+        target.append(self.text)
         self.reload()
         return True
+
+    def save(self) -> None:
+        """File > Save: the current text becomes the saved point and the file is copied to
+        config.toml.bak (what `--restore-config` puts back; later changes of this session do
+        not overwrite that copy). Refused, with ChangedOutside, after a hand edit (re-read: it
+        is the saved point now). A copy that cannot be written moves nothing."""
+        if self.changed_outside():
+            self.rebase()
+            raise ChangedOutside(
+                f"{self.path} was changed outside the settings window; it has been re-read "
+                "and is the saved state now"
+            )
+        backup = files.backup_path(self.path.resolve())
+        self._write_file(lambda: files.write_backup(self.path), backup)
+        self.backed_up = True
+        self.saved_text = self.text
+
+    def discard(self) -> None:
+        """Back to the saved point (Close, Exit, New or Open with unsaved changes, answered
+        Discard): the saved text is written back, like Revert all but to the saved point, and
+        both histories are cleared. Refused, with ChangedOutside, after a hand edit (which is
+        then the saved point: nothing is left to discard)."""
+        if self.changed_outside():
+            self.rebase()
+            raise ChangedOutside(
+                f"{self.path} was changed outside the settings window; it has been re-read "
+                "and nothing was discarded"
+            )
+        if self.dirty:
+            self._write_file(lambda: files.write_atomic(self.path, self.saved_text))
+        self.history.clear()
+        self.redo_history.clear()
+        self.reload()
 
     def keeps_hand_edit(self) -> bool:
         """True when Revert all would replace an invalid hand edit (it has no valid baseline
@@ -133,7 +194,7 @@ class SettingsSession:
         by hand (no validation: it was the file on disk). An invalid hand edit being replaced is
         first kept as config.toml.before-revert (if that cannot be written, nothing changes).
         Refused, with ChangedOutside, when the file was changed by hand since the last read:
-        that hand edit becomes the start."""
+        that hand edit becomes the start. Clears both histories (Revert all is not undone)."""
         if self.changed_outside():
             self.rebase()
             raise ChangedOutside(
@@ -145,6 +206,7 @@ class SettingsSession:
                 self._write_file(lambda: files.keep_before_revert(self.path))
             self._write_file(lambda: files.write_atomic(self.path, self.start_text))
         self.history.clear()
+        self.redo_history.clear()
         self.reload()
 
     def _write_file(self, write: Callable[[], Any], target: Path | None = None) -> None:
