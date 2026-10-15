@@ -20,6 +20,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, GLib, Gtk
 
+from settings.about import about_info
 from settings.dialogs import Dialogs
 from settings.fileops import (
     Answer,
@@ -35,7 +36,7 @@ from settings.fileops import (
 )
 from settings.launch import spawn_settings
 from settings.menubar import build_menubar
-from settings.menus import ACTIONS, clipboard_enabled, enabled, menu_state
+from settings.menus import ACTIONS, clipboard_enabled, enabled, menu_state, window_title
 from settings.session import ChangedOutside, SettingsSession
 from settings.view import SettingsView
 from shell.config.loader import USER_PATH
@@ -55,6 +56,7 @@ class SettingsController(Gtk.Box):
         quit: Callable[[], None] | None = None,
         launch: Callable[[Path], None] = spawn_settings,
         user_path: Path = USER_PATH,
+        on_title: Callable[[str], None] | None = None,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.path = path  # the window's file (its application id is made from it)
@@ -64,6 +66,8 @@ class SettingsController(Gtk.Box):
         self.quit = quit or (lambda: None)  # closes the window (File > Exit)
         self.launch = launch  # opens another file in its own window
         self.user_path = user_path  # the default config: the choosers start in its folder
+        self._on_title = on_title or (lambda _t: None)  # the window's set_title
+        self.title = ""
         self.session: SettingsSession | None = None
         self.view: SettingsView | None = None
         self._clipboard: dict[str, bool] | None = None
@@ -83,6 +87,7 @@ class SettingsController(Gtk.Box):
             "copy": lambda: self._clip("copy-clipboard"),
             "paste": lambda: self._clip("paste-clipboard"),
             "revert": self.revert,
+            "about": lambda: self.dialogs.about(self.get_toplevel(), about_info()),
         }
         self.actions = Gio.SimpleActionGroup()
         for name in ACTIONS:
@@ -132,6 +137,13 @@ class SettingsController(Gtk.Box):
         self.view.show_all()
         self.body.set_visible_child_name("config")
         self.notice.hide()
+        if session.config is not None and not same_file(session.path, self.user_path):
+            # the shell reads only its own file: say once (the next good edit hides it)
+            self.view.show_banner(
+                f"This is not the default config ({self.user_path}): a running shell uses "
+                "these changes only if it was started with --config on this file.",
+                Gtk.MessageType.INFO,
+            )
         self.sync()
 
     def _drop_view(self) -> None:
@@ -152,6 +164,11 @@ class SettingsController(Gtk.Box):
             action = self.actions.lookup_action(name)
             if action is not None:
                 action.set_enabled(ok)
+        session = self.session
+        title = window_title(session and session.path, bool(session and session.dirty))
+        if title != self.title:
+            self.title = title
+            self._on_title(title)
 
     def tell(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
         """A message in the view's banner, or on the empty page when no config is open."""

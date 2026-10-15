@@ -15,6 +15,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from settings.about import AboutInfo
 from settings.fileops import Answer, unsaved_question
 
 TOML_FILTERS = (("TOML files", "*.toml"), ("All files", "*"))
@@ -30,6 +31,8 @@ class Dialogs(Protocol):
     def choose_open(self, parent: Any, folder: Path) -> Path | None: ...
 
     def choose_save_as(self, parent: Any, folder: Path, name: str) -> Path | None: ...
+
+    def about(self, parent: Any, info: AboutInfo) -> None: ...
 
 
 def unsaved_answer(response: Gtk.ResponseType) -> Answer:
@@ -119,6 +122,23 @@ class GtkDialogs:
 
     def choose_save_as(self, parent: Any, folder: Path, name: str) -> Path | None:
         return self._choose(CHOOSERS["save_as"], parent, folder, name)
+
+    def about(self, parent: Any, info: AboutInfo) -> None:
+        dialog = Gtk.AboutDialog(
+            transient_for=_window(parent),
+            modal=True,
+            program_name=info.name,
+            version=info.version,
+            comments=info.comments,
+            website=info.website,
+            website_label="Project page",
+            authors=list(info.authors),
+            license=info.license,
+            wrap_license=True,
+            logo_icon_name="preferences-desktop",
+        )
+        dialog.run()
+        dialog.destroy()
 
     @staticmethod
     def _choose(spec: ChooserSpec, parent, folder, name) -> Path | None:

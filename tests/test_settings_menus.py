@@ -1,5 +1,6 @@
 """settings.menus: the menu bar as data, its accelerators and when each item works (pure)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,10 +9,12 @@ from settings.menus import (
     ACCELS,
     ACTIONS,
     MENUS,
+    TITLE,
     MenuState,
     clipboard_enabled,
     enabled,
     menu_state,
+    window_title,
 )
 
 
@@ -161,3 +164,21 @@ def test_menu_state_undo_and_redo_follow_their_own_histories():
 def test_menu_state_dirty_does_not_come_from_the_history():
     assert menu_state(session(dirty=True)).dirty
     assert not menu_state(session(history=["x"])).dirty
+
+
+HOME = Path("/home/phil")
+
+
+@pytest.mark.parametrize(
+    "path, dirty, title",
+    [
+        (None, False, "Edge Shell settings"),
+        (HOME / ".config/edge-shell/config.toml", False, "~/.config/edge-shell/config.toml"),
+        (HOME / ".config/edge-shell/config.toml", True, "*~/.config/edge-shell/config.toml"),
+        (Path("/tmp/edge-settings.toml"), True, "*/tmp/edge-settings.toml"),
+    ],
+)
+def test_window_title(path, dirty, title):
+    expected = title if path is None else f"{title} - {TITLE}"
+    assert window_title(path, dirty, home=HOME) == expected
+    assert TITLE == "Edge Shell settings"

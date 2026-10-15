@@ -12,10 +12,11 @@ from gi.repository import Gtk
 
 from settings.controller import SettingsController
 from settings.dialogs import Dialogs, GtkDialogs
+from settings.menus import TITLE
 from settings.session import SettingsSession
 from shell.outputs import Output
 
-TITLE = "Edge Shell settings"
+__all__ = ["TITLE", "SettingsWindow"]
 
 
 class SettingsWindow(Gtk.ApplicationWindow):
@@ -29,7 +30,12 @@ class SettingsWindow(Gtk.ApplicationWindow):
         super().__init__(application=application, title=TITLE)
         self.set_default_size(860, 680)
         self.controller = SettingsController(
-            session.path, session, outputs, dialogs or GtkDialogs(), quit=self.destroy
+            session.path,
+            session,
+            outputs,
+            dialogs or GtkDialogs(),
+            quit=self.destroy,
+            on_title=self.set_title,  # the file, with a * while it has unsaved changes
         )
         self.add(self.controller)
         # the shortcuts are application accelerators for "win.<action>"; the toplevel finds the

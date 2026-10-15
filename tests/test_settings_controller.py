@@ -64,6 +64,9 @@ class FakeDialogs:
     def choose_save_as(self, _parent, folder, name):
         return self._choose("save-as", folder, name)
 
+    def about(self, _parent, info):
+        self.calls.append(("about", info))
+
 
 @pytest.fixture
 def make(tmp_path, fake_registry):
@@ -71,8 +74,8 @@ def make(tmp_path, fake_registry):
     path.write_text(USER)
     made = []
 
-    def _make():
-        quits, launches = [], []
+    def _make(user_path=None):
+        quits, launches, titles = [], [], []
         dialogs = FakeDialogs()
         c = SettingsController(
             path,
@@ -81,9 +84,10 @@ def make(tmp_path, fake_registry):
             dialogs,
             quit=lambda: quits.append(1),
             launch=launches.append,  # nothing is spawned
-            user_path=tmp_path / "home" / "edge-shell" / "config.toml",
+            user_path=user_path or tmp_path / "home" / "edge-shell" / "config.toml",
+            on_title=titles.append,
         )
-        c.dialogs_, c.quits, c.launches = dialogs, quits, launches
+        c.dialogs_, c.quits, c.launches, c.titles = dialogs, quits, launches, titles
         made.append(c)
         return c, path
 
@@ -741,3 +745,46 @@ def test_opening_the_edit_menu_refreshes_cut_copy_and_paste(make):
     edit.show()  # what popping the menu up does first (its popup window stays hidden)
     assert clip_on(c) == {"cut", "copy", "paste"}
     edit.hide()
+
+
+# ---- About, the title, the default-config note (Task 8) ----------------------------------------
+def test_the_title_names_the_file_and_marks_unsaved_changes(make):
+    from settings.menus import window_title
+
+    c, path = make()
+    clean, dirty = window_title(path, False), window_title(path, True)
+    assert clean.endswith(" - Edge Shell settings") and dirty == "*" + clean
+    assert c.titles == [clean]
+    c.view._on_change(DEPTH, 90)
+    assert c.titles[-1] == dirty
+    run(c, "undo")  # back at the saved point
+    assert c.titles[-1] == clean
+    c.view._on_change(DEPTH, 90)
+    run(c, "save")
+    assert c.titles[-1] == clean
+    run(c, "close")
+    assert c.titles[-1] == "Edge Shell settings"
+
+
+def test_about_shows_the_projects_information(make):
+    c, _ = make()
+    assert on(c, "about")
+    run(c, "about")
+    (kind, info), *_ = c.dialogs_.calls
+    from settings.about import about_info
+
+    assert kind == "about" and info == about_info()  # this checkout's, not another folder's
+    assert info.name == "Edge Shell" and info.version
+
+
+def test_a_config_other_than_the_default_says_so_once(make):
+    c, _ = make()
+    assert c.view.banner.get_visible()
+    assert "not the default config" in c.view.banner_label.get_text()
+    c.view._on_change(DEPTH, 90)
+    assert not c.view.banner.get_visible()  # gone after the next good change
+
+
+def test_the_default_config_has_no_note(make, tmp_path):
+    c, _ = make(user_path=tmp_path / "config.toml")  # the window's own file
+    assert not c.view.banner.get_visible()

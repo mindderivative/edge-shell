@@ -12,7 +12,22 @@ what the menu items do, also in a selectable label the menu items do not cover."
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+TITLE = "Edge Shell settings"
+
+
+def window_title(path: Path | None, dirty: bool, home: Path | None = None) -> str:
+    """The window title: the file (~ for the home folder), with a leading * while it has
+    changes since the last save; only the application name when no config is open."""
+    if path is None:
+        return TITLE
+    home = Path.home() if home is None else home
+    shown = str(path)
+    if path.is_relative_to(home):
+        shown = "~/" + str(path.relative_to(home))
+    return f"{'*' if dirty else ''}{shown} - {TITLE}"
 
 
 @dataclass(frozen=True)

@@ -156,7 +156,7 @@ def test_closing_the_window_flushes_and_ctrl_z_undoes(tmp_path, fake_registry):
         session = SettingsSession(cfg)
         session.apply(lambda d: d.set(("theme", "accent"), "#112233"))  # something to undo
         win = SettingsWindow(session, [], dialogs=Cancel())
-        assert win.get_title() == TITLE
+        assert win.get_title() == f"*{cfg} - {TITLE}"  # the file, with unsaved changes
         win.controller.actions.lookup_action("undo").activate(None)
         assert calls == ["undo"]
         # unsaved changes, answered Cancel: the window stays open
