@@ -182,8 +182,10 @@ class TextEditor(_Editor):
     """A line of text (a panel's name, a widget's text property): sent on Enter or when the
     entry loses focus, like the font list."""
 
-    def __init__(self, emit: Emit):
+    def __init__(self, emit: Emit, max_length: int | None = None):
         self.widget = Gtk.Entry(width_chars=30)
+        if max_length:  # the schema's maxLength: the extra character cannot be typed
+            self.widget.set_max_length(max_length)
         self._shown = ""
         self._emit = emit
         self.widget.connect("activate", lambda *_a: self.commit())
@@ -292,7 +294,7 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
     if spec.kind == "fonts":
         return FontsEditor(emit)
     if spec.kind == "text":
-        return TextEditor(emit)
+        return TextEditor(emit, spec.max_length)
     if spec.kind == "length":
         return LengthEditor(emit)
     if spec.kind == "deprecated":

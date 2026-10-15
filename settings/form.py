@@ -102,6 +102,7 @@ class FieldSpec:
     labels: tuple[str, ...] = ()  # what the choices show (empty: the choices themselves)
     disabled: tuple[str, ...] = ()  # choices shown but not selectable ("coming soon")
     required: bool = False  # the entry needs it: no reset button
+    max_length: int | None = None  # a text row: the most characters the entry takes
 
 
 @dataclass(frozen=True)
@@ -193,20 +194,24 @@ def _field(
             return FieldSpec(kind="color", **common)
     if text and len(_options(prop)) != 1:
         raise ValueError(f"no form field for {key!r}: one type (or that type | None) only")
-    if "enum" in first:
-        if text and not all(isinstance(v, str) for v in first["enum"]):
+    if "enum" in first or "const" in first:  # a one-value Literal is a const, not an enum
+        values = first["enum"] if "enum" in first else [first["const"]]
+        if text and not all(isinstance(v, str) for v in values):
             raise ValueError(f"no form field for {key!r}: a Literal of strings only")
-        return FieldSpec(kind="enum", choices=tuple(first["enum"]), **common)
+        return FieldSpec(kind="enum", choices=tuple(values), **common)
     if first.get("type") == "boolean":
         return FieldSpec(kind="bool", **common)
     if first.get("type") == "integer":
-        return FieldSpec(
-            kind="int", minimum=first.get("minimum"), maximum=first.get("maximum"), **common
-        )
+        low, high = first.get("minimum"), first.get("maximum")
+        if "exclusiveMinimum" in first:  # gt / lt: the next whole number inside
+            low = first["exclusiveMinimum"] + 1
+        if "exclusiveMaximum" in first:
+            high = first["exclusiveMaximum"] - 1
+        return FieldSpec(kind="int", minimum=low, maximum=high, **common)
     if not text and key == "font" and first.get("type") == "array":
         return FieldSpec(kind="fonts", **common)
     if first.get("type") == "string" and (text or key == "name"):
-        return FieldSpec(kind="text", **common)
+        return FieldSpec(kind="text", max_length=first.get("maxLength"), **common)
     raise ValueError(f"no form field for {key!r}: {prop}")
 
 

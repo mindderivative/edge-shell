@@ -162,11 +162,12 @@ def test_widgets_are_listed_by_their_display_name():
             WidgetChoice("summary", "Summary", ("corner",)),
             WidgetChoice("dock", "Dock"),
             WidgetChoice("x"),  # no title: its id
+            WidgetChoice("aaa", "Zulu"),  # its id sorts first, its title last
         )
     )
     widget = form.edge_panel.field("widget")
-    assert widget.choices == ("dock", "summary", "system_bar", "x")
-    assert widget.labels == ("Dock", "Summary", "System bar", "x")
+    assert widget.choices == ("dock", "summary", "system_bar", "x", "aaa")
+    assert widget.labels == ("Dock", "Summary", "System bar", "x", "Zulu")
     assert form.corner_panel.field("widget").choices == widget.choices
 
 
@@ -378,6 +379,8 @@ class Inner(WidgetProps):
         list[str],
         dict[str, int],
         Literal[1, 2],
+        Literal["z"],
+        Annotated[int, Field(gt=0, lt=5)],
         int | str,
         Inner,
     ],
@@ -395,3 +398,22 @@ def test_the_registry_refuses_exactly_the_property_types_the_form_cannot_show(an
     except ValueError:
         shown = False
     assert form_type_ok(model.model_fields["font"].annotation) is shown
+
+
+def test_a_one_value_literal_is_a_one_choice_row_and_exclusive_bounds_are_inclusive_ones():
+    model = create_model(
+        "Props",
+        __base__=WidgetProps,
+        mode=(Literal["z"], "z"),
+        size=(Annotated[int, Field(gt=0, lt=5)], 1),
+    )
+    mode, size = props_section(model).fields
+    assert (mode.kind, mode.choices) == ("enum", ("z",))
+    assert (size.kind, size.minimum, size.maximum) == ("int", 1, 4)
+
+
+def test_a_text_row_carries_the_schemas_max_length():
+    from widgets.clock import ClockProps
+
+    fmt = props_section(ClockProps).field("format")
+    assert fmt.max_length == 64

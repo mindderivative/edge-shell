@@ -248,8 +248,10 @@ PanelName = Annotated[str, Field(min_length=1, max_length=NAME_MAX_LENGTH)]
 _BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A)))
 
 
-def check_panel_name(value: str) -> str:
-    """A panel's name: its label in logs, notifications and the settings window."""
+def check_text_characters(value: str) -> str:
+    """The character rules for text that is shown as one line (a panel's name, the clock's
+    format): no control characters, line or paragraph separators, bidirectional overrides,
+    and no invisible format character at either end."""
     if any(unicodedata.category(c) == "Cc" for c in value):
         raise ValueError("must not contain control characters (tab, newline, ...)")
     if any(unicodedata.category(c) in ("Zl", "Zp") for c in value):
@@ -262,6 +264,12 @@ def check_panel_name(value: str) -> str:
         raise ValueError(
             "must not start or end with an invisible format character (zero-width space, BOM, ...)"
         )
+    return value
+
+
+def check_panel_name(value: str) -> str:
+    """A panel's name: its label in logs, notifications and the settings window."""
+    check_text_characters(value)
     if value != value.strip():
         raise ValueError("must not start or end with whitespace (a space, a no-break space, ...)")
     return value

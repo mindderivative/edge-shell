@@ -622,6 +622,31 @@ def test_a_new_widget_drops_the_old_widgets_keys(tile, make_config):
     _valid(make_config, result)
 
 
+class SharedProps(WidgetProps):
+    text: str = "a"
+    size: str = "big"  # the tile's size is an int
+
+
+def test_a_widget_switch_keeps_a_shared_key_only_if_the_new_model_takes_its_value(tile):
+    tile.register_widget(
+        "label",
+        title="Label",
+        props=SharedProps,
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="label"),
+    )(type("Label", (Widget,), {}))
+    entry = {"panel": "edge", "name": "T", "widget": "tile", "text": "x", "size": 9, "extra": 1}
+    ops = panel_ops(entry, "widget", "label")
+    # text: shared, a str in both (kept); size: shared, but 9 is no str (dropped); extra: gone
+    assert ops == [("set", "widget", "label"), ("unset", "size", None), ("unset", "extra", None)]
+    other = {"panel": "edge", "name": "T", "widget": "label", "text": "x", "size": "huge"}
+    assert panel_ops(other, "widget", "tile") == [
+        ("set", "widget", "tile"),
+        ("unset", "size", None),
+    ]
+    kept = {"panel": "edge", "name": "T", "widget": "label", "text": "x"}
+    assert panel_ops(kept, "widget", "tile") == [("set", "widget", "tile")]  # text is kept
+
+
 def test_a_widget_of_both_kinds_keeps_the_entrys_kind(tile, make_config):
     entry = {"panel": "corner", "name": "B", "widget": "box", "corner": "top-left"}
     assert panel_ops(entry, "widget", "tile") == [("set", "widget", "tile")]

@@ -397,6 +397,23 @@ def test_a_text_row_shows_an_unset_value_as_empty():
     assert row.editor.widget.get_text() == "" and not row.editor.dirty() and changes == []
 
 
+def test_a_text_row_takes_no_more_characters_than_the_schema_allows():
+    name = FORM.edge_panel.field("name")
+    assert name.max_length == 40
+    row, _, _ = row_for(name, "Dock")
+    assert row.editor.widget.get_max_length() == 40
+    row, _, _ = row_for(FieldSpec("font", "Font", "text"), None)
+    assert row.editor.widget.get_max_length() == 0  # no limit in the schema: none
+
+
+def test_activating_or_leaving_an_unset_text_row_sends_nothing():
+    row, changes, _ = row_for(FieldSpec("font", "Font", "text"), None)
+    row.editor.widget.emit("activate")
+    row.editor.widget.emit("focus-out-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
+    row.flush()
+    assert changes == []
+
+
 def test_a_text_row_sends_when_the_entry_loses_focus():
     row, changes, _ = row_for(FORM.edge_panel.field("name"), "Dock")
     entry = row.editor.widget

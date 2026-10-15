@@ -126,6 +126,26 @@ def test_control_characters_are_an_error(text):
         parse_clock_format(text)
 
 
+@pytest.mark.parametrize(
+    "text", ["HH\u0085mm", "HH\u2028mm", "HH\u2029mm", "HH\u202emm", "\u200bHH", "HH\u200b"]
+)
+def test_the_format_follows_the_character_rules_of_a_panel_name(text):
+    with pytest.raises(ValueError):
+        parse_clock_format(text)
+
+
+def test_an_invisible_character_inside_is_allowed_but_never_alone():
+    assert fmt("HH\u200bmm") == "09\u200b05"
+    with pytest.raises(ValueError, match="nothing visible"):
+        parse_clock_format("' \u200b '")
+
+
+@pytest.mark.parametrize("text", ["\u200b", "\u200b\u200b"])
+def test_a_format_of_only_format_characters_is_an_error(text):
+    with pytest.raises(ValueError):
+        parse_clock_format(text)
+
+
 @pytest.mark.parametrize("text", ["", " ", "   ", "' '", "' ' ' '", "\u00a0"])
 def test_a_format_with_nothing_visible_is_an_error(text):
     with pytest.raises(ValueError, match="nothing visible"):

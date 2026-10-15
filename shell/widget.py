@@ -25,7 +25,10 @@ class Widget:
     for a corner panel) gets a new instance, calls build(props) once for its content and
     destroy() once when the window is destroyed (a config reload rebuilds panels, a hot-plug
     closes a monitor): stop timers and watches there. `theme_fonts` is the panel's theme font
-    list, set before build(): the fallback for a widget that sets its own font."""
+    list, set before build(): the fallback for a widget that sets its own font. It is read at
+    build time only: a live theme-font change does not update an existing label's fallback
+    until the panel is rebuilt (accepted for plan 1; the cleaner later fix is a
+    `theme_changed(fonts)` hook called from apply_theme)."""
 
     theme_fonts: tuple[str, ...] = ()
 

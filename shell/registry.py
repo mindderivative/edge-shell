@@ -445,5 +445,7 @@ def validate_widgets(config: Config) -> None:
             problems.extend(_entry_problems(f"monitors.{name}.panels[{i}]", panel))
         problems.extend(_name_problems(f"monitors.{name}.panels", mon.panels))
     if problems:
-        known = ", ".join(widget_names()) or "none"
-        raise ConfigError("\n".join(problems) + f"\nknown widgets: {known}")
+        text = "\n".join(problems)
+        if any(": unknown widget " in p for p in problems):  # only that error needs the list
+            text += f"\nknown widgets: {', '.join(widget_names()) or 'none'}"
+        raise ConfigError(text)

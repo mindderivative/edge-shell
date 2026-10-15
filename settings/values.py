@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import ValidationError
+
 from shell.config.models import (
     CORNER_ONLY_KEYS,
     EDGE_ONLY_KEYS,
@@ -30,6 +32,7 @@ from shell.registry import (
     widget_props_model,
     widget_title,
 )
+from shell.widget import WidgetProps
 
 # keys whose value in effect is the request's (the entry's, else the widget's default)
 PANEL_REQUEST_KEYS = (
@@ -198,8 +201,12 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
         kind = entry.get("panel") if entry.get("panel") in kinds else kinds[0]
         if entry.get("panel") != kind:
             ops.append(("set", "panel", kind))
-        props = widget_props_model(value).model_fields
-        ops += [("unset", k, None) for k in entry if k not in FRAMEWORK_KEYS and k not in props]
+        model = widget_props_model(value)
+        ops += [
+            ("unset", k, None)
+            for k in entry
+            if k not in FRAMEWORK_KEYS and not _fits(model, k, entry[k])
+        ]
         ops += _kind_ops(entry, kind)
         if kind == "corner":
             corner = entry.get("corner", defaults(value, "corner").corner)
@@ -219,6 +226,18 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))
     return ops
+
+
+def _fits(model: type[WidgetProps], key: str, value: Any) -> bool:
+    """True when the new widget has the property `key` and takes `value` for it: a key the two
+    widgets share is kept only then (their types may differ)."""
+    if key not in model.model_fields:
+        return False
+    try:
+        model.model_validate({key: value})
+    except ValidationError as exc:
+        return not any(err["loc"][:1] == (key,) for err in exc.errors())
+    return True
 
 
 def _kind_ops(entry: dict, kind: str) -> list[tuple[str, str, Any]]:

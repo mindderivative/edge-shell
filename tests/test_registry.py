@@ -34,6 +34,24 @@ def test_validate_widgets_reports_every_bad_path(fake_registry, make_config):
     text = str(exc.value)
     assert "monitors.HDMI-A-1.panels[1].widget" in text
     assert "monitors.DP-1.panels[0].widget" in text
+    assert text.endswith("known widgets: bar, clock, dock")
+
+
+def test_only_an_unknown_widget_error_lists_the_known_widgets(fake_registry, make_config):
+    cfg = make_config(
+        monitors={
+            "M": {
+                "panels": [
+                    {"panel": "edge", "name": "same", "widget": "dock"},
+                    {"panel": "edge", "name": "same", "widget": "dock", "colour": "red"},
+                ]
+            }
+        }
+    )
+    with pytest.raises(ConfigError) as exc:
+        registry.validate_widgets(cfg)
+    assert "unknown key for widget" in str(exc.value) and "names must be unique" in str(exc.value)
+    assert "known widgets" not in str(exc.value)
 
 
 def test_request_uses_widget_defaults(fake_registry):

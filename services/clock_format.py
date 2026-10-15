@@ -9,12 +9,17 @@ Every other letter is an error; any other character (digits, spaces, punctuation
 scripts) is shown as it is. The longest token wins: "MMM" is the month name, "MMMM" is MMM
 then an M on its own, which is an error. Literal text never goes through strftime, and the
 day and month names are fixed English tables: the output never follows the locale.
-Control characters are an error, and so is a format with nothing visible in it.
+The character rules are a panel name's (control characters, line separators, bidirectional
+overrides, an invisible format character at either end are errors), and so is a format with
+nothing visible (no token, only spaces and format characters) in it.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime
+
+from shell.config.models import check_text_characters
 
 TOKENS = ("HH", "mm", "ss", "H", "h", "a", "ddd", "dd", "MMM", "MM", "yyyy")
 _LONGEST_FIRST = sorted(TOKENS, key=len, reverse=True)
@@ -41,12 +46,17 @@ def _quoted(text: str, start: int) -> tuple[str, int]:
     )
 
 
+def _visible(char: str) -> bool:
+    return not char.isspace() and unicodedata.category(char) != "Cf"
+
+
 def parse_clock_format(text: str) -> tuple[Part, ...]:
     """The format as tokens and literal text; ValueError naming the first unknown letter, a
     control character, an unterminated quote, or a format with nothing visible."""
-    for position, char in enumerate(text, 1):
-        if ord(char) < 0x20 or ord(char) == 0x7F:
-            raise ValueError(f"control character {char!r} at position {position}")
+    try:
+        check_text_characters(text)  # the same character rules as a panel name
+    except ValueError as exc:
+        raise ValueError(f"the format {exc}") from None
     parts: list[Part] = []
 
     def literal(chars: str) -> None:
@@ -78,7 +88,7 @@ def parse_clock_format(text: str) -> tuple[Part, ...]:
             )
         literal(char)
         i += 1
-    if not any(is_token or not value.isspace() for is_token, value in parts):
+    if not any(is_token or any(_visible(c) for c in value) for is_token, value in parts):
         raise ValueError("the format shows nothing visible; add a token or some text")
     return tuple(parts)
 
