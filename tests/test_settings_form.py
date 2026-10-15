@@ -413,7 +413,8 @@ def test_a_one_value_literal_is_a_one_choice_row_and_exclusive_bounds_are_inclus
 
 
 def test_a_text_row_carries_the_schemas_max_length():
-    from widgets.clock import ClockProps
+    class Props(WidgetProps):  # not ClockProps: widgets.clock imports gi, which CI does not have
+        format: Annotated[str, Field(min_length=1, max_length=64)] = "HH:mm"
 
-    fmt = props_section(ClockProps).field("format")
+    fmt = props_section(Props).field("format")
     assert fmt.max_length == 64
