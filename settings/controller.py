@@ -230,8 +230,8 @@ class SettingsController(Gtk.Box):
         if self.view is None:
             return
         self.view.flush()
-        if self.view.refused_outside:
-            return
+        if self.view.refused_outside or self.view.save_failed:
+            return  # the message (a hand edit, or "Not saved") is on screen; no copy is written
         session = self.session
         target = self.dialogs.choose_save_as(
             self.get_toplevel(), default_folder(self.user_path), session.path.name

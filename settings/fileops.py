@@ -78,9 +78,17 @@ def same_file(a: Path, b: Path) -> bool:
 
 
 def new_path(path: Path) -> Path:
-    """The file File > New creates for a chosen name: .toml is added when the name has no
-    suffix (a name with another suffix is kept)."""
-    return path if path.suffix else path.with_name(path.name + ".toml")
+    """The file File > New creates for a chosen name, the same on every Python version (it
+    reads the name, never Path.suffix): trailing dots go ('x.' is 'x'), a name that is only
+    '.toml' becomes config.toml, and '.toml' is added unless the name already ends with it in
+    any case ('x' -> x.toml, 'my.config' -> my.config.toml, 'X.TOML' is kept), so the Open
+    filter always shows the file."""
+    name = path.name.rstrip(".")
+    if name.lower() == ".toml":
+        name = "config.toml"
+    elif not name.lower().endswith(".toml"):
+        name += ".toml"
+    return path.with_name(name)
 
 
 def check_new(path: Path) -> None:

@@ -593,6 +593,21 @@ def test_save_as_stops_when_the_flush_was_refused(make, pending, tmp_path):
     assert c.dialogs_.chosen is None and not copy.exists() and c.launches == []
 
 
+def test_save_as_stays_open_when_the_flush_could_not_write(make, pending, tmp_path, monkeypatch):
+    c, path = make()
+    row(c, DEPTH).editor.widget.set_value(120)  # pending; its write will fail
+
+    def boom(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(files, "write_backup", boom)
+    copy = tmp_path / "copy.toml"
+    c.dialogs_.paths["save-as"] = copy
+    run(c, "save-as")
+    assert not copy.exists() and c.launches == [] and c.quits == []
+    assert c.dialogs_.chosen is None  # not even asked where to save
+
+
 def test_save_as_does_not_copy_a_file_changed_by_hand_while_the_chooser_was_open(make, tmp_path):
     c, path = make()
     c.view._on_change(DEPTH, 90)
@@ -783,6 +798,14 @@ def test_a_config_other_than_the_default_says_so_once(make):
     assert "not the default config" in c.view.banner_label.get_text()
     c.view._on_change(DEPTH, 90)
     assert not c.view.banner.get_visible()  # gone after the next good change
+
+
+def test_an_invalid_file_keeps_its_error_banner_not_the_note(make):
+    c, path = make()  # a non-default path
+    path.write_text("[theme\n")
+    c.reopen()
+    assert c.session.config is None and c.view.banner.get_visible()
+    assert "not the default config" not in c.view.banner_label.get_text()
 
 
 def test_the_default_config_has_no_note(make, tmp_path):

@@ -199,10 +199,32 @@ def test_new_name_goes_on_past_three(tmp_path):
 def test_new_adds_toml_to_a_name_without_a_suffix(tmp_path):
     assert new_path(tmp_path / "work") == tmp_path / "work.toml"
     assert new_path(tmp_path / "work.toml") == tmp_path / "work.toml"
-    assert new_path(tmp_path / "work.conf") == tmp_path / "work.conf"  # another suffix is kept
+    assert new_path(tmp_path / "work.conf") == tmp_path / "work.conf.toml"
     assert create_new(tmp_path / "plain") == tmp_path / "plain.toml"
     assert (tmp_path / "plain.toml").read_text() == NEW_TEXT and not (tmp_path / "plain").exists()
-    assert create_new(tmp_path / "x.conf") == tmp_path / "x.conf"
+    assert create_new(tmp_path / "x.conf") == tmp_path / "x.conf.toml"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("x", "x.toml"),
+        ("x.", "x.toml"),
+        ("x...", "x.toml"),
+        ("x.toml", "x.toml"),
+        ("X.TOML", "X.TOML"),
+        (".toml", "config.toml"),
+        (".TOML", "config.toml"),
+        ("a.b", "a.b.toml"),
+        ("my.config", "my.config.toml"),
+        ("dir/x", "dir/x.toml"),
+    ],
+)
+def test_new_path_is_the_same_on_every_python_version(tmp_path, name, expected):
+    """By name, never Path.suffix (its reading of 'x.' and '.toml' changed between versions):
+    trailing dots go, a bare '.toml' becomes config.toml, .toml is added unless already there
+    (any case), so the Open filter always shows the file."""
+    assert new_path(tmp_path / name) == tmp_path / expected
 
 
 def test_only_regular_files_are_read(tmp_path):

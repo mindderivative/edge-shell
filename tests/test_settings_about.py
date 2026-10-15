@@ -11,7 +11,8 @@ def test_about_reads_this_checkouts_pyproject():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     info = about_info()
     assert info.name == "Edge Shell" and info.version == project["version"]
-    assert info.comments.startswith(project["description"]) and "Fabric" in info.comments
+    assert info.comments.startswith(project["description"])
+    assert info.comments.endswith("Built with Fabric (Python, GTK 3).")
     assert info.website == WEBSITE == "https://github.com/mindderivative/edge-shell"
     assert info.authors == AUTHORS and info.license
 
@@ -43,8 +44,32 @@ def test_without_a_pyproject_the_installed_version_or_unknown(tmp_path, monkeypa
         raise metadata.PackageNotFoundError("edge-shell")
 
     monkeypatch.setattr(about.metadata, "version", missing)
+    monkeypatch.setattr(about.metadata, "metadata", missing)
     info = about_info(tmp_path)  # no pyproject.toml here
     assert info.version == "unknown" and info.license == NO_LICENSE
     assert info.authors == AUTHORS
     monkeypatch.setattr(about.metadata, "version", lambda _n: "0.9")
     assert about_info(tmp_path).version == "0.9"
+
+
+def test_thin_metadata_gives_clean_fallbacks(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nversion = "1"\nauthors = ["Phil", { email = "x@y" }, { name = "Ann" }]\n'
+    )
+    monkeypatch.setattr(about.metadata, "metadata", lambda _n: {"License-Expression": "Apache-2.0"})
+    info = about_info(tmp_path)  # no description, no LICENSE file, malformed authors
+    assert info.comments == "Built with Fabric (Python, GTK 3)."
+    assert info.authors == ("Ann",)
+    assert info.license == "Apache-2.0"  # the installed metadata, before NO_LICENSE
+
+
+def test_installed_metadata_licence_field_is_the_second_fallback(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1"\n')
+    monkeypatch.setattr(about.metadata, "metadata", lambda _n: {"License": "BSD-3-Clause"})
+    assert about_info(tmp_path).license == "BSD-3-Clause"
+
+    def missing(_name):
+        raise metadata.PackageNotFoundError("edge-shell")
+
+    monkeypatch.setattr(about.metadata, "metadata", missing)
+    assert about_info(tmp_path).license == NO_LICENSE

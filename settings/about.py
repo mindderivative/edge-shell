@@ -31,11 +31,16 @@ def about_info(root: Path = ROOT) -> AboutInfo:
         project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError):
         project = {}
-    authors = tuple(a["name"] for a in project.get("authors", []) if a.get("name")) or AUTHORS
+    raw = project.get("authors")
+    entries = raw if isinstance(raw, list) else []
+    # a malformed entry (a string, a table without a name) is ignored
+    authors = tuple(a["name"] for a in entries if isinstance(a, dict) and a.get("name")) or AUTHORS
+    description = project.get("description")
+    lines = [description] if description and isinstance(description, str) else []
     return AboutInfo(
         name=NAME,
         version=project.get("version") or _installed_version(),
-        comments=project.get("description", "") + "\nBuilt with Fabric (Python, GTK 3).",
+        comments="\n".join([*lines, "Built with Fabric (Python, GTK 3)."]),
         website=WEBSITE,
         authors=authors,
         license=_license(root, project.get("license")),
@@ -51,7 +56,8 @@ def _installed_version() -> str:
 
 def _license(root: Path, declared) -> str:
     """The licence text: a LICENSE file next to pyproject.toml, else pyproject's `license`
-    (an SPDX string or a {text = ...} table), else NO_LICENSE."""
+    (an SPDX string or a {text = ...} table), else the installed package's License-Expression
+    or License, else NO_LICENSE."""
     for name in ("LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING"):
         try:
             return (root / name).read_text(encoding="utf-8")
@@ -61,4 +67,8 @@ def _license(root: Path, declared) -> str:
         return declared
     if isinstance(declared, dict) and declared.get("text"):
         return declared["text"]
-    return NO_LICENSE
+    try:  # the installed package's metadata
+        info = metadata.metadata("edge-shell")
+    except metadata.PackageNotFoundError:
+        return NO_LICENSE
+    return info.get("License-Expression") or info.get("License") or NO_LICENSE
