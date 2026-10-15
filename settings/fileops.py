@@ -1,13 +1,22 @@
-"""File-menu decisions without GTK: what happens to unsaved changes when the window leaves a
-config (Close, Exit, New, Open, Save As, the window's close button). Pure: the questions are
-asked through a callable, so tests answer them and no dialog runs."""
+"""File-menu work without GTK: what happens to unsaved changes when the window leaves a config
+(Close, Exit, New, Open, Save As, the window's close button), and the file operations of New,
+Open and Save As. Pure: the questions are asked through a callable, so tests answer them and
+no dialog runs; file-system errors come back as ConfigError, for the window to show."""
 
 from __future__ import annotations
 
+import stat
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from settings import files
+from shell.config.loader import USER_PATH
+from shell.config.models import ConfigError
+
+# File > New writes this: valid TOML with no keys, so every value is the default
+NEW_TEXT = "# Edge Shell config. Keys left out take their defaults (config.default.toml).\n"
 
 
 class Answer(Enum):
@@ -42,3 +51,68 @@ def leave(session: Any, ask: Callable[[], Answer]) -> bool:
     else:
         session.discard()
     return True
+
+
+def default_folder(user_path: Path = USER_PATH) -> Path:
+    """Where the file choosers start: the default config's folder (~/.config/edge-shell),
+    created when missing; the home folder if it cannot be."""
+    folder = user_path.parent
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return Path.home()
+    return folder
+
+
+def new_name(folder: Path) -> str:
+    """A file name File > New suggests: config.toml, or config-2.toml, -3, ... when taken."""
+    name, n = "config.toml", 2
+    while (folder / name).exists():
+        name, n = f"config-{n}.toml", n + 1
+    return name
+
+
+def same_file(a: Path, b: Path) -> bool:
+    """The same file, also through a symlink or a relative path."""
+    return a.resolve() == b.resolve()
+
+
+def create_new(path: Path) -> None:
+    """File > New: write NEW_TEXT at `path` (missing folders are created). Never replaces a
+    file: an existing path is refused."""
+    if path.exists() or path.is_symlink():
+        raise ConfigError(
+            f"{path} already exists; New never replaces a file: choose another name, or open "
+            "it with File > Open"
+        )
+    try:
+        files.write_atomic(path, NEW_TEXT)
+    except OSError as exc:
+        raise ConfigError(f"cannot create {path}: {exc}") from None
+
+
+def check_openable(path: Path) -> None:
+    """File > Open: refuse what the settings window could not show (missing, a folder,
+    unreadable, not UTF-8 text). A text that is not a valid config does open (read-only, with
+    its error), as at start."""
+    if not path.exists():
+        raise ConfigError(f"{path} does not exist")
+    files.read_text(path)  # ConfigError for a folder, no permission or a binary file
+
+
+def save_copy(source: Path, text: str, target: Path) -> Path | None:
+    """File > Save As: write `text` to `target`. A file already there (the chooser asked
+    before replacing it) is first kept as target.before-save-as (.2, .3, ...; returned). A
+    new file gets the mode of `source` (a private config stays private), a replaced one keeps
+    its own."""
+    kept = None
+    mode = None
+    try:
+        if target.exists():
+            kept = files.keep_copy(target, ".before-save-as")
+        elif source.exists():
+            mode = stat.S_IMODE(source.stat().st_mode)
+        files.write_atomic(target, text, mode=mode)
+    except OSError as exc:
+        raise ConfigError(f"cannot write {target}: {exc}") from None
+    return kept
