@@ -73,6 +73,9 @@ class PanelEditor(Gtk.Box):
                 button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
                 button.set_tooltip_text(tip)
                 button.set_sensitive(sensitive)
+                # a press must not move the focus: the name entry's focus-out would rebuild
+                # the page under the click
+                button.set_focus_on_click(False)
                 button.connect("clicked", action)
                 buttons.pack_start(button, False, False, 0)
             body.pack_start(buttons, False, False, 0)
@@ -98,6 +101,7 @@ class PanelEditor(Gtk.Box):
         self.widget_choice.set_active(0)
         wheel_scrolls_the_page(self.widget_choice)
         add = Gtk.Button(label="Add panel")
+        add.set_focus_on_click(False)
         add.connect("clicked", lambda _b: self.add(self.widget_choice.get_active_id()))
         adder.pack_start(self.widget_choice, False, False, 0)
         adder.pack_start(add, False, False, 0)

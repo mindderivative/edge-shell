@@ -743,3 +743,57 @@ def test_a_rename_keeps_the_other_rows_pending_values(tile_view, pending):
     text = path.read_text()
     assert "size = 30" in text and 'name = "Big clock"' in text
     assert row(view, size).editor.widget.get_value() == 30
+
+
+def _count_rebuilds(view):
+    rebuilds = []
+    original = view.rebuild
+    view.rebuild = lambda: (rebuilds.append(1), original())
+    return rebuilds
+
+
+def test_a_titled_change_with_a_pending_title_value_rebuilds_once_and_only_when_idle(
+    make, corner_registry, pending
+):
+    view, path = make()
+    view._on_change((*P0, "widget"), "box")
+    drain()
+    rebuilds = _count_rebuilds(view)
+    row(view, (*P0, "width")).editor.widget.set_value(420)  # pending; its write is titled too
+    view._on_change((*P0, "name"), "Big box")  # as a name entry's focus-out does
+    assert rebuilds == []  # nothing rebuilt inside the focus-out
+    drain()
+    assert len(rebuilds) == 1
+    text = path.read_text()
+    assert "width = 420" in text and 'name = "Big box"' in text
+
+
+def test_a_title_key_reset_applies_the_other_rows_pending_values_first(
+    make, corner_registry, pending
+):
+    view, path = make()
+    view._on_change((*P0, "widget"), "box")
+    view._on_change((*P0, "width"), 350)
+    drain()
+    rebuilds = _count_rebuilds(view)
+    row(view, THICKNESS).editor.widget.set_value(17)  # pending on another row
+    view._on_reset((*P0, "width"))
+    assert rebuilds == []
+    drain()
+    assert len(rebuilds) == 1
+    text = path.read_text()
+    assert "thickness = 17" in text and "width = 350" not in text
+
+
+def test_the_panel_list_buttons_do_not_take_the_focus_on_click(make):
+    """A press on Remove, Move or Add must not move the focus out of the name entry: its
+    focus-out would rebuild the page before the click is released."""
+    view, _ = make()
+    ours = ("Move up", "Move down", "Remove this panel")
+    buttons = [
+        w
+        for w in walk(panel_editor(view))
+        if isinstance(w, Gtk.Button)
+        and (w.get_tooltip_text() in ours or w.get_label() == "Add panel")
+    ]
+    assert len(buttons) == 4 and not any(b.get_focus_on_click() for b in buttons)
