@@ -1,5 +1,7 @@
 """settings.fields: the GTK row of each field kind (widgets only; no window is shown)."""
 
+import dataclasses
+
 import pytest
 
 gi = pytest.importorskip("gi")
@@ -12,10 +14,10 @@ if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
 import settings.fields as fields  # noqa: E402
-from settings.form import FieldSpec, config_form  # noqa: E402
+from settings.form import FieldSpec, WidgetChoice, config_form  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
 
-FORM = config_form(("clock", "dock", "system_bar"))
+FORM = config_form(tuple(WidgetChoice(w) for w in ("clock", "dock", "system_bar")))
 REAL_TIMEOUT_ADD = GLib.timeout_add
 
 
@@ -178,11 +180,13 @@ def test_flush_sends_a_pending_spin_value_and_typed_fonts(monkeypatch):
 
 
 def test_choices_show_their_labels():
-    form = config_form(("box", "clock"), corner_widgets=("box",))
+    form = config_form(
+        (WidgetChoice("summary", "Summary", ("corner",)), WidgetChoice("clock", "Clock"))
+    )
     row, _, _ = row_for(form.edge_panel.field("widget"), "clock")
-    assert [r[0] for r in row.editor.widget.get_model()] == ["clock", "box (corner panel)"]
-    row.editor.widget.set_active_id("box")
-    assert row.editor.widget.get_active_text() == "box (corner panel)"
+    assert [r[0] for r in row.editor.widget.get_model()] == ["Clock", "Summary"]
+    row.editor.widget.set_active_id("summary")
+    assert row.editor.widget.get_active_text() == "Summary"
 
 
 def test_length_row_shows_percent_with_one_decimal():
@@ -374,3 +378,82 @@ def test_a_choice_not_in_the_list_clears_the_selection():
     row, _, _ = row_for(FORM.theme.section("handle_style").field("shape"), "chevron")
     row.show_value(FieldValue("bogus", False, "default"))
     assert row.editor.widget.get_active_id() is None
+
+
+def test_a_text_row_sends_on_enter_or_flush_only_when_changed():
+    row, changes, _ = row_for(FORM.edge_panel.field("name"), "Dock")
+    entry = row.editor.widget
+    assert entry.get_text() == "Dock" and not row.editor.dirty()
+    entry.emit("activate")
+    assert changes == []
+    entry.set_text("Dock 2")
+    assert row.editor.dirty()
+    entry.emit("activate")
+    entry.set_text("Bottom dock")  # typed, Enter not pressed: the window is closing
+    row.flush()
+    assert changes == [(("theme", "x"), "Dock 2"), (("theme", "x"), "Bottom dock")]
+
+
+def test_a_text_row_shows_an_unset_value_as_empty():
+    row, changes, _ = row_for(FieldSpec("font", "Font", "text"), None)
+    assert row.editor.widget.get_text() == "" and not row.editor.dirty() and changes == []
+
+
+def test_a_disabled_choice_is_greyed_out_and_never_sent():
+    spec = FieldSpec(
+        "panel",
+        "Panel type",
+        "enum",
+        choices=("edge", "corner", "float"),
+        labels=("Edge", "Corner", "Float (coming soon)"),
+        disabled=("float",),
+        required=True,
+    )
+    row, changes, _ = row_for(spec, "edge")
+    combo = row.editor.widget
+
+    def sensitive(combo):
+        model, (cell,) = combo.get_model(), combo.get_cells()
+        out = []
+        for i in range(3):  # what GTK does for each row before it draws it
+            combo.get_area().apply_attributes(model, model.get_iter(i), False, False)
+            out.append(cell.get_property("sensitive"))
+        return out
+
+    assert sensitive(combo) == [True, True, False]
+    plain, _, _ = row_for(dataclasses.replace(spec, disabled=()), "edge")
+    assert sensitive(plain.editor.widget) == [True, True, True]
+    combo.set_active_id("float")  # chosen programmatically: not sent, edge comes back
+    assert changes == [] and combo.get_active_id() == "edge"
+    combo.set_active_id("corner")
+    assert changes == [(("theme", "x"), "corner")]
+
+
+def test_a_required_key_has_no_reset_button():
+    row, _, _ = row_for(FORM.edge_panel.field("name"), "Dock", is_set=True)
+    assert not row.reset.get_sensitive()
+
+
+def test_a_text_row_takes_no_more_characters_than_the_schema_allows():
+    name = FORM.edge_panel.field("name")
+    assert name.max_length == 40
+    row, _, _ = row_for(name, "Dock")
+    assert row.editor.widget.get_max_length() == 40
+    row, _, _ = row_for(FieldSpec("font", "Font", "text"), None)
+    assert row.editor.widget.get_max_length() == 0  # no limit in the schema: none
+
+
+def test_activating_or_leaving_an_unset_text_row_sends_nothing():
+    row, changes, _ = row_for(FieldSpec("font", "Font", "text"), None)
+    row.editor.widget.emit("activate")
+    row.editor.widget.emit("focus-out-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
+    row.flush()
+    assert changes == []
+
+
+def test_a_text_row_sends_when_the_entry_loses_focus():
+    row, changes, _ = row_for(FORM.edge_panel.field("name"), "Dock")
+    entry = row.editor.widget
+    entry.set_text("Dock 3")
+    assert entry.emit("focus-out-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)) is False
+    assert changes == [(("theme", "x"), "Dock 3")]

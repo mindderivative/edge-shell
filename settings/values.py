@@ -2,8 +2,9 @@
 
 A field is addressed by its TOML key path (settings.document.Path_). `is_set` says the user
 file sets that key (the row's reset button removes it); `source` names where an unset value
-is inherited from. Panel entries are edge or corner panels (spec 19): the kind comes from the
-widget (registry.widget_kind) and decides which keys the entry takes.
+is inherited from. Panel entries are edge or corner panels (spec 19): the entry's `panel`
+key is its kind and decides which keys the entry takes; every key that is not a panel key
+(FRAMEWORK_KEYS) is a property of the entry's widget (registry.widget_props_model).
 """
 
 from __future__ import annotations
@@ -11,11 +12,27 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from shell.config.models import CORNER_ONLY_KEYS, EDGE_ONLY_KEYS, Config
+from pydantic import ValidationError
+
+from shell.config.models import (
+    CORNER_ONLY_KEYS,
+    EDGE_ONLY_KEYS,
+    FRAMEWORK_KEYS,
+    NAME_MAX_LENGTH,
+    Config,
+)
 from shell.outputs import Output
 from shell.panel_layout import layout_monitor
 from shell.panel_spec import CornerDefaults, CornerRequest, corner_has_edge, default_edge
-from shell.registry import defaults, request_for, requests_for, widget_kind
+from shell.registry import (
+    defaults,
+    request_for,
+    requests_for,
+    supported_kinds,
+    widget_props_model,
+    widget_title,
+)
+from shell.widget import WidgetProps
 
 # keys whose value in effect is the request's (the entry's, else the widget's default)
 PANEL_REQUEST_KEYS = (
@@ -93,8 +110,17 @@ def _src(is_set: bool, inherited: str) -> str:
 def _panel_value(config: Config, name: str, index: int, keys: tuple, is_set: bool) -> FieldValue:
     entry = config.monitor(name).panels[index]
     req = request_for(entry)
-    d = defaults(entry.widget)  # public registry API: never registry._DEFAULTS
+    d = defaults(entry.widget, entry.panel)  # public registry API: never _WIDGETS
     key = keys[0]
+    if key in ("name", "panel"):  # required: always in the file
+        return FieldValue(getattr(entry, key), is_set, _src(is_set, "not set"))
+    if key not in FRAMEWORK_KEYS:  # a widget property: the entry's, else the model's default
+        model = widget_props_model(entry.widget)
+        if key not in model.model_fields:
+            raise KeyError(f"{entry.widget} has no property {key!r}")
+        default = model.model_fields[key].default
+        source = _src(is_set, "widget default")
+        return FieldValue(getattr(req.props, key), is_set, source, default)
     if key == "interaction":
         # always "default": no widget registers interaction defaults today (if one does, the
         # label should become "widget default" for it)
@@ -152,10 +178,14 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     """Setting one key of a panel entry (`entry`: its plain data in the user file), as steps
     (("set" | "unset", key, value)) applied as ONE edit: one write, one reload.
 
-    - A widget of the other kind also unsets the keys only the old kind takes (a dock turned
-      into a corner widget loses its align, length, ...; spec 19), else the shell rejects it.
+    - A widget that cannot be shown in the entry's kind also sets `panel` to the first kind
+      it supports and unsets the keys only the old kind takes (a dock turned into a corner
+      widget loses its align, length, ...; spec 19), else the shell rejects it. The widget
+      keys the new widget does not have go too. The entry keeps its name.
+    - A new `panel` kind unsets the keys only the old kind takes, as above.
     - `value` None for "corner" is a reset: the key is unset and the widget's corner applies.
-    - An unknown widget is a plain set (the session's check rejects it, ConfigError).
+    - An unknown widget, float or a kind the widget does not support is a plain set (the
+      session's check rejects it with the shell's text, ConfigError).
     - A corner (or a corner widget whose corner) that does not contain the entry's edge also
       unsets that edge: the panel then opens from the widget's edge or the corner's default."""
     if value is None and key == "corner":  # reset: back to the widget's corner
@@ -165,19 +195,85 @@ def panel_ops(entry: dict, key: str, value: Any) -> list[tuple[str, str, Any]]:
     corner = None
     if key == "widget":
         try:
-            kind = widget_kind(value)
+            kinds = supported_kinds(value)
         except KeyError:  # unknown widget: the session's check rejects it with the shell's text
             return ops
-        stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
-        ops += [("unset", k, None) for k in stale if k in entry]
+        kind = entry.get("panel") if entry.get("panel") in kinds else kinds[0]
+        if entry.get("panel") != kind:
+            ops.append(("set", "panel", kind))
+        model = widget_props_model(value)
+        ops += [
+            ("unset", k, None)
+            for k in entry
+            if k not in FRAMEWORK_KEYS and not _fits(model, k, entry[k])
+        ]
+        ops += _kind_ops(entry, kind)
         if kind == "corner":
-            corner = entry.get("corner", defaults(value).corner)
+            corner = entry.get("corner", defaults(value, "corner").corner)
+    elif key == "panel":
+        try:
+            supported = value in supported_kinds(entry["widget"])
+        except KeyError:  # unknown widget: the session's check says so
+            supported = False
+        if not supported:  # float, or a kind the widget lacks: rejected by the session
+            return ops
+        ops += _kind_ops(entry, value)
+        if value == "corner":
+            corner = entry.get("corner", defaults(entry["widget"], "corner").corner)
     elif key == "corner":
-        corner = value or defaults(entry["widget"]).corner
+        corner = value or defaults(entry["widget"], "corner").corner
     edge = entry.get("edge")
     if corner is not None and edge is not None and not corner_has_edge(corner, edge):
         ops.append(("unset", "edge", None))
     return ops
+
+
+def _fits(model: type[WidgetProps], key: str, value: Any) -> bool:
+    """True when the new widget has the property `key` and takes `value` for it: a key the two
+    widgets share is kept only then (their types may differ)."""
+    if key not in model.model_fields:
+        return False
+    try:
+        model.model_validate({key: value})
+    except ValidationError as exc:
+        return not any(err["loc"][:1] == (key,) for err in exc.errors())
+    return True
+
+
+def _kind_ops(entry: dict, kind: str) -> list[tuple[str, str, Any]]:
+    """Unset the keys of the other panel kind (spec 19)."""
+    stale = CORNER_ONLY_KEYS if kind == "edge" else EDGE_ONLY_KEYS
+    return [("unset", k, None) for k in stale if k in entry]
+
+
+def unique_name(base: str, taken: list[str]) -> str:
+    """`base`, or "base 2", "base 3", ...: the first that is not in `taken`. The result is at
+    most NAME_MAX_LENGTH characters (a panel name's limit): a long base is cut to make room."""
+    base = base[:NAME_MAX_LENGTH].rstrip()
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = f" {n}"
+        name = base[: NAME_MAX_LENGTH - len(suffix)].rstrip() + suffix
+        if name not in taken:
+            return name
+        n += 1
+
+
+def new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]:
+    """The keys a new panel of `widget` on `monitor` is written with (`user`: the user file's
+    plain data): the first kind the widget supports, a name made from its title that is not
+    used on that monitor yet ("Clock", "Clock 2", ...) and the widget; every other key comes
+    from the widget's defaults. An unknown widget is written as an edge panel named after its
+    id (the session's check rejects it with the shell's text)."""
+    try:
+        kind, title = supported_kinds(widget)[0], widget_title(widget)
+    except KeyError:
+        kind, title = "edge", widget
+    _, panels = lookup(user, ("monitors", monitor, "panels"))
+    taken = [p.get("name") for p in panels or () if isinstance(p, dict)]
+    return {"panel": kind, "name": unique_name(title, taken), "widget": widget}
 
 
 def monitor_names(config: Config, outputs: list[Output]) -> list[tuple[str, bool]]:

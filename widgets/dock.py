@@ -7,9 +7,9 @@ from fabric.widgets.box import Box
 from fabric.widgets.button import Button
 from fabric.widgets.image import Image
 
-from shell.edge_panel import EdgePanel
 from shell.panel_spec import PanelDefaults
-from shell.registry import register
+from shell.registry import register_widget
+from shell.widget import Widget, WidgetProps
 
 APPS = [  # (tooltip, icon name, command)
     ("Terminal", "utilities-terminal-symbolic", "konsole"),
@@ -18,9 +18,11 @@ APPS = [  # (tooltip, icon name, command)
 ]
 
 
-@register("dock", PanelDefaults(edge="bottom", length=560, depth=64, label="dock"))
-class DockPanel(EdgePanel):
-    def build_content(self):
+@register_widget(
+    "dock", title="Dock", edge=PanelDefaults(edge="bottom", length=560, depth=64, label="dock")
+)
+class DockWidget(Widget):
+    def build(self, props: WidgetProps):
         return Box(
             name="dock",
             orientation="h",

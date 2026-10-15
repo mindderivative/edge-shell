@@ -14,11 +14,44 @@ DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config.default.toml"
 USER_PATH = Path.home() / ".config" / "edge-shell" / "config.toml"
 
 
+MISSING_PANEL = 'missing; use "edge", "corner" or "float"'
+OLD_FORMAT = (
+    'panel entries start with panel = "edge" | "corner" | "float", name = "..." and '
+    'widget = "..." (an entry with only a widget is the old format; see the README, "Panels")'
+)
+
+
+def key_path(loc: tuple) -> str:
+    """A pydantic error location as a key path. A panel entry's index is written in brackets,
+    as shell.registry.validate_widgets writes it: monitors.HDMI-A-1.panels[0].name."""
+    out = ""
+    for i, part in enumerate(loc):
+        if isinstance(part, int) and i > 0 and loc[i - 1] == "panels":
+            out += f"[{part}]"
+        else:
+            out += f".{part}" if out else str(part)
+    return out or "config"
+
+
+def _missing_panel(item: dict) -> bool:
+    loc = item["loc"]
+    return (
+        item["type"] == "missing" and len(loc) >= 3 and loc[-1] == "panel" and loc[-3] == "panels"
+    )
+
+
 def format_validation_error(err: ValidationError) -> str:
     lines = []
+    old_format = False
     for item in err.errors():
-        path = ".".join(str(p) for p in item["loc"]) or "config"
-        lines.append(f"{path}: {item['msg']}")
+        path = key_path(item["loc"])
+        if _missing_panel(item):
+            old_format = True
+            lines.append(f"{path}: {MISSING_PANEL}")
+        else:
+            lines.append(f"{path}: {item['msg']}")
+    if old_format:  # once per file, first: the notification cuts the message at 400 characters
+        lines.insert(0, OLD_FORMAT)
     return "\n".join(lines)
 
 

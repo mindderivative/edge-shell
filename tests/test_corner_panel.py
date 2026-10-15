@@ -11,6 +11,7 @@ import shell.corner_panel as cp  # noqa: E402
 import shell.edge_panel as ep  # noqa: E402
 from shell import handle as hd  # noqa: E402
 from shell.panel_spec import CornerGeometry, HandleSpec, Interaction, PanelGeometry  # noqa: E402
+from shell.widget import Widget, WidgetProps  # noqa: E402
 from tests.test_edge_panel_handle import FakeHandleWidget, rects_of  # noqa: E402
 
 MONITOR = SimpleNamespace(get_geometry=lambda: SimpleNamespace(width=1920, height=1080))
@@ -90,6 +91,31 @@ def test_init_takes_its_surface_from_the_subclass(make_config, monkeypatch):
     assert kwargs["layer"] == "top"
     assert kwargs["exclusivity"] == "none"
     assert kwargs["keyboard_mode"] == "none"
+
+
+def test_init_keeps_its_props_and_builds_the_widget_with_them(make_config, monkeypatch):
+    """The props given to EdgePanel(...) must reach widget.build (the panel stores them)."""
+
+    class Stop(Exception):
+        pass
+
+    class Own(WidgetProps):
+        text: str = "x"
+
+    class Recorder(Widget):
+        def build(self, props):
+            raise Stop(props)
+
+    monkeypatch.setattr(ep.WaylandWindow, "__init__", lambda _self, **_kw: None)
+    monkeypatch.setattr(ep.GtkLayerShell, "set_exclusive_zone", lambda *_a: None)
+    monkeypatch.setattr(ep.EdgePanel, "connect", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ep.EdgePanel, "destroy", lambda _self: None)  # the failed-build cleanup
+    monkeypatch.setattr(ep, "monitor_index", lambda _m: 0)
+    spec = PanelGeometry("dock", "bottom", 680, 560, 64, "extended", "dock")
+    props = Own(text="y")  # not NO_PROPS: dropping the props must show
+    with pytest.raises(Stop) as caught:
+        ep.EdgePanel(spec, make_config().theme, MONITOR, 0, "s", widget=Recorder(), props=props)
+    assert caught.value.args[0] is props
 
 
 @pytest.mark.parametrize(
@@ -182,3 +208,26 @@ def test_the_corner_input_region_is_reapplied_after_the_parent_allocate(make_con
     ep.EdgePanel.do_size_allocate(s, None)
     assert order == ["parent", "region"]
     assert s.regions[0] is None and rects_of(s.regions[-1]) == [(0, 364, 300, 26)]
+
+
+def test_a_build_that_raises_destroys_the_half_built_window(make_config, monkeypatch):
+    """The window exists before its content: a widget that raises in build() (after it may have
+    started a timer) must not leave the window, or its widget's timer, behind."""
+
+    class Boom(Exception):
+        pass
+
+    class Failing(Widget):
+        def build(self, props):
+            raise Boom
+
+    destroyed = []
+    monkeypatch.setattr(ep.WaylandWindow, "__init__", lambda _self, **_kw: None)
+    monkeypatch.setattr(ep.GtkLayerShell, "set_exclusive_zone", lambda *_a: None)
+    monkeypatch.setattr(ep.EdgePanel, "connect", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ep.EdgePanel, "destroy", lambda self: destroyed.append(self))
+    monkeypatch.setattr(ep, "monitor_index", lambda _m: 0)
+    spec = PanelGeometry("dock", "bottom", 680, 560, 64, "extended", "dock")
+    with pytest.raises(Boom):  # still raised: MonitorShell logs and skips the panel
+        ep.EdgePanel(spec, make_config().theme, MONITOR, 0, "s", widget=Failing())
+    assert len(destroyed) == 1

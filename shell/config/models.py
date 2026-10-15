@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Annotated, Any, Literal, get_args
 
 from pydantic import (
@@ -25,6 +26,7 @@ CORNERS: tuple[str, ...] = get_args(Corner)  # the settings window's choices
 
 _HEX = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")  # #rrggbb or #rrggbbaa
 _FONT_FORBIDDEN = re.compile(r'["\\{};]')  # font names go unescaped into generated CSS
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")  # and a control character fails the CSS load
 COLOR_FIELDS = (
     "frame",
     "text",
@@ -42,6 +44,18 @@ class ConfigError(Exception):
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def check_font_name(name: str) -> str:
+    """A font family name: it goes unescaped into generated CSS (the theme's font list, a
+    widget's font property), so CSS metacharacters are refused."""
+    if _CONTROL.search(name):
+        raise ValueError(f"font name {name!r} must not contain a control character")
+    if _FONT_FORBIDDEN.search(name):
+        raise ValueError(
+            f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"
+        )
+    return name
 
 
 def check_hex(value: str) -> str:
@@ -132,10 +146,7 @@ class Theme(_Strict):
     @classmethod
     def _font_names(cls, value: list[str]) -> list[str]:
         for name in value:
-            if _FONT_FORBIDDEN.search(name):
-                raise ValueError(
-                    f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"
-                )
+            check_font_name(name)
         return value
 
 
@@ -222,18 +233,63 @@ class InteractionConfig(_Strict):
 
 
 # The panel keys by kind (spec 19; the settings window reads them): both kinds take
-# SHARED_KEYS; an entry mixing EDGE_ONLY_KEYS with CORNER_ONLY_KEYS is rejected.
-SHARED_KEYS = ("widget", "edge", "state", "handle", "interaction")
+# SHARED_KEYS; an entry mixing EDGE_ONLY_KEYS with CORNER_ONLY_KEYS is rejected. Every other
+# key of an entry is a widget key: PanelConfig collects it in `widget_props`.
+SHARED_KEYS = ("panel", "name", "widget", "edge", "state", "handle", "interaction")
 EDGE_ONLY_KEYS = ("pos", "align", "offset", "order", "length", "min_length", "max_length", "depth")
 CORNER_ONLY_KEYS = ("corner", "width", "height")
+FRAMEWORK_KEYS = frozenset((*SHARED_KEYS, *EDGE_ONLY_KEYS, *CORNER_ONLY_KEYS))
+PanelKind = Literal["edge", "corner", "float"]  # float: reserved, the registry rejects it
+PANEL_KINDS: tuple[str, ...] = get_args(PanelKind)  # the settings window's choices
+NAME_MAX_LENGTH = 40
+PanelName = Annotated[str, Field(min_length=1, max_length=NAME_MAX_LENGTH)]
+
+
+_BIDI_CONTROLS = frozenset(chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A)))
+
+
+def check_text_characters(value: str) -> str:
+    """The character rules for text that is shown as one line (a panel's name, the clock's
+    format): no control characters, line or paragraph separators, bidirectional overrides,
+    and no invisible format character at either end."""
+    if any(unicodedata.category(c) == "Cc" for c in value):
+        raise ValueError("must not contain control characters (tab, newline, ...)")
+    if any(unicodedata.category(c) in ("Zl", "Zp") for c in value):
+        raise ValueError("must not contain a line or paragraph separator (U+2028, U+2029)")
+    if any(c in _BIDI_CONTROLS for c in value):
+        raise ValueError(
+            "must not contain bidirectional control characters (U+202A-202E, U+2066-2069)"
+        )
+    if value and any(unicodedata.category(c) == "Cf" for c in (value[0], value[-1])):
+        raise ValueError(
+            "must not start or end with an invisible format character (zero-width space, BOM, ...)"
+        )
+    return value
+
+
+def check_panel_name(value: str) -> str:
+    """A panel's name: its label in logs, notifications and the settings window."""
+    check_text_characters(value)
+    if value != value.strip():
+        raise ValueError("must not start or end with whitespace (a space, a no-break space, ...)")
+    return value
 
 
 class PanelConfig(_Strict):
-    """One panel entry. Edge panels use edge / align / offset / order / length / depth; corner
-    panels (spec 19) use corner / edge (the edge they open from) / width / height. Which kind an
-    entry is comes from its widget (shell.registry.validate_widgets checks the keys against
-    it); an entry that mixes the two kinds' keys is rejected here already."""
+    """One panel entry. `panel` is its kind: edge panels use edge / align / offset / order /
+    length / depth; corner panels (spec 19) use corner / edge (the edge they open from) /
+    width / height. Every key that is not in FRAMEWORK_KEYS is a widget key: it is collected
+    in `widget_props` and checked against the widget's property model by
+    shell.registry.validate_widgets, which also checks the kind keys against `panel`; an entry
+    that mixes the two kinds' keys is rejected here already.
 
+    The widget bag is built from file data only: dump-then-validate is not idempotent, because
+    a dumped `widget_props` would nest as a widget key of the next entry. The model is frozen
+    but the bag is a mutable, unhashable dict; requests that travel carry a frozen WidgetProps
+    instead."""
+
+    panel: PanelKind
+    name: PanelName
     widget: str
     edge: Edge | None = None
     pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
@@ -250,6 +306,22 @@ class PanelConfig(_Strict):
     corner: Corner | None = None
     width: Length | None = None  # px from the screen corner, both frame bands included
     height: Length | None = None
+    widget_props: dict[str, Any] = Field(default_factory=dict)  # never a key in the file
+
+    @model_validator(mode="before")
+    @classmethod
+    def _collect_widget_keys(cls, data: Any) -> Any:
+        """Every key that is not a framework key goes to `widget_props`, a key that is itself
+        called "widget_props" too (in the file it can only be a widget key)."""
+        if not isinstance(data, dict):
+            return data
+        own = {k: v for k, v in data.items() if k in FRAMEWORK_KEYS}
+        return {**own, "widget_props": {k: v for k, v in data.items() if k not in FRAMEWORK_KEYS}}
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return check_panel_name(value)
 
     @field_validator("length")
     @classmethod

@@ -1,7 +1,9 @@
 """GTK editor for one monitor's panel list: an expander per [[panels]] entry with its fields,
 plus add, remove and reorder buttons. Edge and corner panels (spec 19) share the list; each
-entry shows the rows of its widget's kind. Structural edits go through `on_edit` (the window
-applies them with the session and rebuilds); field rows come from the window's `make_rows`."""
+entry shows the rows of its kind, the panel type row when its widget can be shown in more than
+one kind, and a "Widget" frame with the widget's own properties (panel/widget spec 3.7).
+Structural edits go through `on_edit` (the window applies them with the session and rebuilds);
+field rows come from the window's `make_rows`."""
 
 from __future__ import annotations
 
@@ -16,26 +18,28 @@ from gi.repository import Gtk
 from settings.document import UserDocument
 from settings.fields import wheel_scrolls_the_page
 from settings.form import ConfigForm, SectionSpec
+from settings.values import new_panel_entry
 from shell.panel_spec import CornerRequest, PanelRequest
-from shell.registry import widget_kind
+from shell.registry import supported_kinds
 
 Edit = Callable[[UserDocument], Any]
 
 
 def panel_title(index: int, req: PanelRequest | CornerRequest) -> str:
-    """'1. dock: bottom, center', or for a corner panel '2. widget_panel: bottom-left, from
-    bottom, 300x390' (1-based, as the list reads)."""
+    """'1. Dock: bottom, center', or for a corner panel '2. Summary: bottom-left, from bottom,
+    300x390': the entry's name (1-based, as the list reads)."""
     if isinstance(req, CornerRequest):
         where = f"{req.corner}, from {req.edge}, {req.width}x{req.height}"
-        return f"{index + 1}. {req.widget}: {where}"
-    return f"{index + 1}. {req.widget}: {req.edge}, {req.align}"
+        return f"{index + 1}. {req.name}: {where}"
+    return f"{index + 1}. {req.name}: {req.edge}, {req.align}"
 
 
 def panel_section(form: ConfigForm, req: PanelRequest | CornerRequest) -> SectionSpec:
-    """The rows of one entry: its widget's kind; a corner panel's edge row offers only the two
-    edges of the corner it is in."""
+    """The rows of one entry: its kind's; a corner panel's edge row offers only the two edges
+    of the corner it is in; the panel type row only when the widget supports several kinds."""
     corner = req.corner if isinstance(req, CornerRequest) else None
-    return form.panel_for(widget_kind(req.widget), corner)
+    kind = "edge" if corner is None else "corner"
+    return form.panel_for(kind, corner, supported_kinds(req.widget))
 
 
 class PanelEditor(Gtk.Box):
@@ -69,11 +73,23 @@ class PanelEditor(Gtk.Box):
                 button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
                 button.set_tooltip_text(tip)
                 button.set_sensitive(sensitive)
+                # a press must not move the focus: the name entry's focus-out would rebuild
+                # the page under the click
+                button.set_focus_on_click(False)
                 button.connect("clicked", action)
                 buttons.pack_start(button, False, False, 0)
             body.pack_start(buttons, False, False, 0)
-            rows = make_rows(panel_section(form, req), ("monitors", monitor, "panels", i))
-            body.pack_start(rows, False, False, 0)
+            prefix = ("monitors", monitor, "panels", i)
+            body.pack_start(make_rows(panel_section(form, req), prefix), False, False, 0)
+            props = form.widget_props(req.widget)
+            if props is not None:  # the widget's own keys: in the same entry (same prefix)
+                frame = Gtk.Frame(label=props.label)
+                inner = make_rows(props, prefix)
+                inner.set_margin_start(8)
+                inner.set_margin_end(8)
+                inner.set_margin_bottom(8)
+                frame.add(inner)
+                body.pack_start(frame, False, False, 6)
             expander.add(body)
             self.expanders.append(expander)
             self.pack_start(expander, False, False, 0)
@@ -85,16 +101,22 @@ class PanelEditor(Gtk.Box):
         self.widget_choice.set_active(0)
         wheel_scrolls_the_page(self.widget_choice)
         add = Gtk.Button(label="Add panel")
+        add.set_focus_on_click(False)
         add.connect("clicked", lambda _b: self.add(self.widget_choice.get_active_id()))
         adder.pack_start(self.widget_choice, False, False, 0)
         adder.pack_start(add, False, False, 0)
         self.pack_start(adder, False, False, 0)
 
     def add(self, widget: str | None) -> None:
-        """A new entry with only its widget, edge or corner kind alike (a corner widget's
-        entry is {"widget": "widget_panel"}: its corner and size are the widget's)."""
+        """A new entry with its widget's first kind, a name made from the widget's title that
+        is unique on this monitor, and the widget (a summary block's entry is {"panel":
+        "corner", "name": "Summary", "widget": "summary"}: its corner and size are the
+        widget's)."""
         if widget:
-            self._on_edit(lambda d: d.add_panel(self.monitor, widget), self._count)
+            self._on_edit(
+                lambda d: d.add_panel(self.monitor, new_panel_entry(d.data, self.monitor, widget)),
+                self._count,
+            )
 
     def remove(self, index: int) -> None:
         self._on_edit(lambda d: d.remove_panel(self.monitor, index), None)

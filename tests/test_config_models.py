@@ -44,11 +44,11 @@ def test_theme_bounds(make_config, theme, field):
 @pytest.mark.parametrize(
     ("panel", "field"),
     [
-        ({"widget": "dock", "length": 0}, "length"),
-        ({"widget": "dock", "depth": -5}, "depth"),
-        ({"widget": "dock", "length": 999999}, "length"),
-        ({"widget": "dock", "state": "open"}, "state"),
-        ({"widget": "dock", "edge": "middle"}, "edge"),
+        ({"panel": "edge", "name": "dock", "widget": "dock", "length": 0}, "length"),
+        ({"panel": "edge", "name": "dock", "widget": "dock", "depth": -5}, "depth"),
+        ({"panel": "edge", "name": "dock", "widget": "dock", "length": 999999}, "length"),
+        ({"panel": "edge", "name": "dock", "widget": "dock", "state": "open"}, "state"),
+        ({"panel": "edge", "name": "dock", "widget": "dock", "edge": "middle"}, "edge"),
     ],
 )
 def test_panel_bounds_report_key_path(make_config, panel, field):
@@ -58,10 +58,10 @@ def test_panel_bounds_report_key_path(make_config, panel, field):
 
 
 def test_pos_accepts_int_and_center_only():
-    assert PanelConfig(widget="dock", pos=600).pos == 600
-    assert PanelConfig(widget="dock", pos="center").pos == "center"
+    assert PanelConfig(panel="edge", name="dock", widget="dock", pos=600).pos == 600
+    assert PanelConfig(panel="edge", name="dock", widget="dock", pos="center").pos == "center"
     with pytest.raises(ValidationError):
-        PanelConfig(widget="dock", pos="middle")
+        PanelConfig(panel="edge", name="dock", widget="dock", pos="middle")
 
 
 def test_shell_mode_validated(make_config):
@@ -92,6 +92,13 @@ def test_font_names_with_css_metacharacters_rejected(make_config, bad):
         make_config(theme={"font": ["Hack", bad]})
     assert exc.value.errors()[0]["loc"] == ("theme", "font")
     assert "font name" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["Hack\nNerd", "a\tb", "a\x00b", "a\x7fb", "a\x1fb"])
+def test_font_names_with_control_characters_rejected(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"font": ["Hack", bad]})
+    assert "control character" in str(exc.value)
 
 
 def test_font_override_with_bad_name_fails_at_load(make_config):
@@ -149,22 +156,41 @@ def test_valid_six_and_eight_digit_colors_still_pass(make_config, good):
 
 @pytest.mark.parametrize("length", [60, 4000, "fill", "content", "1%", "50%", "12.5%", "100%"])
 def test_length_modes_accepted(length):
-    assert PanelConfig(widget="dock", length=length).length == length
+    assert PanelConfig(panel="edge", name="dock", widget="dock", length=length).length == length
 
 
 @pytest.mark.parametrize("length", [59, 4001, "0%", "101%", "half", "560", "50 %", True])
 def test_bad_length_names_the_key_path(make_config, length):
     with pytest.raises(ValidationError) as exc:
-        make_config(monitors={"HDMI-A-1": {"panels": [{"widget": "dock", "length": length}]}})
+        make_config(
+            monitors={
+                "HDMI-A-1": {
+                    "panels": [
+                        {"panel": "edge", "name": "dock", "widget": "dock", "length": length}
+                    ]
+                }
+            }
+        )
     (error,) = exc.value.errors()
     assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0, "length")
     assert '"fill", "content" or a percentage' in error["msg"]
 
 
 def test_align_offset_order_and_bounds():
-    p = PanelConfig(widget="dock", align="end", offset=12, order=3, min_length=100, max_length=900)
+    p = PanelConfig(
+        panel="edge",
+        name="dock",
+        widget="dock",
+        align="end",
+        offset=12,
+        order=3,
+        min_length=100,
+        max_length=900,
+    )
     assert (p.align, p.offset, p.order, p.min_length, p.max_length) == ("end", 12, 3, 100, 900)
-    assert PanelConfig(widget="dock", offset=-40).offset == -40  # center may shift either way
+    assert (
+        PanelConfig(panel="edge", name="dock", widget="dock", offset=-40).offset == -40
+    )  # center may shift either way
 
 
 @pytest.mark.parametrize(
@@ -179,7 +205,13 @@ def test_align_offset_order_and_bounds():
 )
 def test_placement_conflicts_name_the_panel(make_config, panel, message):
     with pytest.raises(ValidationError) as exc:
-        make_config(monitors={"HDMI-A-1": {"panels": [{"widget": "dock", **panel}]}})
+        make_config(
+            monitors={
+                "HDMI-A-1": {
+                    "panels": [{"panel": "edge", "name": "dock", "widget": "dock", **panel}]
+                }
+            }
+        )
     (error,) = exc.value.errors()
     assert error["loc"] == ("monitors", "HDMI-A-1", "panels", 0)
     assert message in error["msg"]
@@ -188,10 +220,26 @@ def test_placement_conflicts_name_the_panel(make_config, panel, message):
 @pytest.mark.parametrize(
     ("panel", "field", "kind"),
     [
-        ({"widget": "dock", "align": "middle"}, "align", "literal_error"),
-        ({"widget": "dock", "order": -1}, "order", "greater_than_equal"),
-        ({"widget": "dock", "offset": 20001}, "offset", "less_than_equal"),
-        ({"widget": "dock", "min_length": 10}, "min_length", "greater_than_equal"),
+        (
+            {"panel": "edge", "name": "dock", "widget": "dock", "align": "middle"},
+            "align",
+            "literal_error",
+        ),
+        (
+            {"panel": "edge", "name": "dock", "widget": "dock", "order": -1},
+            "order",
+            "greater_than_equal",
+        ),
+        (
+            {"panel": "edge", "name": "dock", "widget": "dock", "offset": 20001},
+            "offset",
+            "less_than_equal",
+        ),
+        (
+            {"panel": "edge", "name": "dock", "widget": "dock", "min_length": 10},
+            "min_length",
+            "greater_than_equal",
+        ),
     ],
 )
 def test_new_panel_keys_report_key_path(make_config, panel, field, kind):

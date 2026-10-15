@@ -2,10 +2,16 @@
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Dock"
 widget = "dock"
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Clock"
 widget = "clock"
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "System bar"
 widget = "system_bar"

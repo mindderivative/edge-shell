@@ -3,11 +3,14 @@ import pytest
 from shell import registry
 from shell.config.models import ConfigError, PanelConfig
 from shell.panel_spec import PanelDefaults, PanelRequest
+from shell.widget import Widget
 
 
 def test_duplicate_registration_rejected(fake_registry):
     with pytest.raises(ValueError):
-        registry.register("dock", PanelDefaults("top", 100, 40, "x"))(type("X", (), {}))
+        registry.register_widget("dock", title="X", edge=PanelDefaults("top", 100, 40, "x"))(
+            type("X", (Widget,), {})
+        )
 
 
 def test_widget_names_sorted(fake_registry):
@@ -17,8 +20,13 @@ def test_widget_names_sorted(fake_registry):
 def test_validate_widgets_reports_every_bad_path(fake_registry, make_config):
     cfg = make_config(
         monitors={
-            "HDMI-A-1": {"panels": [{"widget": "dock"}, {"widget": "ghost"}]},
-            "DP-1": {"panels": [{"widget": "phantom"}]},
+            "HDMI-A-1": {
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "ghost", "widget": "ghost"},
+                ]
+            },
+            "DP-1": {"panels": [{"panel": "edge", "name": "phantom", "widget": "phantom"}]},
         }
     )
     with pytest.raises(ConfigError) as exc:
@@ -26,10 +34,30 @@ def test_validate_widgets_reports_every_bad_path(fake_registry, make_config):
     text = str(exc.value)
     assert "monitors.HDMI-A-1.panels[1].widget" in text
     assert "monitors.DP-1.panels[0].widget" in text
+    assert text.endswith("known widgets: bar, clock, dock")
+
+
+def test_only_an_unknown_widget_error_lists_the_known_widgets(fake_registry, make_config):
+    cfg = make_config(
+        monitors={
+            "M": {
+                "panels": [
+                    {"panel": "edge", "name": "same", "widget": "dock"},
+                    {"panel": "edge", "name": "same", "widget": "dock", "colour": "red"},
+                ]
+            }
+        }
+    )
+    with pytest.raises(ConfigError) as exc:
+        registry.validate_widgets(cfg)
+    assert "unknown key for widget" in str(exc.value) and "names must be unique" in str(exc.value)
+    assert "known widgets" not in str(exc.value)
 
 
 def test_request_uses_widget_defaults(fake_registry):
-    assert registry.request_for(PanelConfig(widget="dock")) == PanelRequest(
+    assert registry.request_for(
+        PanelConfig(panel="edge", name="dock", widget="dock")
+    ) == PanelRequest(
         widget="dock",
         edge="bottom",
         align="center",
@@ -43,12 +71,21 @@ def test_request_uses_widget_defaults(fake_registry):
         state="extended",
         label="dock",
         fallback_length=560,
+        name="dock",
     )
 
 
 def test_request_overrides_win(fake_registry):
     got = registry.request_for(
-        PanelConfig(widget="dock", depth=80, edge="top", state="collapsed", order=2)
+        PanelConfig(
+            panel="edge",
+            name="dock",
+            widget="dock",
+            depth=80,
+            edge="top",
+            state="collapsed",
+            order=2,
+        )
     )
     assert (got.depth, got.edge, got.state, got.length, got.order) == (
         80,
@@ -61,7 +98,9 @@ def test_request_overrides_win(fake_registry):
 
 def test_length_modes_and_bounds_pass_through(fake_registry):
     got = registry.request_for(
-        PanelConfig(widget="dock", length="fill", min_length=100, max_length=900)
+        PanelConfig(
+            panel="edge", name="dock", widget="dock", length="fill", min_length=100, max_length=900
+        )
     )
     assert (got.length, got.min_length, got.max_length, got.fallback_length) == (
         "fill",
@@ -83,20 +122,24 @@ def test_length_modes_and_bounds_pass_through(fake_registry):
     ],
 )
 def test_placement_is_taken_as_a_whole(fake_registry, entry, expected):
-    got = registry.request_for(PanelConfig(widget="bar", **entry))
+    got = registry.request_for(PanelConfig(panel="edge", name="bar", widget="bar", **entry))
     assert (got.pos, got.align, got.offset) == expected
 
 
 def test_unknown_widget_request_lists_known(fake_registry):
     with pytest.raises(ConfigError, match="nope"):
-        registry.request_for(PanelConfig(widget="nope"))
+        registry.request_for(PanelConfig(panel="edge", name="nope", widget="nope"))
 
 
 def test_requests_for_keeps_order_and_duplicates(fake_registry, make_config):
     cfg = make_config(
         monitors={
             "HDMI-A-1": {
-                "panels": [{"widget": "dock"}, {"widget": "clock"}, {"widget": "dock", "order": 1}]
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                    {"panel": "edge", "name": "dock 2", "widget": "dock", "order": 1},
+                ]
             }
         }
     )
@@ -107,15 +150,26 @@ def test_requests_for_keeps_order_and_duplicates(fake_registry, make_config):
 def test_deprecated_pos_paths_lists_every_entry_using_pos(make_config):
     cfg = make_config(
         monitors={
-            "A": {"panels": [{"widget": "dock"}, {"widget": "bar", "pos": 600}]},
-            "B": {"panels": [{"widget": "clock", "pos": "center"}]},
+            "A": {
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "bar", "widget": "bar", "pos": 600},
+                ]
+            },
+            "B": {
+                "panels": [{"panel": "edge", "name": "clock", "widget": "clock", "pos": "center"}]
+            },
         }
     )
     assert registry.deprecated_pos_paths(cfg) == [
         "monitors.A.panels.1.pos",
         "monitors.B.panels.0.pos",
     ]
-    no_pos = make_config(monitors={"A": {"panels": [{"widget": "dock", "align": "end"}]}})
+    no_pos = make_config(
+        monitors={
+            "A": {"panels": [{"panel": "edge", "name": "dock", "widget": "dock", "align": "end"}]}
+        }
+    )
     assert registry.deprecated_pos_paths(no_pos) == []
 
 
@@ -124,15 +178,50 @@ def test_moved_default_paths_lists_system_bars_that_override_without_a_placement
         monitors={
             "A": {
                 "panels": [
-                    {"widget": "system_bar"},  # untouched default: not listed
-                    {"widget": "system_bar", "edge": "top"},
-                    {"widget": "system_bar", "length": 524, "pos": 600},  # has pos
-                    {"widget": "system_bar", "depth": 20, "align": "end"},  # has align
-                    {"widget": "system_bar", "state": "collapsed"},  # no override
-                    {"widget": "dock", "edge": "top"},  # not the system bar
+                    {
+                        "panel": "edge",
+                        "name": "system_bar",
+                        "widget": "system_bar",
+                    },  # untouched default: not listed
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 2",
+                        "widget": "system_bar",
+                        "edge": "top",
+                    },
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 3",
+                        "widget": "system_bar",
+                        "length": 524,
+                        "pos": 600,
+                    },  # has pos
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 4",
+                        "widget": "system_bar",
+                        "depth": 20,
+                        "align": "end",
+                    },  # has align
+                    {
+                        "panel": "edge",
+                        "name": "system_bar 5",
+                        "widget": "system_bar",
+                        "state": "collapsed",
+                    },  # no override
+                    {
+                        "panel": "edge",
+                        "name": "dock",
+                        "widget": "dock",
+                        "edge": "top",
+                    },  # not the system bar
                 ]
             },
-            "B": {"panels": [{"widget": "system_bar", "length": 524}]},
+            "B": {
+                "panels": [
+                    {"panel": "edge", "name": "system_bar", "widget": "system_bar", "length": 524}
+                ]
+            },
         }
     )
     assert registry.moved_default_paths(cfg) == [

@@ -11,12 +11,18 @@ accent = "#8fd3b6"   # mint: Gate A item 3 changes it; this comment must survive
 shell = "edge"       # the test monitor
 
 [[monitors.HDMI-A-1.panels]]   # dock, bottom centre
+panel = "edge"
+name = "Dock"
 widget = "dock"
 
 [[monitors.HDMI-A-1.panels]]   # clock, top centre
+panel = "edge"
+name = "Clock"
 widget = "clock"
 
 [[monitors.HDMI-A-1.panels]]   # system bar, right edge
+panel = "edge"
+name = "System bar"
 widget = "system_bar"
 
 [monitors.DP-1]

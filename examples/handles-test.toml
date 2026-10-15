@@ -6,15 +6,21 @@
 shell = "edge"
 
 [[monitors.HDMI-A-1.panels]]    # 0: dock, bottom centre: today's dots, every interaction
+panel = "edge"
+name = "Dock"
 widget = "dock"
 
 [[monitors.HDMI-A-1.panels]]    # 1: top left, click only: "auto" draws a chevron
+panel = "edge"
+name = "Clock (click only)"
 widget = "clock"
 align = "start"
 interaction.hover = false
 interaction.drag = false
 
 [[monitors.HDMI-A-1.panels]]    # 2: top right, hover + drag (no click): "auto" draws a bar
+panel = "edge"
+name = "Clock (hover and drag)"
 widget = "clock"
 align = "end"
 state = "collapsed"
@@ -24,6 +30,8 @@ handle.color = "#8fd3b6"
 handle.hover_color = "#ffffff"
 
 [[monitors.HDMI-A-1.panels]]    # 3: right edge: an explicit chevron, thinner, 100 px up
+panel = "edge"
+name = "System bar"
 widget = "system_bar"
 handle.shape = "chevron"
 handle.size = 24
@@ -31,6 +39,8 @@ handle.weight = 2
 handle.offset = -100
 
 [[monitors.HDMI-A-1.panels]]    # 4: bottom left, every interaction off: only `state` opens it
+panel = "edge"
+name = "Clock (state only)"
 widget = "clock"
 edge = "bottom"
 align = "start"

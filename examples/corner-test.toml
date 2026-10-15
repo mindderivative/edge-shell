@@ -5,24 +5,34 @@
 [monitors.HDMI-A-1]
 shell = "edge"
 
-[[monitors.HDMI-A-1.panels]]    # 0: the widget panel: bottom-left, rising out of the bottom edge
-widget = "widget_panel"         #    (its defaults: 300 x 390 px from the corner, extended)
+[[monitors.HDMI-A-1.panels]]    # 0: the summary block: bottom-left, rising out of the bottom
+panel = "corner"                #    edge (its defaults: 300 x 390 px from the corner, extended)
+name = "Summary"
+widget = "summary"
 
 [[monitors.HDMI-A-1.panels]]    # 1: dock, bottom centre
+panel = "edge"
+name = "Dock"
 widget = "dock"
 
-[[monitors.HDMI-A-1.panels]]    # 2: clock at the start of the bottom edge: right of the widget panel
+[[monitors.HDMI-A-1.panels]]    # 2: clock at the start of the bottom edge: right of the summary
+panel = "edge"
+name = "Clock"
 widget = "clock"
 edge = "bottom"
 align = "start"
 
 [[monitors.HDMI-A-1.panels]]    # 3: system bar on the left edge, at its end: above the lifted corner
+panel = "edge"
+name = "System bar"
 widget = "system_bar"
 edge = "left"
 align = "end"
 
-[[monitors.HDMI-A-1.panels]]    # 4: a second widget panel, top-right, opening from the right
-widget = "widget_panel"         #    edge, collapsed, click only (auto shape: a chevron)
+[[monitors.HDMI-A-1.panels]]    # 4: a second summary block, top-right, opening from the right
+panel = "corner"                #    edge, collapsed, click only (auto shape: a chevron)
+name = "Summary top-right"
+widget = "summary"
 corner = "top-right"
 edge = "right"
 width = 260

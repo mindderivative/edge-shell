@@ -18,18 +18,19 @@ from gi.repository import GLib, Gtk
 
 from settings.document import UserDocument
 from settings.fields import FieldRow
-from settings.form import MODE_HINTS, SectionSpec, config_form
+from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
 from settings.panels import PanelEditor
 from settings.session import ChangedOutside, SettingsSession, check_text
 from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
-from shell.registry import requests_for, widget_kind, widget_names
+from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
-# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind;
-# corner: the edge choices): a change rebuilds the page and keeps that panel open
-TITLE_KEYS = ("widget", "edge", "align", "corner", "width", "height")
+# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
+# and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
+# the page and keeps that panel open
+TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "height")
 
 
 class SettingsView(Gtk.Box):
@@ -37,9 +38,7 @@ class SettingsView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         self.outputs = {o.name: o for o in outputs}
-        names = tuple(widget_names())
-        corner = tuple(n for n in names if widget_kind(n) == "corner")
-        self.form = config_form(names, corner)
+        self.form = config_form(registry_widgets())
         self.rows: list[FieldRow] = []
         self.previews: dict[str, Gtk.Label] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
@@ -49,6 +48,7 @@ class SettingsView(Gtk.Box):
         self.refused_outside = False
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
+        self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -87,6 +87,9 @@ class SettingsView(Gtk.Box):
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
         or a hand edit); keeps the visible page."""
+        if self._rebuild_idle:  # a deferred rebuild is overtaken by this one
+            GLib.source_remove(self._rebuild_idle)
+            self._rebuild_idle = 0
         visible = self.stack.get_visible_child_name()
         for row in self.rows:
             row.discard()  # pending or typed values go with the old rows, never written later
@@ -220,7 +223,13 @@ class SettingsView(Gtk.Box):
         self.banner.hide()
 
     # ---- edits ---------------------------------------------------------------------------
-    def apply(self, edit: Edit, row: FieldRow | None = None, structural: bool = False) -> bool:
+    def apply(
+        self,
+        edit: Edit,
+        row: FieldRow | None = None,
+        structural: bool = False,
+        defer: bool = False,
+    ) -> bool:
         """Apply one edit; True when it was written. A rejected edit shows its error under
         `row` (or in the banner); a hand edit since the last read reloads everything."""
         try:
@@ -244,30 +253,52 @@ class SettingsView(Gtk.Box):
             row.show_error(None)  # its own edit or reset went through
         self.hide_banner()
         if structural:
-            self._rebuild_soon()
+            self._rebuild_soon(defer)
         else:
             self.refresh()
         return True
 
-    def _rebuild_soon(self) -> None:
+    def _rebuild_soon(self, defer: bool = False) -> None:
         """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
-        destroy the rows that still hold a pending value."""
+        destroy the rows that still hold a pending value. `defer`: when the loop is idle, not
+        now (a name entry's focus-out runs this before the click that caused it is released:
+        a button unparented by the rebuild would lose that click)."""
         if self._flushing:
             self._rebuild_due = True
+        elif defer:
+            if not self._rebuild_idle:
+                self._rebuild_idle = GLib.idle_add(self._rebuild_idle_cb)
         else:
             self.rebuild()
+
+    def _rebuild_idle_cb(self) -> bool:
+        self._rebuild_idle = 0
+        self.rebuild()
+        return False
 
     def _on_change(self, path: tuple, value: Any) -> None:
         titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
         if titled:  # the panel's expander title shows these: rebuild, keep that panel open
+            if self._flush_first():
+                return
             self._expand[path[1]] = path[3]
         if len(path) == 5 and path[2] == "panels":  # a panel's own key: maybe a compound edit
             _, entry = lookup(self.session.user, path[:4])
             edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], value))
         else:
             edit = lambda d: d.set(path, value)  # noqa: E731
-        if not self.apply(edit, self._row(path), structural=titled):
+        if not self.apply(edit, self._row(path), structural=titled, defer=True):
             self._expand.pop(path[1], None)
+
+    def _flush_first(self) -> bool:
+        """A titled change rebuilds the page, which drops the other rows' pending values: apply
+        them first (the rebuild they ask for waits for the idle loop, one rebuild in all).
+        True: a hand edit was met, the file was re-read, and this edit was typed for the old
+        file."""
+        if not self._flushing:
+            self.flush(defer=True)
+            return self.refused_outside
+        return False
 
     def _on_reset(self, path: tuple) -> None:
         panel_key = len(path) == 5 and path[2] == "panels"
@@ -279,8 +310,10 @@ class SettingsView(Gtk.Box):
         else:
             edit = lambda d: d.unset(path)  # noqa: E731
         if titled:
+            if self._flush_first():
+                return
             self._expand[path[1]] = path[3]
-        if not self.apply(edit, self._row(path), structural=titled) and titled:
+        if not self.apply(edit, self._row(path), structural=titled, defer=True) and titled:
             self._expand.pop(path[1], None)
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
@@ -325,7 +358,7 @@ class SettingsView(Gtk.Box):
             self.hide_banner()
             self.rebuild()
 
-    def flush(self) -> None:
+    def flush(self, defer: bool = False) -> None:
         """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
         a font list without Enter): the window is closing, or the rows are about to be rebuilt
         (a panel added, removed or moved, Undo). Rows keep their pending
@@ -333,7 +366,8 @@ class SettingsView(Gtk.Box):
         apply asks for waits until the last row was applied (once, at the end). Not for Revert
         all or a hand edit: their pending values are discarded with the rows. `save_failed` says
         whether any of them could not be written (the error is on screen); `refused_outside` that
-        a hand edit was met: the rows from that one on were dropped (a rebuild follows)."""
+        a hand edit was met: the rows from that one on were dropped (a rebuild follows).
+        `defer`: the rebuild at the end waits for the idle loop (see _rebuild_soon)."""
         self.save_failed = False
         self.refused_outside = False
         self._flushing = True
@@ -346,7 +380,7 @@ class SettingsView(Gtk.Box):
             self._flushing = False
             if self._rebuild_due:
                 self._rebuild_due = False
-                self.rebuild()
+                self._rebuild_soon(defer)
 
     def revert_text(self) -> str:
         """What the Revert all dialog says is about to happen."""

@@ -9,7 +9,9 @@ def mon(shell="edge", panels=(), theme=None):
 
 
 def test_identical_is_empty(fake_registry, make_config):
-    cfg = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    cfg = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
     assert diff_configs(cfg, cfg) == []
 
 
@@ -38,30 +40,70 @@ def test_mode_changes(fake_registry, make_config):
 
 
 def test_panel_state_only(fake_registry, make_config):
-    old = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "state": "extended"}])})
-    new = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", "state": "collapsed"}])})
+    old = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[{"panel": "edge", "name": "dock", "widget": "dock", "state": "extended"}]
+            )
+        }
+    )
+    new = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[{"panel": "edge", "name": "dock", "widget": "dock", "state": "collapsed"}]
+            )
+        }
+    )
     assert diff_configs(old, new) == [Change("panel-state", "HDMI-A-1", 0)]
 
 
 def test_panel_geometry_change_rebuilds_that_panel(fake_registry, make_config):
-    old = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "clock"}])})
+    old = make_config(
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                ]
+            )
+        }
+    )
     new = make_config(
-        monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "clock", "depth": 50}])}
+        monitors={
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock", "depth": 50},
+                ]
+            )
+        }
     )
     assert diff_configs(old, new) == [Change("panel-rebuild", "HDMI-A-1", 1)]
 
 
 def test_widget_swap_at_same_index_rebuilds(fake_registry, make_config):
-    old = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
-    new = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "clock"}])})
+    old = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
+    new = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "clock", "widget": "clock"}])}
+    )
     assert diff_configs(old, new) == [Change("panel-rebuild", "HDMI-A-1", 0)]
 
 
 def test_add_and_remove_panels(fake_registry, make_config):
-    one = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
+    one = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
     three = make_config(
         monitors={
-            "HDMI-A-1": mon(panels=[{"widget": "dock"}, {"widget": "clock"}, {"widget": "bar"}])
+            "HDMI-A-1": mon(
+                panels=[
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                    {"panel": "edge", "name": "bar", "widget": "bar"},
+                ]
+            )
         }
     )
     assert diff_configs(one, three) == [
@@ -75,15 +117,28 @@ def test_add_and_remove_panels(fake_registry, make_config):
 
 
 def test_non_edge_monitor_panel_changes_ignored(fake_registry, make_config):
-    old = make_config(monitors={"DP-1": mon("plasma", panels=[{"widget": "dock"}])})
-    new = make_config(monitors={"DP-1": mon("plasma", panels=[{"widget": "clock"}])})
+    old = make_config(
+        monitors={
+            "DP-1": mon("plasma", panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])
+        }
+    )
+    new = make_config(
+        monitors={
+            "DP-1": mon("plasma", panels=[{"panel": "edge", "name": "clock", "widget": "clock"}])
+        }
+    )
     assert diff_configs(old, new) == []
 
 
 def test_gap_change_relayouts_without_touching_panels(fake_registry, make_config):
     def cfg(gap):
         return make_config(
-            monitors={"HDMI-A-1": {**mon(panels=[{"widget": "dock"}]), "layout": {"gap": gap}}}
+            monitors={
+                "HDMI-A-1": {
+                    **mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}]),
+                    "layout": {"gap": gap},
+                }
+            }
         )
 
     assert diff_configs(cfg(8), cfg(20)) == [Change("relayout", "HDMI-A-1")]
@@ -109,6 +164,12 @@ def test_global_gap_change_relayouts_every_edge_monitor(fake_registry, make_conf
     ],
 )
 def test_placement_and_length_changes_rebuild_that_panel(fake_registry, make_config, entry):
-    old = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock"}])})
-    new = make_config(monitors={"HDMI-A-1": mon(panels=[{"widget": "dock", **entry}])})
+    old = make_config(
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])}
+    )
+    new = make_config(
+        monitors={
+            "HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock", **entry}])
+        }
+    )
     assert diff_configs(old, new) == [Change("panel-rebuild", "HDMI-A-1", 0)]

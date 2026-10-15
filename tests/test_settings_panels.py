@@ -15,16 +15,38 @@ if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
 from settings.document import UserDocument  # noqa: E402
-from settings.form import config_form  # noqa: E402
+from settings.form import WidgetChoice, config_form, registry_widgets  # noqa: E402
+from shell.panel_spec import CornerDefaults, PanelDefaults  # noqa: E402
 from shell.registry import requests_for  # noqa: E402
+from shell.widget import Widget, WidgetProps  # noqa: E402
 
-FORM = config_form(("bar", "clock", "dock"))
-USER = '[[monitors.M.panels]]\nwidget = "dock"\n[[monitors.M.panels]]\nwidget = "clock"\n'
+FORM = config_form(tuple(WidgetChoice(w) for w in ("bar", "clock", "dock")))
+CORNER_FORM = config_form(
+    (
+        WidgetChoice("bar", "Bar"),
+        WidgetChoice("box", "Box", ("corner",)),
+        WidgetChoice("clock", "Clock"),
+        WidgetChoice("dock", "Dock"),
+    )
+)
+USER = (
+    '[[monitors.M.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
+    '[[monitors.M.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
+)
 
 
 @pytest.fixture
 def editor(make_config, fake_registry):
-    config = make_config(monitors={"M": {"panels": [{"widget": "dock"}, {"widget": "clock"}]}})
+    config = make_config(
+        monitors={
+            "M": {
+                "panels": [
+                    {"panel": "edge", "name": "dock", "widget": "dock"},
+                    {"panel": "edge", "name": "clock", "widget": "clock"},
+                ]
+            }
+        }
+    )
     made, edits = [], []
 
     def make_rows(section, prefix):
@@ -92,8 +114,12 @@ def test_first_cannot_move_up_and_last_cannot_move_down(editor):
 def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_registry):
     """Spec 19: a corner widget's entry shows corner, edge (only its corner's two), width and
     height, never align or length; its title names the corner, the edge and the size."""
-    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
-    entries = [{"widget": "dock"}, {"widget": "box"}, {"widget": "box", "corner": "top-right"}]
+    form = CORNER_FORM
+    entries = [
+        {"panel": "edge", "name": "dock", "widget": "dock"},
+        {"panel": "corner", "name": "box", "widget": "box"},
+        {"panel": "corner", "name": "box 2", "widget": "box", "corner": "top-right"},
+    ]
     config = make_config(monitors={"M": {"panels": entries}})
     sections = []
 
@@ -105,32 +131,40 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     assert [e.get_label() for e in ed.expanders] == [
         "1. dock: bottom, center",
         "2. box: bottom-left, from bottom, 300x390",
-        "3. box: top-right, from top, 300x390",
+        "3. box 2: top-right, from top, 300x390",  # the name, not the widget
     ]
     dock, box, moved = sections
     assert "align" in {f.key for f in dock.fields} and "corner" not in {f.key for f in dock.fields}
-    assert [f.key for f in box.fields] == ["widget", "corner", "edge", "width", "height", "state"]
+    assert [f.key for f in box.fields] == [
+        "name",
+        "widget",
+        "corner",
+        "edge",
+        "width",
+        "height",
+        "state",
+    ]
     assert box.field("edge").choices == ("bottom", "left")
     assert moved.field("edge").choices == ("top", "right")
-    assert [row[0] for row in ed.widget_choice.get_model()] == [
-        "bar",
-        "clock",
-        "dock",
-        "box (corner panel)",
-    ]
+    assert [row[0] for row in ed.widget_choice.get_model()] == ["Bar", "Box", "Clock", "Dock"]
     edits = []
     ed._on_edit = lambda edit, open_index: edits.append((edit, open_index))
     ed.add("box")
     doc = UserDocument("")
     edits[0][0](doc)
-    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}} and edits[0][1] == 3
+    assert (
+        doc.data
+        == {"monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}}
+        and edits[0][1] == 3
+    )
 
 
 THREE = ("dock", "clock", "bar")
 
 
 def three_panel_editor(make_config, form=FORM):
-    config = make_config(monitors={"M": {"panels": [{"widget": w} for w in THREE]}})
+    panels_ = [{"panel": "edge", "name": w, "widget": w} for w in THREE]
+    config = make_config(monitors={"M": {"panels": panels_}})
     edits = []
     ed = panels.PanelEditor(
         form,
@@ -147,7 +181,8 @@ def row_buttons(ed, i):
 
 
 def widgets_after(edit):
-    doc = UserDocument("".join(f'[[monitors.M.panels]]\nwidget = "{w}"\n' for w in THREE))
+    entry = '[[monitors.M.panels]]\npanel = "edge"\nname = "{0}"\nwidget = "{0}"\n'
+    doc = UserDocument("".join(entry.format(w) for w in THREE))
     edit(doc)
     return [p["widget"] for p in doc.data["monitors"]["M"].get("panels", [])]
 
@@ -198,16 +233,18 @@ def test_add_panel_button_writes_the_edge_widgets_id_and_opens_it(make_config, f
 
 
 def test_add_panel_button_writes_a_corner_widgets_id_not_its_label(make_config, corner_registry):
-    form = config_form(("bar", "box", "clock", "dock"), corner_widgets=("box",))
+    form = CORNER_FORM
     ed, edits = three_panel_editor(make_config, form)
     ed.widget_choice.set_active_id("box")
-    assert ed.widget_choice.get_active_text() == "box (corner panel)"
+    assert ed.widget_choice.get_active_text() == "Box"
     click_add(ed)
     ((edit, open_index),) = edits
     assert open_index == 3
     doc = UserDocument("")
     edit(doc)
-    assert doc.data == {"monitors": {"M": {"panels": [{"widget": "box"}]}}}
+    assert doc.data == {
+        "monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}
+    }
 
 
 def test_the_wheel_over_the_add_combo_does_not_change_the_choice(make_config, fake_registry):
@@ -219,3 +256,56 @@ def test_the_wheel_over_the_add_combo_does_not_change_the_choice(make_config, fa
     event.scroll.direction = Gdk.ScrollDirection.DOWN
     ed.widget_choice.emit("scroll-event", event)
     assert ed.widget_choice.get_active() == 0
+
+
+class TileProps(WidgetProps):
+    size: int = 10
+
+
+@pytest.fixture
+def tile(corner_registry):
+    """A widget for both kinds, with one property."""
+    corner_registry.register_widget(
+        "tile",
+        title="Tile",
+        props=TileProps,
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="tile"),
+        corner=CornerDefaults(corner="top-right", width=240, height=200, label="tile"),
+    )(type("Tile", (Widget,), {}))
+    return corner_registry
+
+
+def test_titles_use_the_panel_name_and_a_widget_frame_shows_its_properties(make_config, tile):
+    entries = [
+        {"panel": "edge", "name": "Bottom dock", "widget": "dock"},
+        {"panel": "corner", "name": "My tile", "widget": "tile", "corner": "top-left"},
+    ]
+    config = make_config(monitors={"M": {"panels": entries}})
+    made = []
+
+    def make_rows(section, prefix):
+        made.append((section, prefix))
+        return Gtk.Box()
+
+    form = config_form(registry_widgets())
+    ed = panels.PanelEditor(form, "M", requests_for(config, "M"), make_rows, lambda *_a: None)
+    assert [e.get_label() for e in ed.expanders] == [
+        "1. Bottom dock: bottom, center",
+        "2. My tile: top-left, from top, 240x200",
+    ]
+    (dock, p0), (tile_rows, p1), (widget, p2) = made
+    assert "panel" not in [f.key for f in dock.fields]  # the dock has one kind
+    kind = tile_rows.field("panel")  # the tile has two: the panel type row
+    assert kind.choices == ("edge", "corner", "float") and kind.disabled == ("float",)
+    assert (widget.label, [f.key for f in widget.fields]) == ("Widget", ["size"])
+    assert p1 == p2 == ("monitors", "M", "panels", 1)  # widget keys sit in the entry itself
+    frames = [w for w in walk(ed.expanders[1]) if isinstance(w, Gtk.Frame)]
+    assert [f.get_label() for f in frames] == ["Widget"]
+    assert not [w for w in walk(ed.expanders[0]) if isinstance(w, Gtk.Frame)]
+
+
+def walk(widget):
+    yield widget
+    if isinstance(widget, Gtk.Container):
+        for child in widget.get_children():
+            yield from walk(child)

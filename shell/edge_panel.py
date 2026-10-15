@@ -1,5 +1,6 @@
 """EdgePanel: the content, handle and input window of one panel. Its body is drawn by the
-monitor's shape canvas; the panel reports its animated depth through `on_depth`."""
+monitor's shape canvas; the panel reports its animated depth through `on_depth`. The
+content is a Widget (shell.widget): the panel builds it and destroys it with itself."""
 
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ from shell.panel_spec import (
     Interaction,
     PanelGeometry,
 )
+from shell.widget import NO_PROPS, Widget, WidgetProps
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ def clip_container(child: Gtk.Widget) -> Gtk.ScrolledWindow:
 
 
 class EdgePanel(WaylandWindow):
-    """Base class for panels. Subclasses implement build_content()."""
+    """The window of an edge panel; CornerPanel is the corner one. It shows a Widget."""
 
     wants_keyboard = False
 
@@ -86,12 +88,15 @@ class EdgePanel(WaylandWindow):
         handle: HandleSpec = THEME_HANDLE,
         interaction: Interaction = ALL_INTERACTIONS,
         on_settings: Callable[[], None] | None = None,
+        widget: Widget | None = None,
+        props: WidgetProps = NO_PROPS,
     ):
         """`spec` is resolved by shell.panel_layout (exact pos and length in px); `on_depth(d)`
         is called on every animation frame with the current depth (MonitorShell forwards it to
         the canvas). `handle` and `interaction` come from the PanelRequest (spec 15); both can
         change later in place (set_handle). `on_settings()` is called on a right-click on the
-        handle (EdgeShellApp.open_settings)."""
+        handle (EdgeShellApp.open_settings). `widget` is the content, built with `props` (None:
+        an empty panel)."""
         # resolved before the window exists: a bad look fails without leaving a half-built window
         look = hd.resolve_handle(handle, interaction, theme)
         # a classmethod: the GObject is not initialised yet (CornerPanel overrides it)
@@ -117,6 +122,9 @@ class EdgePanel(WaylandWindow):
         self._theme = theme
         self._on_depth = on_depth
         self._on_settings = on_settings  # a right-click on the handle opens the settings
+        self._widget = widget
+        self._props = props
+        self.connect("destroy", self._on_destroy)  # the widget stops with the window
         self._handle_spec = handle
         self._interaction = interaction
         self._look = look
@@ -132,36 +140,54 @@ class EdgePanel(WaylandWindow):
 
         # Centring container: the widget's own content is centred inside the body box
         # that _place_content sizes and positions (a Box packs children at the start).
-        inner = self.build_content()
-        inner.set_hexpand(True)
-        inner.set_vexpand(True)
-        inner.set_halign(Gtk.Align.CENTER)
-        inner.set_valign(Gtk.Align.CENTER)
-        self._inner = inner
-        self._content = Box(name="panel-content", children=[clip_container(inner)])
-        self._handle = self._build_handle()
-        self._size_handle()
-        # Transparent base: the body is painted by the shape canvas underneath this window.
-        self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
+        try:
+            inner = self.build_content()
+            inner.set_hexpand(True)
+            inner.set_vexpand(True)
+            inner.set_halign(Gtk.Align.CENTER)
+            inner.set_valign(Gtk.Align.CENTER)
+            self._inner = inner
+            self._content = Box(name="panel-content", children=[clip_container(inner)])
+            self._handle = self._build_handle()
+            self._size_handle()
+            # Transparent base: the body is painted by the shape canvas underneath this window.
+            self.add(Overlay(child=Box(name="panel-base"), overlays=[self._content, self._handle]))
 
-        # Allocated once at full size; animation never resizes the layer surface.
-        self.set_size_request(*size)
-        self._place_content()
+            # Allocated once at full size; animation never resizes the layer surface.
+            self.set_size_request(*size)
+            self._place_content()
 
-        self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        self.connect("enter-notify-event", self._on_enter)
-        self.connect("leave-notify-event", self._on_leave)
+            self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+            self.connect("enter-notify-event", self._on_enter)
+            self.connect("leave-notify-event", self._on_leave)
 
-        self._tween = Tween(self, self._apply_depth, theme.duration_ms)
-        self._fade = Tween(self, self._content.set_opacity, 170, delay_ms=110)
-        self.show_all()
-        self._tween.jump_to(spec.depth if self._extended else 0)
-        self._fade.jump_to(1.0 if self._extended else 0.0)
-        self._sync_handle()
+            self._tween = Tween(self, self._apply_depth, theme.duration_ms)
+            self._fade = Tween(self, self._content.set_opacity, 170, delay_ms=110)
+            self.show_all()
+            self._tween.jump_to(spec.depth if self._extended else 0)
+            self._fade.jump_to(1.0 if self._extended else 0.0)
+            self._sync_handle()
+        except Exception:
+            # Anything after the window exists: a widget that raises in build() or returns a
+            # non-widget, a failed Tween. Never leave a half-built window behind (its widget
+            # and its timers stop with it).
+            self.destroy()
+            raise
 
-    # ---- override in subclasses ------------------------------------------------
+    # ---- content ---------------------------------------------------------------
     def build_content(self) -> Gtk.Widget:
-        return Box()
+        """The content: the widget's build(props); an empty box without a widget."""
+        if self._widget is None:
+            return Box()
+        self._widget.theme_fonts = tuple(self._theme.font)
+        return self._widget.build(self._props)
+
+    def _on_destroy(self, *_args) -> None:
+        """The window is going (a reload rebuilds it, a hot-plug closes the monitor): stop
+        the widget's timers. Once only."""
+        widget, self._widget = self._widget, None
+        if widget is not None:
+            widget.destroy()
 
     @classmethod
     def surface_layout(

@@ -15,14 +15,21 @@ from shell.config.models import (
 
 
 def entry(**keys):
-    return PanelConfig.model_validate({"widget": "widget_panel", **keys})
+    return PanelConfig.model_validate(
+        {"panel": "corner", "name": "summary", "widget": "summary", **keys}
+    )
 
 
 def load(make_config, **keys):
     return parse_config(
         {
             "theme": make_config().theme.model_dump(),
-            "monitors": {"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "w", **keys}]}},
+            "monitors": {
+                "HDMI-A-1": {
+                    "shell": "edge",
+                    "panels": [{"panel": "edge", "name": "w", "widget": "w", **keys}],
+                }
+            },
         }
     )
 
@@ -43,10 +50,11 @@ def test_the_four_corners_are_exported_in_order():
 
 def test_the_key_sets_partition_the_panel_keys():
     """The settings window shows SHARED_KEYS plus the keys of the widget's kind."""
-    assert SHARED_KEYS == ("widget", "edge", "state", "handle", "interaction")
+    assert SHARED_KEYS == ("panel", "name", "widget", "edge", "state", "handle", "interaction")
     assert CORNER_ONLY_KEYS == ("corner", "width", "height")
     keys = SHARED_KEYS + EDGE_ONLY_KEYS + CORNER_ONLY_KEYS
-    assert len(set(keys)) == len(keys) and set(keys) == set(PanelConfig.model_fields)
+    assert len(set(keys)) == len(keys)
+    assert set(keys) | {"widget_props"} == set(PanelConfig.model_fields)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +73,7 @@ def test_the_key_sets_partition_the_panel_keys():
 def test_bad_corner_values_name_the_key_path(make_config, keys, path, words):
     with pytest.raises(ConfigError) as exc:
         load(make_config, **keys)
-    where = "monitors.HDMI-A-1.panels.0" + (f".{path}" if path else "")
+    where = "monitors.HDMI-A-1.panels[0]" + (f".{path}" if path else "")
     assert where in str(exc.value) and words in str(exc.value), str(exc.value)
 
 
@@ -89,6 +97,13 @@ def test_the_schema_offers_the_corner_keys():
 
 
 def test_defaults_change_nothing(make_config):
-    cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge", "panels": [{"widget": "dock"}]}})
+    cfg = make_config(
+        monitors={
+            "HDMI-A-1": {
+                "shell": "edge",
+                "panels": [{"panel": "edge", "name": "dock", "widget": "dock"}],
+            }
+        }
+    )
     p = cfg.monitor("HDMI-A-1").panels[0]
     assert (p.corner, p.width, p.height) == (None, None, None)

@@ -23,8 +23,11 @@ alongside Plasma and does not replace it.
   panel as one outline, so panels and frame join without seams.
 - Optional outer border and soft uniform shadow (`[theme.border]`, `[theme.shadow]`),
   live-reloadable and overridable per monitor.
-- Panels: `dock` (bottom), `clock` (top), `system_bar` (right).
-- Corner panels: a rectangular panel in a screen corner, joined to both frame bands (`widget_panel`: time, date, CPU and RAM in the bottom-left corner).
+- Panels and widgets: a panel is the surface (`edge` or `corner`; `float` is reserved), a
+  widget is what it shows: `dock` (bottom), `clock` (top; its format, font and font size are
+  properties), `system_bar` (right), `summary` (a corner block: time, date, CPU and RAM).
+  Every panel has a name, used in logs, notifications and the settings window.
+- Corner panels: a rectangular panel in a screen corner, joined to both frame bands.
 - Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
@@ -51,6 +54,7 @@ scripts/py main.py --config examples/effects-test.toml -v  # with border and sha
 scripts/py main.py --config examples/layout-test.toml -v        # several panels per edge
 scripts/py main.py --config examples/layout-sizes-test.toml -v  # fill, content, percent
 scripts/py main.py --config examples/corner-test.toml -v      # corner panels next to edge panels
+scripts/py main.py --config examples/widget-props-test.toml -v  # panel names, clock properties
 scripts/py main.py --config examples/panels-test.toml --stats 10  # 10 s measurement, then quit
 scripts/py main.py --settings                              # the settings window (user config)
 scripts/py main.py --settings --config /tmp/edge.toml      # ... on another file
@@ -74,14 +78,99 @@ shell = "edge"            # edge | plasma | both | none
 accent = "#d3a68f"        # overrides the global theme for this monitor only
 
 [[monitors.HDMI-A-1.panels]]
-widget = "dock"           # dock | clock | system_bar
+panel = "edge"            # edge | corner (float: not implemented yet)
+name = "Dock"             # unique on this monitor
+widget = "dock"           # dock | clock | system_bar | summary
 depth = 80                # edge, length, depth, state, align, offset, order override the defaults
 ```
+
+### Panels
+
+Each `[[monitors.NAME.panels]]` entry starts with three required keys:
+
+- `panel`: the panel type. `edge` panels sit on one screen edge, `corner` panels in a screen
+  corner (see Corner panels). `float` is reserved for later and rejected ("float panels are not
+  implemented yet").
+- `name`: 1-40 characters, no control characters, no space (or other whitespace) at the
+  start or end, unique on its monitor (case-sensitive). It names the panel in logs, notifications and the settings window; panels are still matched by
+  their place in the list, so a rename rebuilds the panel.
+- `widget`: what the panel shows: `dock`, `clock`, `system_bar` (edge panels) or `summary`
+  (corner panels). A widget on a panel type it does not support is rejected
+  (`clock cannot be shown in a corner panel (it supports: edge)`).
+
+Every other key is either a key of the panel type (below) or a property of the widget, written
+in the same table. The clock's properties:
+
+```toml
+[[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Clock"
+widget = "clock"
+format = "ddd HH:mm:ss"   # tokens: HH mm ss H h a ddd dd MMM MM yyyy; 'quoted text'
+font = "JetBrains Mono"   # a font family (default: the theme's font)
+font_size = 14            # points, 6-96 (default: the theme's size)
+```
+
+The format takes only the tokens listed: `HH` hour 00-23, `H` 0-23, `h` 1-12, `a` AM/PM, `mm`
+minute, `ss` second, `dd` day, `ddd` weekday, `MM` month, `MMM` month name, `yyyy` year.
+Text in single quotes is shown as written (`"HH 'h' mm"`), two single quotes (`''`) are one
+quote, and a quote that is not closed is an error. Any other ASCII letter is an error naming
+its position; digits, spaces, punctuation and `%` are shown as written (never through strftime).
+
+### Errors, failures and reloads
+
+Errors name the entry's index in brackets (`monitors.HDMI-A-1.panels[2].format: ...`). A key
+the widget does not have (`format: unknown key for widget 'dock'`), a bad value, a duplicate
+name or a missing `panel` is reported with its key path; the shell keeps the previous layout
+and sends a "Config not applied" notification.
+
+A panel whose widget fails to build is left out (a "Panel not shown" notification names it);
+the monitor's other panels stay, and it is tried again only when its `panel`, `widget`, `name`
+or a widget property changes. Those four are also the reload kind `panel-rebuild`: changing
+any of them rebuilds that panel (a new name or property value is not applied in place). State
+and handle changes apply in place; geometry changes re-lay out the monitor.
+
+The monitor's `shell` mode decides who draws it: `edge` (Edge Shell only), `both` (Edge Shell
+and Plasma's own panel), `plasma` (Plasma only) and `none` (nothing). Panels are built only
+for `edge` and `both`; the entries of a `plasma` or `none` monitor stay in the file, unused.
+
+### Moving from the old format
+
+A file whose entries have only `widget` (the old format) is refused with one line:
+`widget = "..." (an entry with only a widget is the old format; see the README, "Panels")`.
+There is no migration tool; add `panel` and `name` to every entry. The old corner widget id
+`widget_panel` is now `summary`.
+
+```toml
+# before (refused)
+[[monitors.HDMI-A-1.panels]]
+widget = "clock"
+
+[[monitors.HDMI-A-1.panels]]
+widget = "widget_panel"
+corner = "bottom-left"
+
+# after
+[[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Clock"
+widget = "clock"
+
+[[monitors.HDMI-A-1.panels]]
+panel = "corner"
+name = "Summary"
+widget = "summary"
+corner = "bottom-left"
+```
+
+### Edge panels
 
 Panels are placed per edge in three slots and sized in one of four ways:
 
 ```toml
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Bottom clock"
 widget = "clock"
 edge = "bottom"
 align = "end"             # start | center (default) | end of the edge
@@ -148,7 +237,9 @@ corner's edges. It opens and closes like an edge panel, out of one of those edge
 
 ```toml
 [[monitors.HDMI-A-1.panels]]
-widget = "widget_panel"      # a corner widget (registered with CornerDefaults)
+panel = "corner"
+name = "Summary"
+widget = "summary"           # a widget registered with corner defaults
 corner = "bottom-left"       # top-left | top-right | bottom-left | bottom-right
 edge = "bottom"              # the edge it opens from: one of the corner's two edges
 width = 300                  # px from the corner, the frame bands included
@@ -171,6 +262,8 @@ optional (a missing one comes from the theme):
 
 ```toml
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"
+name = "Clock"
 widget = "clock"
 handle.shape = "chevron"     # auto | dots | bar | chevron | none
 handle.size = 24             # px along the edge, 4-40
@@ -217,11 +310,18 @@ file.
   (`edge`, `plasma`, `both`, `none`), the panels (add, remove, move up or down; every panel key
   including the handle and interactions), a preview of the layout warnings the shell would
   give, and per-monitor theme and layout overrides.
-- Corner panels (for example `widget_panel`) are in the same panel list, labelled
-  "(corner panel)" in the add list. Their rows are corner, edge (only the corner's two edges),
-  width and height instead of align, offset, length and depth. Switching a panel's widget
-  between an edge and a corner widget removes the keys the new kind does not take in the same
-  change; moving a corner panel to a corner without its edge removes that edge.
+- Each panel is listed by its name. The add list shows the widgets by their display names
+  (Clock, Dock, Summary, System bar); a new panel gets the widget's first panel type
+  and a name made from its display name that is free on that monitor (`Clock`, `Clock 2`).
+  The rows start with Name, Widget and, for a widget that can be shown in more than one panel
+  type, Panel type (float is listed and greyed out). A widget with properties gets a
+  **Widget** frame with one row per property (the clock: Format, Font, Font size).
+- Corner panels (for example `summary`) are in the same panel list. Their rows are corner,
+  edge (only the corner's two edges), width and height instead of align, offset, length and
+  depth. Switching a panel's widget, or its panel type, removes the keys the new kind or
+  widget does not take in the same change (the name stays); moving a corner panel to a corner
+  without its edge removes that edge. A name already used on the monitor is refused under the
+  Name row.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
@@ -276,8 +376,13 @@ re-raise is still needed, see Known limitations).
 
 Pure logic lives in `shell/` (config, geometry, panel layout, animation) and `shell/canvas/`
 (outline, effects, scene, damage); GTK windows are thin
-shells over it. New widgets go in `widgets/` and register with `@register`; they never call
-cairo or layer-shell directly. CI runs lint and the display-free tests without GTK; tests
+shells over it. New widgets go in `widgets/`: a `shell.widget.Widget` subclass (`build(props)`
+returns its Gtk content, `destroy()` stops its timers) registered with
+`@register_widget(id, title=..., props=..., edge=PanelDefaults(...), corner=CornerDefaults(...))`;
+the property model (a `WidgetProps` subclass) gives the config keys and the settings window's
+Widget rows. A property must be `str`, `int`, `bool`, a `Literal` of strings, or one of these
+`| None` (the types the settings window has a row for): any other type, or a property named like
+a panel key, is refused at import. Widgets never call cairo or layer-shell directly. CI runs lint and the display-free tests without GTK; tests
 that need `gi` or Fabric skip themselves there.
 
 ## Known limitations / planned
@@ -301,10 +406,13 @@ that need `gi` or Fabric skip themselves there.
   the error is seen, and the next close closes it; a right-click on a handle opens the window.
 - The shell no longer exposes Fabric's D-Bus `Execute` / `Evaluate` methods (its D-Bus client
   is switched off, so `fabric-cli` cannot run code in it).
-- Corner panels: one per corner; only corner widgets (`widget_panel`) can sit in a corner; no "content" length; a corner panel's sizes are fixed px (no percentages). Edge widgets (clock, dock) in corners are deferred. A corner request with a height below `T + 16` is hidden with a warning that names the height.
+- Corner panels: one per corner; only widgets registered for corners (`summary`) can sit in a corner; no "content" length; a corner panel's sizes are fixed px (no percentages). Edge widgets (clock, dock) in corners are deferred. A corner request with a height below `T + 16` is hidden with a warning that names the height.
 - Corner panels, Gate B (live, HDMI-A-1, Phil): passed. `--stats 10` on `examples/corner-test.toml` gave a damaged-draw p95 of 9.70 ms (median 6.04, max 10.82), above the 8 ms target by 1.7 ms. The run's config copy still had the sixth same-corner entry and border and shadow were probably still enabled; Phil accepted it. Where the cost comes from (headless, 1920x1080, all panels toggling, border 2 and elevation 50): `examples/corner-test.toml` animates five panels (two corner, three edge) against three in `examples/panels-test.toml`, so its p95 is 6.5 ms against 4.2 ms. Its three edge panels alone give p95 4.4 ms and its two corner panels alone 2.1 ms: about 0.95 ms per corner shape against about 1.4 ms per edge panel. Per shape a corner panel costs no more than an edge panel; the p95 rose with the number of animating panels. (0.29 ms is the median without effects; the no-effects p95 is 0.33 ms.)
 - Performance follow-up options, not done: the shadow strokes the whole outline path once per reach level (about 24 strokes), so the cost is mostly fixed per draw. Drawing each damaged clip rectangle into its own small group, instead of one group over the bounding extents, cut the effects run by about 13% in a scratch test (median 6.18 to 5.39 ms) with the damage contract holding. A tighter corner damage box alone gained only about 4%, so it is not worth doing first.
-- Corner panel watch items: the `widget_panel`'s first stats appear after about 1 s (`invoke_repeater` initial call); corner widgets read `/proc` per instance (no shared sysinfo service); option B (an 8 px gap on the other edge too, so the neighbouring edge panel no longer meets the lifted corner arc without a straight piece of frame) was offered at Gate A and not chosen; it would cost a `corner_clearance` condition, an extra `+ gap` in the corner layout's across check, and about 4 expected numbers (including Gate B's y 362-662 becoming 354-654).
+- Corner panel watch items: the `summary` block's first stats appear after about 1 s (`invoke_repeater` initial call); corner widgets read `/proc` per instance (no shared sysinfo service); option B (an 8 px gap on the other edge too, so the neighbouring edge panel no longer meets the lifted corner arc without a straight piece of frame) was offered at Gate A and not chosen; it would cost a `corner_clearance` condition, an extra `+ gap` in the corner layout's across check, and about 4 expected numbers (including Gate B's y 362-662 becoming 354-654).
+- Panel/widget model: float panels are reserved, not built; only the clock has properties so
+  far; widget properties are limited to `str`, `int`, `bool` and string `Literal`s (no lists or
+  floats yet); a renamed panel is rebuilt, not renamed in place.
 - Moving a panel (a layout change on reload or a resolution change) rebuilds its window; there
   is no in-place move yet. "content" panels are built twice at startup (default length, then
   measured); no startup flash was visible with content panels at Gate B, so an in-place resize stays

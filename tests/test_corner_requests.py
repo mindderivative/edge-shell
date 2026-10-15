@@ -14,6 +14,7 @@ from shell.panel_spec import (
     corner_has_edge,
     default_edge,
 )
+from shell.widget import Widget
 
 
 def mon(*panels):
@@ -40,22 +41,34 @@ def test_corner_geometry_carries_the_handle_length():
 
 
 def test_a_corner_widget_gives_a_corner_request(corner_registry, make_config):
-    (req,) = requests(corner_registry, make_config, {"widget": "box"})
-    assert req == CornerRequest(
-        "box", "bottom-left", "bottom", 300, 390, "extended", "box", HandleSpec(), Interaction()
+    (req,) = requests(
+        corner_registry, make_config, {"panel": "corner", "name": "box", "widget": "box"}
     )
-    assert corner_registry.widget_kind("box") == "corner"
-    assert corner_registry.widget_kind("dock") == "edge"
+    assert req == CornerRequest(
+        "box",
+        "bottom-left",
+        "bottom",
+        300,
+        390,
+        "extended",
+        "box",
+        HandleSpec(),
+        Interaction(),
+        name="box",
+    )
+    assert corner_registry.supported_kinds("box") == ("corner",)
+    assert corner_registry.supported_kinds("dock") == ("edge",)
 
 
 def test_a_widgets_defaults_are_public(corner_registry):
-    """The settings window reads defaults(name), never _DEFAULTS."""
-    assert corner_registry.defaults("box") == CornerDefaults(
+    """The settings window reads defaults(name, kind), never _WIDGETS."""
+    assert corner_registry.defaults("box", "corner") == CornerDefaults(
         corner="bottom-left", width=300, height=390, label="box"
     )
-    assert corner_registry.defaults("dock").edge == "bottom"
-    with pytest.raises(KeyError):
-        corner_registry.defaults("nope")
+    assert corner_registry.defaults("dock", "edge").edge == "bottom"
+    for name, kind in (("nope", "edge"), ("dock", "corner"), ("box", "edge"), ("box", "x")):
+        with pytest.raises(KeyError):
+            corner_registry.defaults(name, kind)
 
 
 def test_entry_keys_override_the_corner_defaults(corner_registry, make_config):
@@ -63,6 +76,8 @@ def test_entry_keys_override_the_corner_defaults(corner_registry, make_config):
         corner_registry,
         make_config,
         {
+            "panel": "corner",
+            "name": "box",
             "widget": "box",
             "corner": "top-right",
             "edge": "right",
@@ -84,25 +99,33 @@ def test_entry_keys_override_the_corner_defaults(corner_registry, make_config):
 
 
 def test_a_new_corner_without_an_edge_opens_from_its_top_or_bottom(corner_registry, make_config):
-    (req,) = requests(corner_registry, make_config, {"widget": "box", "corner": "top-right"})
+    (req,) = requests(
+        corner_registry,
+        make_config,
+        {"panel": "corner", "name": "box", "widget": "box", "corner": "top-right"},
+    )
     assert req.edge == "top"
 
 
 def test_a_widget_edge_that_fits_the_new_corner_is_kept(corner_registry, make_config):
-    corner_registry.register(
-        "side", CornerDefaults(corner="bottom-left", width=200, height=300, label="s", edge="left")
-    )(type("Side", (), {}))
+    corner_registry.register_widget(
+        "side",
+        title="Side",
+        corner=CornerDefaults(corner="bottom-left", width=200, height=300, label="s", edge="left"),
+    )(type("Side", (Widget,), {}))
     a, b = requests(
         corner_registry,
         make_config,
-        {"widget": "side", "corner": "top-left"},
-        {"widget": "side", "corner": "top-right"},
+        {"panel": "corner", "name": "side", "widget": "side", "corner": "top-left"},
+        {"panel": "corner", "name": "side 2", "widget": "side", "corner": "top-right"},
     )
     assert a.edge == "left" and b.edge == "top"
 
 
 def test_edge_widgets_still_give_panel_requests(corner_registry, make_config):
-    (req,) = requests(corner_registry, make_config, {"widget": "dock"})
+    (req,) = requests(
+        corner_registry, make_config, {"panel": "edge", "name": "dock", "widget": "dock"}
+    )
     assert isinstance(req, PanelRequest) and req.edge == "bottom"
 
 
@@ -110,23 +133,23 @@ def test_edge_widgets_still_give_panel_requests(corner_registry, make_config):
     ("entry", "message"),
     [
         (
-            {"widget": "box", "align": "end"},
-            "monitors.HDMI-A-1.panels[0].align: box is a corner panel; it takes corner, edge, "
-            "width and height, not align",
+            {"panel": "corner", "name": "box", "widget": "box", "align": "end"},
+            "monitors.HDMI-A-1.panels[0].align: a corner panel takes corner, edge, width and "
+            "height, not align",
         ),
         (
-            {"widget": "box", "edge": "top"},
+            {"panel": "corner", "name": "box", "widget": "box", "edge": "top"},
             "monitors.HDMI-A-1.panels[0].edge: 'top' is not an edge of the bottom-left corner "
             "(use bottom or left)",
         ),
         (
-            {"widget": "dock", "width": 300},
-            "monitors.HDMI-A-1.panels[0].width: dock is an edge panel; corner, width and height "
-            "only apply to corner panels",
+            {"panel": "edge", "name": "dock", "widget": "dock", "width": 300},
+            "monitors.HDMI-A-1.panels[0].width: an edge panel takes no width; corner, width and "
+            "height only apply to corner panels",
         ),
         (
-            {"widget": "clock", "corner": "top-left"},
-            "monitors.HDMI-A-1.panels[0].corner: clock is an edge panel",
+            {"panel": "edge", "name": "clock", "widget": "clock", "corner": "top-left"},
+            "monitors.HDMI-A-1.panels[0].corner: an edge panel takes no corner",
         ),
     ],
 )
@@ -140,7 +163,17 @@ def test_keys_of_the_other_kind_are_rejected_with_the_key_path(
 
 def test_a_valid_corner_entry_passes(corner_registry, make_config):
     corner_registry.validate_widgets(
-        make_config(monitors=mon({"widget": "box", "corner": "top-right", "edge": "right"}))
+        make_config(
+            monitors=mon(
+                {
+                    "panel": "corner",
+                    "name": "box",
+                    "widget": "box",
+                    "corner": "top-right",
+                    "edge": "right",
+                }
+            )
+        )
     )
 
 
@@ -172,14 +205,19 @@ def test_a_valid_corner_entry_passes(corner_registry, make_config):
 )
 def test_bad_corner_defaults_fail_at_registration(corner_registry, defaults, message):
     with pytest.raises(ValueError, match=message):
-        corner_registry.register("bad", defaults)
+        corner_registry.register_widget("bad", title="Bad", corner=defaults)
     assert "bad" not in corner_registry.widget_names()
 
 
 def test_all_off_corner_panels_are_listed(corner_registry, make_config):
     cfg = make_config(
         monitors=mon(
-            {"widget": "box", "interaction": {"click": False, "hover": False, "drag": False}}
+            {
+                "panel": "corner",
+                "name": "box",
+                "widget": "box",
+                "interaction": {"click": False, "hover": False, "drag": False},
+            }
         )
     )
     assert corner_registry.all_off_paths(cfg) == ["monitors.HDMI-A-1.panels.0"]
@@ -202,8 +240,16 @@ def _diff(make_config, before, after):
     ],
 )
 def test_reload_kinds_for_corner_panels(corner_registry, make_config, change, kind):
-    assert _diff(make_config, mon({"widget": "box"}), mon({"widget": "box", **change})) == [kind]
+    assert _diff(
+        make_config,
+        mon({"panel": "corner", "name": "box", "widget": "box"}),
+        mon({"panel": "corner", "name": "box", "widget": "box", **change}),
+    ) == [kind]
 
 
 def test_swapping_an_edge_widget_for_a_corner_widget_rebuilds(corner_registry, make_config):
-    assert _diff(make_config, mon({"widget": "dock"}), mon({"widget": "box"})) == ["panel-rebuild"]
+    assert _diff(
+        make_config,
+        mon({"panel": "edge", "name": "dock", "widget": "dock"}),
+        mon({"panel": "corner", "name": "box", "widget": "box"}),
+    ) == ["panel-rebuild"]
