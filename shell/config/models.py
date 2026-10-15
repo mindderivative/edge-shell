@@ -45,6 +45,16 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def check_font_name(name: str) -> str:
+    """A font family name: it goes unescaped into generated CSS (the theme's font list, a
+    widget's font property), so CSS metacharacters are refused."""
+    if _FONT_FORBIDDEN.search(name):
+        raise ValueError(
+            f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"
+        )
+    return name
+
+
 def check_hex(value: str) -> str:
     if not _HEX.fullmatch(value):
         raise ValueError("must be a #rrggbb or #rrggbbaa hex color")
@@ -133,10 +143,7 @@ class Theme(_Strict):
     @classmethod
     def _font_names(cls, value: list[str]) -> list[str]:
         for name in value:
-            if _FONT_FORBIDDEN.search(name):
-                raise ValueError(
-                    f"font name {name!r} must not contain a double quote, backslash, {{, }} or ;"
-                )
+            check_font_name(name)
         return value
 
 

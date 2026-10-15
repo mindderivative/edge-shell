@@ -21,7 +21,6 @@ import widgets.summary as sm  # noqa: E402
 import widgets.system_bar as sb  # noqa: E402
 from shell import registry  # noqa: E402
 from shell.theme import to_css  # noqa: E402
-from shell.widget import NO_PROPS  # noqa: E402
 
 # registered name -> (module, root Box name, the repeater period or None, ids the CSS targets)
 BUILT_IN = {
@@ -62,7 +61,7 @@ def built(monkeypatch):
         monkeypatch.setattr(module, "read_cpu_times", lambda: next(cpu), raising=False)
         monkeypatch.setattr(module, "read_meminfo_percent", lambda: 40.0, raising=False)
         widget = registry.widget_class(name)()
-        return widget.build(NO_PROPS), repeaters
+        return widget.build(registry.widget_props_model(name)()), repeaters
 
     return build
 

@@ -39,6 +39,18 @@ def _font_stack(fonts: list[str]) -> str:
     return ", ".join(f if f in _GENERIC_FONTS else f'"{f}"' for f in fonts)
 
 
+def label_font_css(font: str | None, size: int | None) -> str:
+    """CSS for one label's own font (a widget's font and font_size properties; None: the
+    theme's), for a provider on that label only; "" when both are None. The font name was
+    checked by shell.config.models.check_font_name."""
+    rules = []
+    if font is not None:
+        rules.append(f"font-family: {_font_stack([font])};")
+    if size is not None:
+        rules.append(f"font-size: {size}pt;")
+    return f"label {{ {' '.join(rules)} }}" if rules else ""
+
+
 def to_css(theme: Theme, scope: str) -> str:
     s = f".{scope}"
     c = {name: css_color(getattr(theme, name)) for name in COLOR_FIELDS}
