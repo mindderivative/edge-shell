@@ -86,3 +86,14 @@ def test_the_destroy_handler_is_connected_before_the_content_is_built():
     assert src.index('self.connect("destroy", self._on_destroy)') < src.index(
         "self.build_content()"
     )
+
+
+def test_a_build_that_fails_destroys_the_half_built_window():
+    # EdgePanel.__init__ creates the window before the content; a widget that raises in
+    # build() must not leave that window behind (MonitorShell then skips the panel)
+    import inspect
+
+    src = inspect.getsource(ep.EdgePanel.__init__)
+    build = src.index("inner = self.build_content()")
+    assert src.rindex("try:", 0, build) > src.rindex("super().__init__(", 0, build)
+    assert src.index("self.destroy()", build) < src.index("raise", build)

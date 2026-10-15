@@ -9,6 +9,8 @@ pytest.importorskip("fabric")
 
 import shell.monitors as mon_mod  # noqa: E402
 from shell.config.diff import Change  # noqa: E402
+from shell.panel_spec import PanelDefaults  # noqa: E402
+from shell.widget import Widget, WidgetProps  # noqa: E402
 
 
 class FakeWindow:
@@ -103,6 +105,8 @@ def bare_shell(windows, panels=(), unregister=None):
     shell.panels = list(panels)
     shell._resolved = [None] * len(shell.panels)
     shell._handles = [None] * len(shell.panels)
+    shell._contents = [None] * len(shell.panels)
+    shell._failed = {}
     shell.canvas = FakeCanvas()
     shell.strips = []
     shell._closed = False
@@ -423,21 +427,49 @@ def test_a_neighbour_change_rebuilds_the_panel_it_unhides(build, make_config):
     assert len(shell.canvas.shapes) == 2
 
 
-def test_failed_panel_construction_leaves_no_scene_shape(build, make_config, monkeypatch):
-    shell, _, _ = build(edge())
+def test_a_panel_that_fails_to_build_is_left_out_and_named(build, make_config, monkeypatch, caplog):
+    """Spec 4: a widget build failure is logged and that panel skipped (no window, no scene
+    shape); the monitor and its other panels stay; the failure names the panel."""
+    shell, tracked, _ = build(edge({"panel": "edge", "name": "Dock", "widget": "dock"}))
+    dock = shell.panels[0]
 
     def explode(*a, **k):
         raise RuntimeError("widget broke")
 
-    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
-    with pytest.raises(RuntimeError):
-        shell.apply(
-            make_config(monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"})), []
-        )
-    assert shell.canvas.shapes == {}
+    real = mon_mod.widget_class
+    monkeypatch.setattr(mon_mod, "widget_class", lambda w: explode if w == "clock" else real(w))
+    shell.apply(
+        make_config(
+            monitors=edge(
+                {"panel": "edge", "name": "Dock", "widget": "dock"},
+                {"panel": "edge", "name": "Top clock", "widget": "clock"},
+            )
+        ),
+        [Change("panel-add", "HDMI-A-1", 1)],
+    )
+    assert shell.panels == [dock, None] and not dock.destroyed
+    assert len(shell.canvas.shapes) == 1  # the failed panel left no shape behind
+    assert shell.build_failures == [
+        "HDMI-A-1: panel 'Top clock' (clock) could not be built and is not shown: widget broke"
+    ]
+    assert "building panel 1 'Top clock' (clock) on HDMI-A-1 failed" in caplog.text
+    assert "RuntimeError: widget broke" in caplog.text  # with the traceback
+    monkeypatch.setattr(mon_mod, "widget_class", real)
+    same = edge(
+        {"panel": "edge", "name": "Dock", "widget": "dock"},
+        {"panel": "edge", "name": "Top clock", "widget": "clock"},
+    )
+    shell.apply(make_config(monitors=same), [])  # the same entry: not tried again
+    assert shell.panels[1] is None and len(shell.build_failures) == 1
+    renamed = edge(
+        {"panel": "edge", "name": "Dock", "widget": "dock"},
+        {"panel": "edge", "name": "Clock", "widget": "clock"},
+    )
+    shell.apply(make_config(monitors=renamed), [])  # the entry changed: tried again
+    assert shell.panels[1] is not None and shell.build_failures == []
 
 
-def test_failed_construction_closes_everything_already_built(
+def test_a_failure_while_the_monitor_is_built_keeps_the_frame(
     make_config, monkeypatch, fake_registry
 ):
     def explode(*a, **k):
@@ -450,9 +482,29 @@ def test_failed_construction_closes_everything_already_built(
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
     monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda *a: 1)
+    registered = []
+    cfg = make_config(monitors=edge({"panel": "edge", "name": "Dock", "widget": "dock"}))
+    shell = mon_mod.MonitorShell("HDMI-A-1", MONITOR, cfg, registered.append)
+    assert len(registered) == 5 and shell.panels == [None]  # canvas + 4 strips, no panel
+    assert shell.build_failures and "'Dock'" in shell.build_failures[0]
+
+
+def test_failed_construction_closes_everything_already_built(
+    make_config, monkeypatch, fake_registry
+):
+    def explode(*a, **k):
+        raise RuntimeError("layout broke")
+
+    monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeCanvas)
+    monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
+    monkeypatch.setattr(mon_mod, "panel_class", lambda _geo: FakeWindow)
+    monkeypatch.setattr(mon_mod, "layout_monitor", explode)  # not a widget: nothing contains it
+    monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
+    monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
+    monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda *a: 1)
     registered, unregistered = [], []
     cfg = make_config(monitors=edge({"panel": "edge", "name": "dock", "widget": "dock"}))
-    with pytest.raises(RuntimeError, match="panel broke"):
+    with pytest.raises(RuntimeError, match="layout broke"):
         mon_mod.MonitorShell("HDMI-A-1", MONITOR, cfg, registered.append, unregistered.append)
     assert len(registered) == 5  # canvas + 4 strips were on screen
     assert unregistered == registered
@@ -660,12 +712,12 @@ def test_a_failing_measurement_is_logged_and_reported(build, monkeypatch, caplog
     shell.panels[0].natural = 300
 
     def explode(*a, **k):
-        raise RuntimeError("widget broke")
+        raise RuntimeError("layout broke")
 
-    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+    monkeypatch.setattr(mon_mod, "layout_monitor", explode)  # the re-layout raises
     assert shell.test_idles[0]() is False  # never raises into the main loop
     assert errors == [shell] and reports == []
-    assert "widget broke" in caplog.text
+    assert "layout broke" in caplog.text
 
 
 def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypatch, caplog):
@@ -679,9 +731,9 @@ def test_a_failing_error_handler_does_not_escape_the_measurement(build, monkeypa
     shell.panels[0].natural = 300
 
     def explode(*a, **k):
-        raise RuntimeError("widget broke")
+        raise RuntimeError("layout broke")
 
-    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    monkeypatch.setattr(mon_mod, "layout_monitor", explode)
     assert shell.test_idles[0]() is False
     assert "handler broke" in caplog.text
     assert shell.measure_pending is False
@@ -822,14 +874,14 @@ def test_a_failing_relayout_is_logged_and_reported(build, monkeypatch, caplog):
     ((_, handler),) = monitor.handlers.values()
 
     def explode(*a, **k):
-        raise RuntimeError("widget broke")
+        raise RuntimeError("layout broke")
 
-    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)  # the rebuild raises
+    monkeypatch.setattr(mon_mod, "layout_monitor", explode)  # the re-layout raises
     monitor.width, monitor.height = 1280, 720
     handler(monitor, None)
     assert timers[-1][1]() is False  # never raises into the main loop
     assert errors == [shell] and reports == []
-    assert "widget broke" in caplog.text
+    assert "layout broke" in caplog.text
 
 
 def _resize(monitor, handler, timers, width, height):
@@ -1180,3 +1232,123 @@ def test_a_smaller_monitor_shrinks_the_corner_panel(build, corner_registry):
     assert relayout[1]() is False
     assert box.destroyed and shell.panels[0].args[0].along == 282  # 320 - (10 + 14) - 14
     assert "width 300 px does not fit the bottom edge; shrunk to 282" in shell.layout_warnings[0]
+
+
+# ---- the widget a panel shows (panel/widget spec 3.5) --------------------------------
+
+
+class Big(WidgetProps):
+    size: int = 10
+
+
+@pytest.fixture
+def big(fake_registry):
+    """A widget with one property: a change of it must rebuild the panel."""
+    fake_registry.register_widget(
+        "big",
+        title="Big",
+        props=Big,
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="big"),
+    )(type("BigWidget", (Widget,), {}))
+    return fake_registry
+
+
+def test_a_panel_gets_a_new_instance_of_its_widget_and_the_props(build, big):
+    shell, _, _ = build(
+        edge(
+            {"panel": "edge", "name": "A", "widget": "big", "size": 20},
+            {"panel": "edge", "name": "B", "widget": "big"},
+        )
+    )
+    a, b = shell.panels
+    assert type(a.kwargs["widget"]).__name__ == "BigWidget"
+    assert a.kwargs["widget"] is not b.kwargs["widget"]
+    assert (a.kwargs["props"], b.kwargs["props"]) == (Big(size=20), Big())
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"name": "Renamed"}, {"size": 30}],
+    ids=["name", "property"],
+)
+def test_a_name_or_property_change_rebuilds_the_panel_in_the_same_place(
+    build, big, make_config, change
+):
+    entry = {"panel": "edge", "name": "A", "widget": "big"}
+    shell, _, _ = build(edge(entry))
+    (old,) = shell.panels
+    shell.apply(make_config(monitors=edge({**entry, **change})), [])
+    (new,) = shell.panels
+    assert new is not old and old.destroyed
+    assert new.args[0] == old.args[0]  # the same geometry: only the content changed
+    if "size" in change:
+        assert new.kwargs["props"] == Big(size=30)
+
+
+def test_an_unchanged_entry_is_not_rebuilt(build, big, make_config):
+    entry = {"panel": "edge", "name": "A", "widget": "big", "size": 12}
+    shell, _, _ = build(edge(entry))
+    (old,) = shell.panels
+    shell.apply(make_config(monitors=edge(entry)), [])
+    assert shell.panels == [old] and not old.destroyed
+
+
+def test_a_failed_panel_is_not_retried_by_a_relayout_only_by_an_entry_change(
+    build, make_config, monkeypatch
+):
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    monitor = FakeMonitor()
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    entry = {"panel": "edge", "name": "Dock", "widget": "dock", "length": "content"}
+    shell, _, timers = build(edge(entry), monitor=monitor)
+    assert calls == [1] and shell.panels == [None]
+    ((_, handler),) = monitor.handlers.values()
+    monitor.width, monitor.height = 1280, 720  # a resolution change re-lays out the monitor
+    handler(monitor, None)
+    assert timers[-1][1]() is False
+    shell.apply(make_config(monitors=edge(entry)), [])  # an unrelated reload
+    assert calls == [1] and len(shell.build_failures) == 1  # never tried again
+    for change in ({"depth": 80}, {"widget": "clock"}, {"panel": "edge", "name": "Dock 2"}):
+        shell.apply(make_config(monitors=edge({**entry, **change})), [])
+    assert len(calls) == 3  # depth alone is a move: not retried; widget and name changes are
+
+
+def test_a_failed_panel_is_tried_again_when_its_properties_change(
+    build, big, make_config, monkeypatch
+):
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    entry = {"panel": "edge", "name": "A", "widget": "big", "size": 20}
+    shell, _, _ = build(edge(entry))
+    shell.apply(make_config(monitors=edge(entry)), [])
+    assert len(calls) == 1  # the same entry: not tried again
+    shell.apply(make_config(monitors=edge({**entry, "size": 30})), [])
+    assert len(calls) == 2 and len(shell.build_failures) == 1
+
+
+def test_a_removed_failed_panel_is_forgotten_so_a_new_entry_there_is_tried(
+    build, big, make_config, monkeypatch
+):
+    calls = []
+
+    def explode(*a, **k):
+        calls.append(1)
+        raise RuntimeError("widget broke")
+
+    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
+    entry = {"panel": "edge", "name": "A", "widget": "big"}
+    shell, _, _ = build(edge(entry))
+    shell.apply(make_config(monitors=edge()), [])  # the panel is removed
+    assert shell.panels == [] and shell.build_failures == []
+    shell.apply(make_config(monitors=edge(entry)), [])  # the same entry added again
+    assert len(calls) == 2

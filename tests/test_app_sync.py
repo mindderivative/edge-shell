@@ -16,6 +16,7 @@ class FakeShell:
     applied: list = []
     fail_apply: set = set()
     layout_warnings: list = []
+    build_failures: list = []
     measure_pending = False
     fail_open: set = set()
 
@@ -58,6 +59,7 @@ def _reset_fake_shell(monkeypatch):
         ("fail_apply", set()),
         ("fail_open", set()),
         ("layout_warnings", []),
+        ("build_failures", []),
         ("measure_pending", False),
     ):
         monkeypatch.setattr(FakeShell, attr, value)
@@ -717,3 +719,17 @@ def test_the_last_edge_monitor_leaving_never_loads_an_empty_stylesheet(env, make
     app.sync_monitors()
     assert app.shells == {} and len(app.app.stylesheets) == 2
     assert all(css.strip() for css in app.app.stylesheets)
+
+
+def test_panels_that_could_not_be_built_are_notified_by_name_once(renv, monkeypatch):
+    app, _, _, _, _ = renv
+    notes = []
+    monkeypatch.setattr(
+        app_mod.EdgeShellApp, "_notify", lambda self, title, msg: notes.append((title, msg))
+    )
+    shell = app.shells["HDMI-A-1"]
+    failure = "HDMI-A-1: panel 'Top clock' (clock) could not be built and is not shown: boom"
+    for failures in ([failure], [failure], [], [failure]):
+        shell.build_failures = failures
+        app._report_layout("HDMI-A-1", shell)
+    assert notes == [("Panel not shown", failure), ("Panel not shown", failure)]

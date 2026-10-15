@@ -34,6 +34,7 @@ from shell.panel_spec import (
 )
 from shell.registry import requests_for, widget_class
 from shell.theme import scope_class
+from shell.widget import WidgetProps
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +143,13 @@ class MonitorShell:
         self._resolved: list[PanelGeometry | CornerGeometry | None] = []
         # Each index's (handle, interaction) as last given to its panel (changed in place).
         self._handles: list[tuple[HandleSpec, Interaction] | None] = []
+        # Each index's (name, widget properties) as last built: a change rebuilds the panel.
+        self._contents: list[tuple[str, WidgetProps] | None] = []
         self.layout_warnings: list[str] = []
+        # Panels whose window or widget could not be built (not shown), as of the last sync.
+        self.build_failures: list[str] = []
+        # index -> (the entry it failed for, the message): not tried again until it changes
+        self._failed: dict[int, tuple[tuple, str]] = {}
         self._keys = itertools.count()  # scene keys for the canvas
         self._config = config
         self._theme = config.theme_for(name)
@@ -205,15 +212,18 @@ class MonitorShell:
         return out
 
     def _sync_panels(self, config: Config, theme, startup: bool) -> None:
-        """Make the panels match the resolved layout: rebuild a panel whose resolved geometry
-        changed (also when a neighbour's change moved or hid it), retarget a state change.
-        Does nothing while the monitor reports no size (being unplugged: the hot-plug sync
-        closes this shell), so no 0 px layout hides every panel."""
+        """Make the panels match the resolved layout: rebuild a panel whose resolved geometry,
+        name or widget properties changed (also when a neighbour's change moved or hid it),
+        retarget a state change. A panel that could not be built is left out (None) and
+        listed in `build_failures`; it is tried again only when its entry (kind, widget, name
+        or properties) changes. Does nothing while the monitor reports no size (being
+        unplugged: the hot-plug sync closes this shell), so no 0 px layout hides every panel."""
         g = self.monitor.get_geometry()
         if g.width <= 0 or g.height <= 0:
             return
         layout = self._layout(config, theme)
         self.layout_warnings = list(layout.warnings)
+        self.build_failures = []
         for message in layout.warnings:
             log.warning("%s", message)
         wanted = layout.panels
@@ -223,21 +233,35 @@ class MonitorShell:
             self.panels.pop()
             self._resolved.pop()
             self._handles.pop()
+            self._contents.pop()
+            self._failed.pop(len(self.panels), None)
         for i, geo in enumerate(wanted):
             if i == len(self.panels):
                 self.panels.append(None)
                 self._resolved.append(None)
                 self._handles.append(None)
+                self._contents.append(None)
             old, panel = self._resolved[i], self.panels[i]
             req = self._requests[i]
             handles = (req.handle, req.interaction)
+            content = (req.name, req.props)
             if geo is None:
                 if panel is not None:
                     self._destroy_panel(i)
-            elif panel is None or old is None or replace(old, state=geo.state) != geo:
+            elif (
+                panel is None
+                or old is None
+                or replace(old, state=geo.state) != geo
+                or self._contents[i] != content
+            ):
                 if panel is not None:
                     self._destroy_panel(i)
-                self.panels[i] = self._new_panel(i, geo, theme, raise_later=not startup)
+                failed = self._failed.get(i)
+                if failed is not None and failed[0] == _entry_key(req):
+                    self.build_failures.append(failed[1])  # same entry: not tried again
+                else:
+                    self._failed.pop(i, None)
+                    self.panels[i] = self._new_panel(i, geo, theme, raise_later=not startup)
             else:  # same geometry: the live panel changes in place (spec 15: never a rebuild)
                 if self._handles[i] != handles:
                     panel.set_handle(*handles)
@@ -245,6 +269,7 @@ class MonitorShell:
                     panel.set_state(geo.state)
             self._resolved[i] = geo
             self._handles[i] = handles
+            self._contents[i] = content
         self._schedule_measure()
 
     # ---- "content" lengths ----------------------------------------------------------------
@@ -342,9 +367,12 @@ class MonitorShell:
 
     def _new_panel(
         self, index: int, geo: PanelGeometry | CornerGeometry, theme, raise_later: bool
-    ) -> EdgePanel:
+    ) -> EdgePanel | None:
         """Build one panel window (edge or corner: `panel_class` of the geometry) showing a
-        new instance of the request's widget (`widget_class`), and its canvas shape."""
+        new instance of the request's widget (`widget_class`), and its canvas shape. A window
+        or widget that fails to build is logged, listed in `build_failures` (the app notifies
+        it by the panel's name) and left out: None, never an exception that would take the
+        monitor's other panels down."""
         self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
         self.canvas.add_panel(key, shape_for(geo))
@@ -364,9 +392,18 @@ class MonitorShell:
                 widget=widget_class(geo.widget)(),
                 props=req.props,
             )
-        except Exception:
+        except Exception as exc:
             self.canvas.remove_panel(key)
-            raise
+            log.exception(
+                "building panel %d %r (%s) on %s failed", index, req.name, geo.widget, self.name
+            )
+            message = (
+                f"{self.name}: panel {req.name!r} ({geo.widget}) could not be built and is not "
+                f"shown: {exc}"
+            )
+            self.build_failures.append(message)
+            self._failed[index] = (_entry_key(req), message)
+            return None
         panel.scene_key = key
         self._track(panel)
         if raise_later:  # created after startup: re-raise it like the first ones
@@ -458,6 +495,14 @@ class MonitorShell:
         self.panels.clear()
         self._resolved.clear()
         self._handles.clear()
+        self._contents.clear()
+        self._failed.clear()
+
+
+def _entry_key(req: PanelRequest | CornerRequest) -> tuple:
+    """What a failed build is remembered by: the entry's kind, widget, name and properties.
+    A change of any of them (a reload) tries the panel again; a move does not."""
+    return type(req).__name__, req.widget, req.name, req.props
 
 
 def _measure_key(req: PanelRequest | CornerRequest) -> tuple[str, bool]:

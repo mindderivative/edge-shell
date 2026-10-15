@@ -140,7 +140,11 @@ class EdgePanel(WaylandWindow):
 
         # Centring container: the widget's own content is centred inside the body box
         # that _place_content sizes and positions (a Box packs children at the start).
-        inner = self.build_content()
+        try:
+            inner = self.build_content()
+        except Exception:
+            self.destroy()  # never leave a half-built window behind (its widget stops too)
+            raise
         inner.set_hexpand(True)
         inner.set_vexpand(True)
         inner.set_halign(Gtk.Align.CENTER)

@@ -64,6 +64,7 @@ class EdgeShellApp:
         self._early: list = []  # windows created before the Application exists
         self._sync_timers: list[int] = []  # pending hot-plug sync timer ids
         self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
+        self._failures_reported: dict[str, list[str]] = {}  # last notified build failures
         self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
         self._log_deprecated(store.config)
 
@@ -274,8 +275,14 @@ class EdgeShellApp:
             self._report_error(f"{name}: rebuilding the panels failed")
 
     def _report_layout(self, name: str, shell) -> None:
-        """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), but
-        only when that monitor's warnings changed, not on every unrelated reload."""
+        """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), and
+        panels whose widget could not be built (by name), but only when that monitor's list
+        changed, not on every unrelated reload."""
+        failures = list(shell.build_failures)
+        if failures != self._failures_reported.get(name, []):
+            self._failures_reported[name] = failures
+            if failures:
+                self._notify("Panel not shown", "\n".join(failures))
         warnings = list(shell.layout_warnings)
         if warnings == self._layout_reported.get(name, []):
             return
