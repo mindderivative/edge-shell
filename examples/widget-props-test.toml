@@ -1,0 +1,33 @@
+# Gate (panel/widget plan): panel names, widgets and the clock's properties, on HDMI-A-1
+# only. DP-1 is listed as "plasma" so the settings window shows it; never change it.
+#   cp examples/widget-props-test.toml /tmp/edge-widgets.toml
+#   scripts/py main.py --config /tmp/edge-widgets.toml -v              (terminal 1: the shell)
+#   scripts/py main.py --settings --config /tmp/edge-widgets.toml      (terminal 2: the window)
+[monitors.HDMI-A-1]
+shell = "edge"
+
+[[monitors.HDMI-A-1.panels]]    # 0: the summary block in the bottom-left corner
+panel = "corner"
+name = "Summary"
+widget = "summary"
+
+[[monitors.HDMI-A-1.panels]]    # 1: dock, bottom centre
+panel = "edge"
+name = "Dock"
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]    # 2: clock, top centre: weekday and seconds, 18 pt
+panel = "edge"
+name = "Clock"
+widget = "clock"
+length = "content"
+format = "ddd HH:mm:ss"
+font_size = 18
+
+[[monitors.HDMI-A-1.panels]]    # 3: system bar, right edge
+panel = "edge"
+name = "System bar"
+widget = "system_bar"
+
+[monitors.DP-1]
+shell = "plasma"     # holds the Plasma panel: leave it alone

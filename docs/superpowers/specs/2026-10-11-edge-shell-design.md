@@ -53,7 +53,7 @@ Colours accept `#rrggbb` or `#rrggbbaa` (the alpha form matters for the border a
 | --- | --- | --- | --- | --- | --- |
 | clock | top | centered | 168 | 46 | extended |
 | dock | bottom | centered | 560 | 64 | extended |
-| widget_panel | bottom-left corner | x = 0 | 300 (incl. left frame) | 380 | extended |
+| summary (was widget_panel) | bottom-left corner | x = 0 | 300 (incl. left frame) | 380 | extended |
 | system_bar | right | y = 600 | 300 | 56 | extended |
 | workspaces | left | y = 150 | 220 | 52 | collapsed |
 
@@ -61,7 +61,7 @@ All values are defaults. Any of them can be overridden per monitor in the config
 
 **Curved joins.** Each join is an `R`×`R` square, frame-colored outside a quarter circle, so the desktop corner beside a panel is convex while the frame stays one continuous shape. A corner-anchored panel has one free-edge join; its other join sits on the frame beside it.
 
-**Corner panels (section 19, implemented).** The widget_panel is a rectangle in the bottom-left corner: width 300 and height 390 px from the corner (the 10 px bands included, so 380 px past the bottom band), opening from the bottom edge.
+**Corner panels (section 19, implemented).** The summary block (the `summary` widget, was `widget_panel`; section 20) is a rectangle in the bottom-left corner: width 300 and height 390 px from the corner (the 10 px bands included, so 380 px past the bottom band), opening from the bottom edge.
 
 ## 4. Interaction model
 
@@ -153,7 +153,10 @@ theme.accent = "#d3a68f"      # optional per-monitor override
 theme.shadow.elevation = 80   # nested tables merge key by key
 
 [[monitors.HDMI-A-1.panels]]
+panel = "edge"                # edge | corner | float (float: reserved, rejected)
+name = "Clock"                # required, unique per monitor
 widget = "clock"
+format = "HH:mm"              # a widget property (section 20)
 edge = "top"                  # omitted keys fall back to the widget's defaults
 length = 168
 align = "center"              # start | center | end; offset = px from that end
@@ -169,13 +172,14 @@ shell = "plasma"
 
 - **Validation** uses Pydantic models. Unknown widget names, bad colors and out-of-range numbers produce an error naming the key path. Invalid config never replaces a working one; the shell keeps the last good config and reports the error.
 - **Panels are an ordered list**, so one monitor may have the same widget twice, and each monitor may place widgets differently.
-- **Widget registry.** A widget registers by name with default geometry and a `build_content()` method. The registry also feeds the settings UI's widget list. Adding a widget means adding a file under `widgets/`.
+- **Widget registry.** A widget is a `Widget` class (`build(props)`, `destroy()`) registered with a display title, a property model and default geometry per panel kind; the panel classes (`EdgePanel`, `CornerPanel`) are never subclassed by widgets. The registry also feeds the settings UI's widget list and Widget rows. Adding a widget means adding a file under `widgets/` (section 20).
 
   ```python
-  @register("clock")
-  class ClockPanel(EdgePanel):
-      defaults = PanelSpec(edge="top", length=168, depth=46, label="clock")
-      def build_content(self): ...
+  @register_widget("clock", title="Clock", props=ClockProps,
+                   edge=PanelDefaults(edge="top", length=168, depth=46, label="clock"))
+  class ClockWidget(Widget):
+      def build(self, props: ClockProps): ...
+      def destroy(self): ...
   ```
 
 - **Live reload.** `Gio.FileMonitor` on the config file, debounced ~200 ms. The new config is diffed against the old:
@@ -187,6 +191,7 @@ shell = "plasma"
   | Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |
   | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
   | Panel `corner`, `edge`, `width` or `height` (corner panels) | Rebuild that panel, and any edge panel whose place changed (section 19) |
+  | Panel `panel`, `widget`, `name` or a widget property | Rebuild that panel (section 20) |
   | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
   | Monitor `shell` mode | Create or destroy that monitor's windows |
@@ -230,7 +235,7 @@ edge-shell/
 │   ├── corner.py             # PURE: corner panel geometry
 │   ├── corner_panel.py       # CornerPanel(EdgePanel)
 │   └── registry.py
-├── widgets/                  # clock, dock, system_bar, workspaces, widget_panel
+├── widgets/                  # clock, dock, system_bar, summary (workspaces later)
 ├── settings/                 # the settings window (own process): form, document, session, GTK view
 ├── services/plasma.py
 ├── spikes/                   # throwaway probes
@@ -245,7 +250,7 @@ edge-shell/
 | `shell/edge_panel.py` | Window setup, content placement, handle, input region, states; reports its depth to the canvas | Draw the panel body; contain widget content |
 | `shell/canvas/*` (except `canvas.py`), `shell/panel_layout.py` | Pure logic: outline, border, shadow, scene, damage boxes, panel positions | Import GTK |
 | `shell/canvas/canvas.py` | The `ShapeCanvas` window: draws frame, corners, panel bodies, border, shadow | Take input; know widget content |
-| `widgets/*` | Defaults, `build_content()` | Call cairo or GtkLayerShell |
+| `widgets/*` | Defaults, `Widget.build()` | Call cairo or GtkLayerShell |
 | `services/*` | D-Bus and Fabric signals | Build widgets |
 
 ## 9. Testing
@@ -295,7 +300,7 @@ Each is a throwaway script in `spikes/` that answers one question.
 
 A normal window (opened from a key binding, tray icon or frame handle) for editing colors, monitor modes, panel positions and the widget list, and for hiding or showing the Plasma shell. It writes the user config file only. Its form fields can be generated from the Pydantic JSON schema and the widget registry. Designed once the schema has settled, after milestone 7.
 
-**Implemented (2026-10-14, plan `docs/superpowers/plans/2026-10-14-settings-window.md`):** a separate process (`main.py --settings`, a `Gtk.Application` `org.edgeshell.Settings.c<hash of the config path>`: one instance per config file), opened from the CLI, a right-click on any panel handle, edge or corner (on the shell's config file), or a KDE custom shortcut; the config file is its only link to the shell. Corner panels (section 19) share the panel list, with rows by the widget's kind (`registry.widget_kind`, the models' `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`). The form is generated from `Config.model_json_schema()` and the widget registry (`settings/form.py`; per-monitor overrides use the base models' bounds, which `ThemeOverride`/`LayoutOverride` lose). Edits are made in place with tomlkit (comments kept; a comment run directly above a table header is that table's label and stays attached to it; an edit that would lose such a comment is refused), verified by re-parsing, checked by the shell's own loader and `validate_widgets`, and written atomically (symlinks kept; the shell's `ConfigWatcher` also watches a symlinked config's target); never an invalid file. Live apply (spin buttons debounced 400 ms; the mouse wheel never edits), Undo/Ctrl+Z, Revert all, per-field reset; `config.toml.bak` per session and `main.py --restore-config`; hand edits while the window is open are re-read, never overwritten, and a valid one becomes Revert all's starting point (Revert all returns to the state at the start of the session or after the last valid hand edit; an invalid hand edit it replaces is first saved as `config.toml.before-revert`, numbered like `.before-restore`); an invalid file opens read-only; file-system errors are shown, not raised. The shell's Fabric D-Bus client (`Execute`/`Evaluate`) is switched off. Known limits: unsetting a whole table leaves its label behind (not reachable from the window); CRLF files get LF on written lines; comments inside a multi-line array go when it is set; `kscreen-doctor` may delay the window start by up to 5 s; `--config=~/x` is not expanded; the first instance imports the widgets (Fabric typelibs load, no layer surface); a close after a failed write keeps the window open once. Deferred: hiding or showing Plasma's panel (needs section 7 and spike 2), tray icon, drag-and-drop layout, HiDPI. Results (Phil, live on HDMI-A-1, 2026-10-14). Gate A (14 items: window, wheel guard, colours and sources, border and thickness reloads, dock and handle edits, add/move/remove, lengths, layout and corner warnings, shell mode, refused min/max length, reset, corner panel rows, Revert all, backup) passed. It found three things, all fixed: a refused edit left its row showing the refused value and another row's reset cleared the error (now the row snaps back and keeps its error); the shell loaded an empty stylesheet when the last Edge Shell monitor left (a Gtk-CRITICAL, older than this branch); and the settings process printed `G_IS_OBJECT` warnings (a rebuild destroyed pages from inside a widget's own signal; now destroyed when the loop is idle). Known cosmetic limit: an unset `max_length` shows the spin's lowest value (60) with the source label "not set". The accent colour is stored but not yet used by anything. Gate B (11 items: hand edit while open, edit on top of it, invalid hand edit, `--restore-config`, one window per file, right-click on edge and corner handles, window without the shell, a panel over the window with Ctrl+Z, symlinked config) passed, except the optional KDE shortcut (item 8): the README command pointed at a checkout path without `scripts/py`; the README now uses a `/path/to/edge-shell` placeholder.
+**Implemented (2026-10-14, plan `docs/superpowers/plans/2026-10-14-settings-window.md`):** a separate process (`main.py --settings`, a `Gtk.Application` `org.edgeshell.Settings.c<hash of the config path>`: one instance per config file), opened from the CLI, a right-click on any panel handle, edge or corner (on the shell's config file), or a KDE custom shortcut; the config file is its only link to the shell. Corner panels (section 19) share the panel list, with rows by the panel's kind (`panel`; before section 20 `registry.widget_kind`, the models' `EDGE_ONLY_KEYS` / `CORNER_ONLY_KEYS`). The form is generated from `Config.model_json_schema()` and the widget registry (`settings/form.py`; per-monitor overrides use the base models' bounds, which `ThemeOverride`/`LayoutOverride` lose). Edits are made in place with tomlkit (comments kept; a comment run directly above a table header is that table's label and stays attached to it; an edit that would lose such a comment is refused), verified by re-parsing, checked by the shell's own loader and `validate_widgets`, and written atomically (symlinks kept; the shell's `ConfigWatcher` also watches a symlinked config's target); never an invalid file. Live apply (spin buttons debounced 400 ms; the mouse wheel never edits), Undo/Ctrl+Z, Revert all, per-field reset; `config.toml.bak` per session and `main.py --restore-config`; hand edits while the window is open are re-read, never overwritten, and a valid one becomes Revert all's starting point (Revert all returns to the state at the start of the session or after the last valid hand edit; an invalid hand edit it replaces is first saved as `config.toml.before-revert`, numbered like `.before-restore`); an invalid file opens read-only; file-system errors are shown, not raised. The shell's Fabric D-Bus client (`Execute`/`Evaluate`) is switched off. Known limits: unsetting a whole table leaves its label behind (not reachable from the window); CRLF files get LF on written lines; comments inside a multi-line array go when it is set; `kscreen-doctor` may delay the window start by up to 5 s; `--config=~/x` is not expanded; the first instance imports the widgets (Fabric typelibs load, no layer surface); a close after a failed write keeps the window open once. Deferred: hiding or showing Plasma's panel (needs section 7 and spike 2), tray icon, drag-and-drop layout, HiDPI. Results (Phil, live on HDMI-A-1, 2026-10-14). Gate A (14 items: window, wheel guard, colours and sources, border and thickness reloads, dock and handle edits, add/move/remove, lengths, layout and corner warnings, shell mode, refused min/max length, reset, corner panel rows, Revert all, backup) passed. It found three things, all fixed: a refused edit left its row showing the refused value and another row's reset cleared the error (now the row snaps back and keeps its error); the shell loaded an empty stylesheet when the last Edge Shell monitor left (a Gtk-CRITICAL, older than this branch); and the settings process printed `G_IS_OBJECT` warnings (a rebuild destroyed pages from inside a widget's own signal; now destroyed when the loop is idle). Known cosmetic limit: an unset `max_length` shows the spin's lowest value (60) with the source label "not set". The accent colour is stored but not yet used by anything. Gate B (11 items: hand edit while open, edit on top of it, invalid hand edit, `--restore-config`, one window per file, right-click on edge and corner handles, window without the shell, a panel over the window with Ctrl+Z, symlinked config) passed, except the optional KDE shortcut (item 8): the README command pointed at a checkout path without `scripts/py`; the README now uses a `/path/to/edge-shell` placeholder.
 
 ## 14. Open questions
 
@@ -375,7 +380,7 @@ Raised by Phil after Gate G of the core plan; the three choices below were decid
    - Offsets that would push a panel past the free span are clamped inward.
    - **Minimum geometry rules (found by the shape-canvas spike):** the single-outline renderer self-intersects (fills overlap, about 20-30 wrong pixels) when two curves collide. Two cases: (a) a panel whose concave fillet lands inside a screen-corner arc, so the **corner clearance is `pos - r >= T + R`** where `r = min(R, depth/2)` is the current join radius; (b) neighbouring panels on one edge whose fillets overlap, so the **minimum gap between adjacent panels is `r1 + r2`** (up to `2R` = 28 px at full depth). The layout resolver enforces both (clamping, with a warning); a panel exactly at the clearance renders correctly.
    - **Implemented (2026-10-13, layout plan):** the free span is `T + R + r` from each end; `length` takes px, `"fill"` (equal shares of what the neighbours, offsets and spacing leave), `"content"` (the content's natural size plus 12 px each side, measured once after build in an idle callback, the widget's default until then; a one-off startup rebuild of content panels, an in-place resize is planned only if a flash is observed) or a percentage of the free span, then `min_length`/`max_length` and a 60 px floor; too long is shrunk with a warning and the content is clipped (not scrolled) at the body edge and kept centred, never drawn over the joins and frame. `MonitorShell` re-lays out on the monitor's `notify::geometry` (debounced 250 ms; a zero geometry while unplugging is ignored), so centred, percentage and fill panels follow resolution changes. Two panels meeting at a shared screen corner collide at offset 0 (one needs an offset of at least the other's depth + r - R); a panel hidden by an overlap keeps its slot space; a re-layout the shell starts itself that fails is logged and rebuilds that monitor once, with a "Panels rebuilt" notification.
-   - **Corner-spanning panels** (the original `widget_panel`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), implemented, section 19; they are the only panels that meet two edges.
+   - **Corner-spanning panels** (the original `widget_panel`, now `summary`: one free-edge join plus one join on the adjacent frame) are a separate widget type with their own geometry (`corner`, width, height), implemented, section 19; they are the only panels that meet two edges.
 
 **Design implications (for the future plan)**
 
@@ -450,10 +455,11 @@ connects to two edges ... it is not an L shaped panel window"). Plan:
   keep `along + r_c + gap + r` from a corner panel on their edge and `T + R + depth + r` from
   one on the neighbouring edge; the overlap check runs corners first. Corner panels take
   precedence over edge panels.
-- **Config.** In `[[monitors.X.panels]]`; the kind comes from the widget (CornerDefaults);
-  keys `corner`, `edge`, `width`, `height`; mixing kinds is rejected with the key path. Reload:
-  `panel-state`, `panel-handle` in place; size or corner changes rebuild.
-- **Content.** `widget_panel`: time, date, CPU, RAM.
+- **Config.** In `[[monitors.X.panels]]` with `panel = "corner"` (section 20; before it the
+  kind came from the widget); keys `corner`, `edge`, `width`, `height`; mixing kinds is
+  rejected with the key path. Reload: `panel-state`, `panel-handle` in place; size or corner
+  changes rebuild.
+- **Content.** `summary` (was `widget_panel`): time, date, CPU, RAM.
 - **Decision recorded at Gate A.** Option A: at full depth the neighbouring edge panel on the
   other edge has no straight piece of frame between its fillet and the lifted corner arc (a
   stepped silhouette, valid geometry). Option B (an 8 px gap on the other edge too) was offered
@@ -467,7 +473,7 @@ connects to two edges ... it is not an L shaped panel window"). Plan:
 - **Gate B** (Phil, live on HDMI-A-1): passed ("Gate B Passes"). From his log: the shell
   started with 5 panels built; restyle (effects) and panel-handle reloads applied in place (no
   `building panel` lines); `panel-state` in place; a width change rebuilt only panel 0
-  (`widget_panel`) and panel 2 (clock); a width of 3000 shrank to 1882 and hid the dock and
+  (`widget_panel`, now `summary`) and panel 2 (clock); a width of 3000 shrank to 1882 and hid the dock and
   clock with warnings; invalid keys were rejected with key paths
   (`panels[0].align: widget_panel is a corner panel ...`,
   `panels[1].width: dock is an edge panel ...`, bad `state` and `align` values); a sixth entry
@@ -493,10 +499,43 @@ connects to two edges ... it is not an L shaped panel window"). Plan:
   extents, cut the effects run by about 13 % in a scratch test (median 6.18 to 5.39 ms) with
   the damage contract holding; a tighter corner damage box alone gained only about 4 %, so it
   is not worth doing first.
-- **Known limitations.** The `widget_panel`'s first stats appear after
+- **Known limitations.** The summary block's (was `widget_panel`) first stats appear after
   about 1 s (`invoke_repeater` initial call). Corner widgets read `/proc` per instance (no
   shared sysinfo service). Edge widgets (clock, dock) in corners are deferred. A corner request
   with a height below T + 16 is hidden with a warning that names the height. The settings window must use the corner
-  contract (`registry.widget_kind`, `registry.defaults`, `SHARED_KEYS`, `EDGE_ONLY_KEYS`,
+  contract (`registry.widget_kind`, since removed in section 20; `registry.defaults`, `SHARED_KEYS`, `EDGE_ONLY_KEYS`,
   `CORNER_ONLY_KEYS`, `CORNERS`, `corner.split('-')`, `default_edge`, `corner_has_edge`); the
   settings plan (branch `feat/settings-window`, plan commit 427b1cd) already depends on it.
+
+
+## 20. Implemented: the panel/widget model
+
+Spec: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (sections 3-5). Plan:
+`docs/superpowers/plans/2026-10-14-panel-widget-model.md`.
+
+- **Entries.** Every `[[monitors.X.panels]]` entry has `panel` (edge | corner | float; float is
+  reserved and rejected), `name` (1-40 characters, no control characters, no leading or
+  trailing whitespace, unique per monitor)
+  and `widget`. Other keys are the panel kind's keys or the widget's properties, flat in the
+  same table; `PanelConfig` collects the latter in `widget_props` and
+  `registry.validate_widgets` checks them against the widget's model. No aliases, no migration
+  tool: the old format fails with one line saying what to add.
+- **Widgets.** `Widget` classes (`shell/widget.py`) with a `WidgetProps` model, registered with
+  `register_widget(id, title=, props=, edge=PanelDefaults|None, corner=CornerDefaults|None)`;
+  `request_for` picks the defaults by `cfg.panel`; requests carry `name` and the validated
+  props. Built in: `dock`, `clock`, `system_bar` (edge) and `summary` (corner; was
+  `widget_panel`). The clock's `format` uses a fixed token table (`services/clock_format.py`:
+  HH mm ss H h a ddd dd MMM MM yyyy, plus 'quoted text'), never strftime on user text; `font`
+  (checked like the theme fonts) and `font_size` (6-96 pt) go into a provider on the clock's
+  label. A property type the settings window cannot show is refused at registration. Every
+  panel error writes the index in brackets (`monitors.X.panels[0].name: ...`).
+- **Shell.** `MonitorShell` builds `EdgePanel` or `CornerPanel` by kind with a new widget
+  instance; a change of name or props rebuilds that panel; a widget that fails to build is
+  logged and left out, and the app sends "Panel not shown" naming it; it is tried again only
+  when its entry (kind, widget, name or props) changes.
+- **Settings window.** Panel titles use `name`; the add list shows widget titles and writes
+  `{panel, name, widget}` with a free name; a Panel type row for widgets of several kinds
+  (float greyed out); a Widget frame generated from the widget's property model; switching
+  widget or kind is one edit that drops the keys the new one does not take.
+
+Gate results: see the plan's Tasks 10-11 (recorded below after the gate).
