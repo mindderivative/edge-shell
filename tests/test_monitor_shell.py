@@ -176,7 +176,13 @@ def build(monkeypatch, make_config, fake_registry):
     monkeypatch.delenv("EDGE_SHELL_RAISE_MS", raising=False)
     monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeCanvas)
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
-    monkeypatch.setattr(mon_mod, "panel_class", lambda _geo: FakeWindow)
+    real_panel_class = mon_mod.panel_class
+
+    def fake_panel_class(geo):
+        # a fake named after the real window class: which class a geometry gets stays testable
+        return type(real_panel_class(geo).__name__, (FakeWindow,), {})
+
+    monkeypatch.setattr(mon_mod, "panel_class", fake_panel_class)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     timers, idles, removed = [], [], []
     monkeypatch.setattr(
@@ -235,13 +241,14 @@ def test_a_corner_panel_gets_the_settings_opener(build, corner_registry):
         on_settings=opener,
     )
     assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
+    assert [type(p).__name__ for p in shell.panels] == ["CornerPanel", "EdgePanel"]
 
 
 def test_canvas_first_then_strips_then_panels(build):
     shell, tracked, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     assert tracked[0] is shell.canvas
     assert [type(w) for w in tracked[1:5]] == [FakeWindow] * 4
-    assert tracked[5] is shell.panels[0]
+    assert tracked[5] is shell.panels[0] and type(tracked[5]).__name__ == "EdgePanel"
 
 
 def test_panels_get_a_resolved_pos_a_scene_shape_and_a_depth_callback(build):
@@ -438,6 +445,7 @@ def test_failed_construction_closes_everything_already_built(
 
     monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeCanvas)
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
+    monkeypatch.setattr(mon_mod, "panel_class", lambda _geo: FakeWindow)
     monkeypatch.setattr(mon_mod, "widget_class", lambda _w: explode)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     monkeypatch.setattr(mon_mod.GLib, "timeout_add", lambda *a: 1)
@@ -1056,6 +1064,7 @@ def test_a_corner_panel_gets_its_geometry_a_corner_shape_and_a_depth_callback(
 
     shell, _, _ = build(edge({"panel": "corner", "name": "box", "widget": "box"}))
     (box,) = shell.panels
+    assert type(box).__name__ == "CornerPanel"
     assert box.args[0] == CornerGeometry(
         "box", "bottom-left", "bottom", 300, 290, 380, "extended", "box"
     )
