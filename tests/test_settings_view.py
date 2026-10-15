@@ -795,3 +795,32 @@ def test_the_view_reports_every_change_of_state_including_a_save(make):
     states.clear()
     assert view.save() is True
     assert states  # the saved point moved
+
+
+def test_save_after_a_refused_flush_copies_nothing_and_keeps_the_warning(make, pending):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)  # typed, inside the spin's pause
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
+    path.write_text(hand)  # by hand
+    assert view.save() is False
+    assert path.read_text() == hand and not path.with_name("config.toml.bak").exists()
+    assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
+
+
+def test_redo_after_a_refused_flush_does_nothing_more(make, pending):
+    view, path = make()
+    view._on_change(SHELL, "both")
+    view.undo()
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "none"'))  # by hand
+    view.redo()
+    assert 'shell = "none"' in path.read_text() and "both" not in path.read_text()
+    assert "changed outside" in view.banner_label.get_text()
+
+
+def test_a_successful_save_clears_an_old_error_banner(make):
+    view, _ = make()
+    view.show_banner("Not saved: an old error")
+    assert view.banner.get_visible()
+    assert view.save() is True
+    assert not view.banner.get_visible()

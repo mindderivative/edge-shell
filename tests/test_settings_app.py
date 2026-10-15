@@ -286,3 +286,116 @@ def test_a_failed_save_keeps_the_window_open_once(monkeypatch, tmp_path, fake_re
         assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is False
     finally:
         win.destroy()
+
+
+# ---- shortcuts reach the window's actions with no focused widget -------------------------------
+
+
+def _press(win, name):
+    """Ctrl+<key> through Gtk.Window.activate_key: what the toplevel does with its
+    application's accelerators when no widget handles the key first."""
+    from gi.repository import Gdk
+
+    keyval = Gdk.keyval_from_name(name)
+    ok, entries = Gdk.Keymap.get_default().get_entries_for_keyval(keyval)
+    assert ok
+    event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+    event.keyval = keyval
+    event.hardware_keycode = entries[0].keycode
+    event.group = entries[0].group
+    event.state = Gdk.ModifierType.CONTROL_MASK
+    return win.activate_key(event.key)  # the event outlives the call
+
+
+class Dialogs:
+    """The window's dialogs, answered from attributes; nothing is ever shown."""
+
+    def __init__(self, answer=None):
+        from settings.fileops import Answer
+
+        self.answer = answer or Answer.CANCEL
+        self.asked = []
+
+    def ask_unsaved(self, _parent, path):
+        self.asked.append(path)
+        return self.answer
+
+    def confirm_revert(self, _parent, _text):
+        return False
+
+
+@pytest.fixture
+def shortcut_window(tmp_path, fake_registry):
+    """A window (built, never shown) in a Gtk.Application that has the real accelerators."""
+    pytest.importorskip("tomlkit")
+    from gi.repository import Gtk
+
+    if not Gtk.init_check()[0]:
+        pytest.skip("no display")
+    from settings.menus import ACCELS
+    from settings.session import SettingsSession
+    from settings.window import SettingsWindow
+
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[theme]\naccent = "#112233"\n')
+    app = Gtk.Application(application_id="org.example.shortcuts")
+    for action, accels in ACCELS.items():
+        app.set_accels_for_action(action, accels)
+    made = []
+
+    def make(dialogs=None):
+        win = SettingsWindow(
+            SettingsSession(cfg), [], application=app, dialogs=dialogs or Dialogs()
+        )
+        made.append(win)
+        return win
+
+    make.cfg = cfg
+    yield make
+    for win in made:
+        win.destroy()
+
+
+def test_shortcuts_work_with_no_focused_widget(shortcut_window):
+    win = shortcut_window()
+    assert win.get_focus() is None
+    win.view.session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    win.view.rebuild()
+    assert _press(win, "z") is True  # Ctrl+Z
+    assert "#112233" in shortcut_window.cfg.read_text()
+    assert _press(win, "y") is True  # Ctrl+Y
+    assert "#445566" in shortcut_window.cfg.read_text()
+    assert _press(win, "s") is True  # Ctrl+S
+    assert not win.view.session.dirty
+
+
+def test_shortcuts_work_after_a_rebuild_removed_the_focused_widget(shortcut_window):
+    from gi.repository import Gtk
+
+    win = shortcut_window()
+    win.view.session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    win.view.rebuild()
+    spin = next(
+        w for r in win.view.rows for w in [r.editor.widget] if isinstance(w, Gtk.SpinButton)
+    )
+    win.set_focus(spin)
+    assert win.get_focus() is spin
+    win.view.rebuild()  # the pages (and the focused spin) are removed
+    assert win.get_focus() is None
+    assert _press(win, "z") is True
+    assert "#112233" in shortcut_window.cfg.read_text()
+    assert _press(win, "y") is True
+    assert "#445566" in shortcut_window.cfg.read_text()
+    dialogs = Dialogs()
+    win2 = shortcut_window(dialogs)  # Ctrl+Q with unsaved changes goes through the fake
+    win2.view.session.apply(lambda d: d.set(("theme", "accent"), "#778899"))
+    assert _press(win2, "q") is True
+    assert dialogs.asked == [shortcut_window.cfg] and win2.get_realized() is False
+
+
+def test_the_window_destroys_itself_on_exit_of_a_clean_config(shortcut_window):
+    win = shortcut_window()
+    destroyed = []
+    win.connect("destroy", lambda _w: destroyed.append(1))
+    win.controller.exit()
+    assert destroyed == [1]

@@ -32,6 +32,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
             session.path, session, outputs, dialogs or GtkDialogs(), quit=self.destroy
         )
         self.add(self.controller)
+        # the shortcuts are application accelerators for "win.<action>"; the toplevel finds the
+        # group from the focused widget up, so with nothing focused it must have it itself
+        self.insert_action_group("win", self.controller.actions)
         self.connect("delete-event", self._on_delete)
         self.controller.show_all()
 

@@ -65,7 +65,8 @@ class SettingsView(Gtk.Box):
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
         self.undo_button.set_tooltip_text("Undo the last change (Ctrl+Z)")
-        self.undo_button.connect("clicked", lambda _b: self.undo())
+        self._undo_clicked = self.undo_button.connect("clicked", lambda _b: self.undo())
+        self._undo_by_action = False
         self.revert_button = Gtk.Button(label="Revert all")
         self.revert_button.set_tooltip_text("Put back the file as it was when this window opened")
         self.revert_button.connect("clicked", lambda _b: self.confirm_revert())
@@ -103,6 +104,10 @@ class SettingsView(Gtk.Box):
             GLib.source_remove(self._rebuild_idle)
             self._rebuild_idle = 0
         visible = self.stack.get_visible_child_name()
+        window = self.get_toplevel()
+        focus = window.get_focus() if isinstance(window, Gtk.Window) else None
+        if focus is not None and focus.is_ancestor(self.stack):
+            window.set_focus(None)  # not left on a removed widget: shortcuts then find no group
         for row in self.rows:
             row.discard()  # pending or typed values go with the old rows, never written later
         retired = self.stack.get_children()
@@ -134,8 +139,20 @@ class SettingsView(Gtk.Box):
                 f"\n{self.session.error}",
                 Gtk.MessageType.ERROR,
             )
-        self.undo_button.set_sensitive(bool(self.session.history))
+        self._sync_undo_button()
         self._on_state()
+
+    def use_undo_action(self, name: str) -> None:
+        """Hand the Undo button to a window action ("win.undo"): it then clicks through the
+        action and is enabled exactly when the menu's Undo is. Without this (the view alone)
+        the button undoes by itself and follows the history."""
+        self._undo_by_action = True
+        self.undo_button.disconnect(self._undo_clicked)
+        self.undo_button.set_action_name(name)
+
+    def _sync_undo_button(self) -> None:
+        if not self._undo_by_action:
+            self.undo_button.set_sensitive(bool(self.session.history))
 
     def _page(self, name: str, title: str, content: Gtk.Widget, sensitive: bool) -> None:
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -224,7 +241,7 @@ class SettingsView(Gtk.Box):
             warnings = layout_preview(config, name, out.width, out.height) if out else []
             label.set_text("\n".join(warnings))
             label.set_visible(bool(warnings))
-        self.undo_button.set_sensitive(bool(self.session.history))
+        self._sync_undo_button()
         self._on_state()
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:

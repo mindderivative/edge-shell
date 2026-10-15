@@ -116,6 +116,19 @@ def test_the_menu_bar_shows_the_menus_and_their_shortcuts(make):
     assert Gtk.accelerator_name(*save.get_child().get_accel()) == "<Primary>s"
 
 
+def test_the_menus_have_separators_between_their_groups(make):
+    c, _ = make()
+
+    def shape(menu):
+        return [
+            "-" if isinstance(i, Gtk.SeparatorMenuItem) else "item" for i in menu.get_children()
+        ]
+
+    assert shape(c.menus["File"]) == ["item"] * 2 + ["-"] + ["item"] * 2 + ["-"] + ["item"] * 2
+    assert shape(c.menus["Edit"]) == ["item"] * 2 + ["-"] + ["item"] * 3 + ["-", "item"]
+    assert shape(c.menus["Help"]) == ["item"]
+
+
 def test_items_follow_the_session(make):
     c, _ = make()
     # Save and Undo work whenever a config is open (a pending value is applied first)
@@ -126,6 +139,21 @@ def test_items_follow_the_session(make):
     assert on(c, "undo") and on(c, "save") and on(c, "revert") and not on(c, "redo")
     run(c, "undo")
     assert on(c, "redo") and not on(c, "revert")  # back at the start: nothing to revert
+
+
+def test_the_top_bars_undo_button_is_the_undo_action(make):
+    c, path = make()
+    button = c.view.undo_button
+    assert button.get_action_name() == "win.undo"
+    assert button.get_sensitive() == on(c, "undo") is True  # enabled whenever Undo is
+    c.view._on_change(DEPTH, 90)
+    c.view._on_change(SHELL, "both")
+    button.clicked()  # one click is one undo (not the action and a handler of its own)
+    assert 'shell = "edge"' in path.read_text() and "depth = 90" in path.read_text()
+    c.actions.lookup_action("undo").set_enabled(False)
+    assert not button.get_sensitive()  # it follows the action, not the history
+    c.sync()
+    assert button.get_sensitive()
 
 
 def test_save_and_undo_stay_on_while_a_value_is_pending(make, pending):
@@ -246,7 +274,7 @@ def test_leaving_stays_open_once_after_a_refused_flush(make, pending):
 def test_a_discard_that_meets_a_hand_edit_stays_and_says_so(make):
     c, path = make()
     c.view._on_change(DEPTH, 90)
-    hand = USER + "# by hand\n"
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
 
     def ask(_parent, p):
         path.write_text(hand)  # edited by hand while the question was open
@@ -255,6 +283,8 @@ def test_a_discard_that_meets_a_hand_edit_stays_and_says_so(make):
     c.dialogs_.ask_unsaved = ask
     assert c.can_leave() is False and path.read_text() == hand
     assert "nothing was discarded" in c.view.banner_label.get_text()
+    # the rows were rebuilt from the hand edit, not left showing the old value
+    assert row(c, SHELL).editor.widget.get_active_id() == "both"
 
 
 def test_a_hand_edit_that_makes_the_file_invalid_updates_the_items(make):
@@ -272,3 +302,18 @@ def test_leaving_updates_the_items_after_a_discard(make):
     c.dialogs_.unsaved = Answer.DISCARD
     assert c.can_leave() is True
     assert not on(c, "revert")  # the file is back at the start
+
+
+def test_exit_answered_save_where_the_save_fails_stays_and_says_so(make, monkeypatch):
+    c, path = make()
+    c.view._on_change(DEPTH, 90)
+    c.dialogs_.unsaved = Answer.SAVE
+
+    def boom(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(files, "write_backup", boom)
+    assert c.can_leave() is False
+    run(c, "exit")
+    assert c.quits == [] and c.session.dirty
+    assert c.view.banner.get_visible() and "Not saved" in c.view.banner_label.get_text()

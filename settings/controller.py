@@ -69,6 +69,7 @@ class SettingsController(Gtk.Box):
         self.view = SettingsView(
             session, self.outputs, confirm_revert=self.dialogs.confirm_revert, on_state=self.sync
         )
+        self.view.use_undo_action("win.undo")  # the top bar's button is the menu's Undo
         self.body.pack_start(self.view, True, True, 0)
         self.view.show_all()
         self.sync()
