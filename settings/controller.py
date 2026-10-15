@@ -195,7 +195,7 @@ class SettingsController(Gtk.Box):
         if not self.can_leave():
             return
         try:
-            create_new(path)
+            path = create_new(path)  # the file written is the file launched
         except ConfigError as exc:
             self.tell(str(exc))
             return
@@ -315,9 +315,12 @@ class SettingsController(Gtk.Box):
         if self.view is None:
             return True
         self.view.flush()
-        if (self.view.save_failed or self.view.refused_outside) and not self._leave_warned:
-            self._leave_warned = True
-            return False
+        if self.view.save_failed or self.view.refused_outside:
+            if not self._leave_warned:
+                self._leave_warned = True
+                return False
+        # a flush that went through, or the second ask: the warning is armed again
+        self._leave_warned = False
         session = self.session
         answers: list[Answer] = []
 

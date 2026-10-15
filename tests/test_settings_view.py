@@ -824,3 +824,8 @@ def test_a_successful_save_clears_an_old_error_banner(make):
     assert view.banner.get_visible()
     assert view.save() is True
     assert not view.banner.get_visible()
+
+
+@pytest.mark.parametrize("text", ["A & B", "<b>x</b>", "HDMI & <DP>"])
+def test_a_heading_with_markup_characters_is_shown_as_text(text):
+    assert SettingsView._heading(text).get_text() == text

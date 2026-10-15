@@ -187,7 +187,7 @@ class SettingsView(Gtk.Box):
     @staticmethod
     def _heading(text: str) -> Gtk.Label:
         label = Gtk.Label(xalign=0)
-        label.set_markup(f"<b>{text}</b>")
+        label.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
         return label
 
     def _theme_page(self) -> Gtk.Widget:

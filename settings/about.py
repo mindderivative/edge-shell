@@ -31,6 +31,8 @@ def about_info(root: Path = ROOT) -> AboutInfo:
         project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError):
         project = {}
+    if not isinstance(project, dict):  # [project] that is not a table
+        project = {}
     raw = project.get("authors")
     entries = raw if isinstance(raw, list) else []
     # a malformed entry (a string, a table without a name) is ignored
@@ -39,12 +41,16 @@ def about_info(root: Path = ROOT) -> AboutInfo:
     lines = [description] if description and isinstance(description, str) else []
     return AboutInfo(
         name=NAME,
-        version=project.get("version") or _installed_version(),
+        version=_version(project.get("version")),
         comments="\n".join([*lines, "Built with Fabric (Python, GTK 3)."]),
         website=WEBSITE,
         authors=authors,
         license=_license(root, project.get("license")),
     )
+
+
+def _version(declared) -> str:
+    return declared if declared and isinstance(declared, str) else _installed_version()
 
 
 def _installed_version() -> str:

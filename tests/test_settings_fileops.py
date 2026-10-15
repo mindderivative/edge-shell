@@ -215,6 +215,8 @@ def test_new_adds_toml_to_a_name_without_a_suffix(tmp_path):
         ("X.TOML", "X.TOML"),
         (".toml", "config.toml"),
         (".TOML", "config.toml"),
+        ("...", "config.toml"),
+        ("z/..", "z/config.toml"),
         ("a.b", "a.b.toml"),
         ("my.config", "my.config.toml"),
         ("dir/x", "dir/x.toml"),
@@ -257,3 +259,9 @@ def test_save_as_never_reads_a_target_that_is_not_a_regular_file(tmp_path):
         save_copy(source, USER, fifo)
     with pytest.raises(ConfigError, match="not a regular file"):
         save_copy(source, USER, tmp_path)
+
+
+@pytest.mark.parametrize("name", ["...", "..", ".toml", "x.", "x", "z/.."])
+def test_new_path_is_idempotent(tmp_path, name):
+    once = new_path(tmp_path / name)
+    assert new_path(once) == once

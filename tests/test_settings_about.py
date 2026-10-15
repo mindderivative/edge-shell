@@ -73,3 +73,12 @@ def test_installed_metadata_licence_field_is_the_second_fallback(tmp_path, monke
 
     monkeypatch.setattr(about.metadata, "metadata", missing)
     assert about_info(tmp_path).license == NO_LICENSE
+
+
+def test_a_malformed_pyproject_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(about.metadata, "version", lambda _n: "0.9")
+    (tmp_path / "pyproject.toml").write_text('project = "x"\n')
+    assert about_info(tmp_path).version == "0.9"
+    (tmp_path / "pyproject.toml").write_text("[project]\nversion = 1\nauthors = 3\nlicense = 4\n")
+    info = about_info(tmp_path)
+    assert info.version == "0.9" and info.authors == about.AUTHORS

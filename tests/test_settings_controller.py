@@ -552,6 +552,49 @@ def test_new_adds_toml_to_a_name_without_a_suffix(make, tmp_path):
     assert c.launches == [folder / "fresh.toml"]
 
 
+def test_new_of_a_name_of_only_dots_launches_the_file_it_created(make, tmp_path):
+    c, _ = make()
+    folder = tmp_path / "home" / "edge-shell"
+    c.dialogs_.paths["new"] = folder / "..."
+    run(c, "new")
+    assert c.launches == [folder / "config.toml"] and c.launches[0].exists()
+    assert not (folder / ".toml").exists()
+
+
+def test_new_launches_the_path_create_new_returns(make, monkeypatch, tmp_path):
+    import settings.controller as ctl
+
+    c, _ = make()
+    other = tmp_path / "elsewhere.toml"
+    monkeypatch.setattr(ctl, "create_new", lambda _p: other)
+    c.dialogs_.paths["new"] = tmp_path / "home" / "edge-shell" / "x"
+    run(c, "new")
+    assert c.launches == [other]
+
+
+def test_the_leave_warning_rearms_after_the_state_changes(make, pending):
+    c, path = make()
+    row(c, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))  # by hand
+    assert c.can_leave() is False  # the first warning
+    assert c.can_leave() is True  # asked again, it goes on
+    c.open_session(SettingsSession(path))  # a new state, then a later unrelated failure
+    row(c, DEPTH).editor.widget.set_value(130)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "edge"\n# again'))
+    assert c.can_leave() is False  # warns once again
+
+
+def test_the_leave_warning_rearms_after_a_clean_flush(make, pending):
+    c, path = make()
+    row(c, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
+    assert c.can_leave() is False  # warned
+    c.view.save_failed = False
+    c.view.refused_outside = False
+    assert c.can_leave() is True  # clean: consumed
+    assert c._leave_warned is False
+
+
 def test_save_as_applies_a_pending_value_first(make, pending, tmp_path):
     c, _ = make()
     row(c, DEPTH).editor.widget.set_value(120)  # typed, inside the spin's pause
