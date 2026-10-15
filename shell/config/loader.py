@@ -53,3 +53,13 @@ def load_config(
     if user_path is not None:
         data = deep_merge(data, _read_toml(user_path, missing_ok=not required))
     return parse_config(data)
+
+
+def load_config_text(user_text: str, default_path: Path = DEFAULT_PATH) -> Config:
+    """Defaults overlaid with a user config given as TOML text: the settings window checks an
+    edit with this before writing it, by the same rules as load_config."""
+    try:
+        user = tomllib.loads(user_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"TOML syntax error: {exc}") from None
+    return parse_config(deep_merge(_read_toml(default_path), user))

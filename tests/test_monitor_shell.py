@@ -185,7 +185,7 @@ def build(monkeypatch, make_config, fake_registry):
     monkeypatch.setattr(mon_mod.GLib, "idle_add", lambda fn: idles.append(fn) or 100 + len(idles))
     monkeypatch.setattr(mon_mod.GLib, "source_remove", removed.append)
 
-    def _build(monitors, theme=None, monitor=None, on_layout=None, on_error=None):
+    def _build(monitors, theme=None, monitor=None, on_layout=None, on_error=None, on_settings=None):
         tracked = []
         cfg = make_config(monitors=monitors, theme=theme)
         shell = mon_mod.MonitorShell(
@@ -195,6 +195,7 @@ def build(monkeypatch, make_config, fake_registry):
             tracked.append,
             on_layout=on_layout,
             on_error=on_error,
+            on_settings=on_settings,
         )
         shell.test_idles, shell.test_removed = idles, removed
         return shell, tracked, timers
@@ -204,6 +205,24 @@ def build(monkeypatch, make_config, fake_registry):
 
 def edge(*panels, theme=None):
     return {"HDMI-A-1": {"shell": "edge", "panels": list(panels), "theme": theme or {}}}
+
+
+def test_every_panel_gets_the_settings_opener(build):
+    def opener():
+        return None
+
+    shell, _, _ = build(edge({"widget": "dock"}, {"widget": "clock"}), on_settings=opener)
+    assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
+    shell, _, _ = build(edge({"widget": "dock"}))
+    assert shell.panels[0].kwargs["on_settings"] is None
+
+
+def test_a_corner_panel_gets_the_settings_opener(build, corner_registry):
+    def opener():
+        return None
+
+    shell, _, _ = build(edge({"widget": "box"}, {"widget": "dock"}), on_settings=opener)
+    assert [p.kwargs["on_settings"] for p in shell.panels] == [opener, opener]
 
 
 def test_canvas_first_then_strips_then_panels(build):

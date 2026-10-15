@@ -20,7 +20,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
       # This list mirrors the pyproject dependencies and must be kept in sync with them.
       - name: Install (no GTK; gi/fabric tests skip themselves)
-        run: pip install "pydantic>=2.6" pycairo pytest "ruff==0.17.0"
+        run: pip install "pydantic>=2.6" pycairo "tomlkit>=0.15" pytest "ruff==0.17.0"
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest -q

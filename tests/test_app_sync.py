@@ -20,12 +20,21 @@ class FakeShell:
     fail_open: set = set()
 
     def __init__(
-        self, name, monitor, config, register, unregister=None, on_layout=None, on_error=None
+        self,
+        name,
+        monitor,
+        config,
+        register,
+        unregister=None,
+        on_layout=None,
+        on_error=None,
+        on_settings=None,
     ):
         self.name = name
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
+        self.on_settings = on_settings
         if name in FakeShell.fail_open:
             raise RuntimeError("cannot build")
         FakeShell.opened.append(name)
@@ -234,6 +243,13 @@ def test_sync_reports_what_it_opened_and_closed(env):
     assert app.sync_monitors() == (set(), set())
 
 
+def test_opened_shells_get_the_settings_opener(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert app.shells["HDMI-A-1"].on_settings == app.open_settings
+
+
 def test_reload_rebuild_monitor_closes_and_reopens_without_apply(renv):
     app, store, errors, _, make_config = renv
     store.pending = make_config(
@@ -310,6 +326,35 @@ def test_run_refuses_a_second_instance_before_creating_windows(env, monkeypatch,
     assert app.run() == 1
     assert FakeShell.opened == [] and created == []
     assert "already running" in capsys.readouterr().err
+
+
+def test_the_fabric_dbus_client_is_off(env, monkeypatch):
+    """Fabric's org.Fabric.fabric.edge-shell Execute / Evaluate would run any Python sent by
+    any session-bus client inside the shell; nothing in Edge Shell uses it."""
+    app, _ = env
+    made = []
+
+    class FakeApplication:
+        def __init__(self, *args, **kwargs):
+            made.append((args, kwargs))
+
+        def set_stylesheet_from_string(self, *_a, **_k):
+            pass
+
+        def hold(self):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(app_mod, "_already_running", lambda: False)
+    monkeypatch.setattr(app_mod, "Application", FakeApplication)
+    monkeypatch.setattr(app, "start_watching", lambda: None)
+    monkeypatch.setattr(app, "watch_displays", lambda: None)
+    monkeypatch.setattr(app_mod.signal, "signal", lambda *_a: None)
+    assert app.run() == 0
+    ((args, kwargs),) = made
+    assert args[0] == app_mod.APP_NAME and kwargs == {"open_client": False}
 
 
 def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
@@ -586,3 +631,25 @@ def test_all_off_panels_are_logged_once_per_load(renv, caplog):
         "panels with click, hover and drag all off (these panels open only through state): "
         "monitors.HDMI-A-1.panels.1"
     ]
+
+
+class StyledFabricApp(FakeFabricApp):
+    def __init__(self):
+        super().__init__()
+        self.stylesheets = []
+
+    def set_stylesheet_from_string(self, css, compile=True):
+        self.stylesheets.append(css)
+
+
+def test_the_last_edge_monitor_leaving_never_loads_an_empty_stylesheet(env, make_config):
+    """Gate A item 9: HDMI-A-1 edge -> plasma left no shell, css() was "", and Fabric's
+    load_from_data(bytearray(b"")) hands GTK a NULL pointer: Gtk-CRITICAL 'data != NULL'."""
+    app, mapping = env
+    app.app = StyledFabricApp()
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "plasma"}})
+    app.sync_monitors()
+    assert app.shells == {} and len(app.app.stylesheets) == 2
+    assert all(css.strip() for css in app.app.stylesheets)

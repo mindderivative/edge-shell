@@ -114,16 +114,19 @@ class MonitorShell:
         unregister_window=None,
         on_layout=None,
         on_error=None,
+        on_settings=None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
-        `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us)."""
+        `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us);
+        `on_settings()` is given to every panel (a right-click on its handle)."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
         self._unregister = unregister_window or (lambda _window: None)
         self._on_layout = on_layout or (lambda _shell: None)
         self._on_error = on_error or (lambda _shell: None)
+        self._on_settings = on_settings
         self._scope = scope_class(name)
         self._closed = False
         self.windows: list = []
@@ -352,6 +355,7 @@ class MonitorShell:
                 on_depth=lambda d, k=key: self.canvas.set_depth(k, d),
                 handle=req.handle,
                 interaction=req.interaction,
+                on_settings=self._on_settings,
             )
         except Exception:
             self.canvas.remove_panel(key)

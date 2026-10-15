@@ -32,8 +32,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=f"config file; must exist when given (default: {USER_PATH}, optional)",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--list-outputs", action="store_true", help="print monitors and connector names"
+    )
+    mode.add_argument(
+        "--settings",
+        action="store_true",
+        help="open the settings window on the config file (works with or without a running "
+        "shell; the file need not exist yet)",
+    )
+    mode.add_argument(
+        "--restore-config",
+        action="store_true",
+        help="put back the config as it was before the last settings-window session changed "
+        "it (config.toml.bak; the replaced file is kept as config.toml.before-restore)",
     )
     parser.add_argument(
         "--stats",
@@ -45,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
+    if args.stats is not None and (args.settings or args.restore_config):
+        parser.error("--stats only applies when running the shell")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
@@ -56,10 +71,28 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(describe_monitors()))
         return 0
 
+    path = args.config or USER_PATH
+    if args.restore_config:
+        from settings.files import restore_backup
+
+        try:
+            print(restore_backup(path))
+        except (ConfigError, OSError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
+
+    if args.settings:
+        # Before the ConfigStore: the window must open even when the file is invalid. It
+        # imports the widgets itself, only when it is the first instance on this file.
+        from settings.app import run_settings
+
+        return run_settings(path)
+
     import widgets  # noqa: F401  (registers the built-in panels before the config is validated)
 
     try:
-        store = ConfigStore(args.config or USER_PATH, required=args.config is not None)
+        store = ConfigStore(path, required=args.config is not None)
     except ConfigError as exc:
         print(f"config error:\n{exc}", file=sys.stderr)
         return 2

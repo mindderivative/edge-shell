@@ -1,0 +1,23 @@
+# Gates A and B (settings window plan): the shell and the settings window on a copy of this
+# file, on HDMI-A-1 only. DP-1 is listed as "plasma" so the window shows it; never change it.
+#   cp examples/settings-test.toml /tmp/edge-settings.toml
+#   scripts/py main.py --config /tmp/edge-settings.toml -v              (terminal 1: the shell)
+#   scripts/py main.py --settings --config /tmp/edge-settings.toml      (terminal 2: the window)
+
+[theme]
+accent = "#8fd3b6"   # mint: Gate A item 3 changes it; this comment must survive
+
+[monitors.HDMI-A-1]
+shell = "edge"       # the test monitor
+
+[[monitors.HDMI-A-1.panels]]   # dock, bottom centre
+widget = "dock"
+
+[[monitors.HDMI-A-1.panels]]   # clock, top centre
+widget = "clock"
+
+[[monitors.HDMI-A-1.panels]]   # system bar, right edge
+widget = "system_bar"
+
+[monitors.DP-1]
+shell = "plasma"     # holds the Plasma panel: leave it alone

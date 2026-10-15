@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import sys
 import time
 import traceback
 from collections import defaultdict
+from pathlib import Path
 
 import gi
 
@@ -31,6 +33,18 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "edge-shell"
 EXERCISE_MS = 300  # --stats toggles every panel this often: a 280 ms tween plus a frame
+
+
+MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+
+
+def settings_command(config_path: Path | None) -> list[str]:
+    """The command that opens the settings window on the shell's config file, with the
+    shell's own interpreter (the venv that has Fabric and tomlkit)."""
+    command = [sys.executable, str(MAIN_PATH), "--settings"]
+    if config_path is not None:
+        command += ["--config", str(config_path)]
+    return command
 
 
 def _already_running() -> bool:
@@ -100,6 +114,7 @@ class EdgeShellApp:
             self.unregister_window,
             on_layout=lambda shell, n=name: self._report_layout(n, shell),
             on_error=lambda shell, n=name: self._relayout_failed(n, shell),
+            on_settings=self.open_settings,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)
@@ -138,7 +153,11 @@ class EdgeShellApp:
 
     def refresh_css(self) -> None:
         if self.app is not None:
-            self.app.set_stylesheet_from_string(self.css(), compile=False)
+            # never empty: with no Edge Shell monitor css() is "", and Fabric's
+            # load_from_data(bytearray(b"")) hands GTK a NULL pointer (Gtk-CRITICAL
+            # 'data != NULL'). A comment replaces the old provider just the same.
+            css = self.css() or "/* no Edge Shell monitor */"
+            self.app.set_stylesheet_from_string(css, compile=False)
 
     def start_watching(self) -> None:
         path = self.store.path
@@ -264,6 +283,35 @@ class EdgeShellApp:
         if warnings:
             self._notify("Panels adjusted", "\n".join(warnings))
 
+    def open_settings(self) -> None:
+        """Start the settings window in its own process on this shell's config file (a
+        right-click on a panel handle). A window that is already open is brought forward
+        (single instance per config file). Never raises into GTK. The child is reaped by a
+        GLib child watch when it exits (no zombie for the shell's lifetime)."""
+        command = settings_command(None if self.store.path is None else self.store.path.absolute())
+        log.info("opening the settings window: %s", " ".join(command))
+        try:
+            proc = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
+        except OSError as exc:
+            log.error("could not open the settings window: %s", exc)
+            self._notify("Settings not opened", str(exc))
+            return
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, proc.pid, self._settings_closed, proc)
+
+    @staticmethod
+    def _settings_closed(_pid: int, status: int, proc: subprocess.Popen) -> None:
+        """GLib reaped the settings process; tell its Popen so it never waits for it again."""
+        code = os.waitstatus_to_exitcode(status)  # GLib passes the raw wait status
+        proc.returncode = code
+        if code == 0:
+            log.debug("the settings window closed (status 0)")
+        else:
+            log.warning(
+                "settings window exited with status %d; run `python main.py --settings` "
+                "in a terminal to see why",
+                code,
+            )
+
     def _notify(self, title: str, message: str) -> None:
         try:
             subprocess.Popen(["notify-send", "-a", "Edge Shell", "--", title, message[:400]])
@@ -286,9 +334,12 @@ class EdgeShellApp:
         if self._stats_seconds:
             self.recorder = StatsRecorder(GLib.get_monotonic_time)
         self.sync_monitors()
-        self.app = Application(APP_NAME, *self._early)
+        # open_client=False: no Fabric D-Bus client (org.Fabric.fabric.edge-shell's Execute /
+        # Evaluate run any Python sent by any session-bus client). The bus name itself stays
+        # owned (Gtk.Application), so _already_running still sees a running shell.
+        self.app = Application(APP_NAME, *self._early, open_client=False)
         self._early.clear()
-        self.app.set_stylesheet_from_string(self.css(), compile=False)
+        self.refresh_css()
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)
         self.start_watching()
         self.watch_displays()
