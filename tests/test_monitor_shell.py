@@ -176,7 +176,7 @@ def build(monkeypatch, make_config, fake_registry):
     monkeypatch.delenv("EDGE_SHELL_RAISE_MS", raising=False)
     monkeypatch.setattr(mon_mod, "ShapeCanvas", FakeCanvas)
     monkeypatch.setattr(mon_mod, "FrameEdge", FakeWindow)
-    monkeypatch.setattr(mon_mod, "widget_class", lambda _w: FakeWindow)
+    monkeypatch.setattr(mon_mod, "panel_class", lambda _geo: FakeWindow)
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
     timers, idles, removed = [], [], []
     monkeypatch.setattr(
@@ -1025,7 +1025,7 @@ def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
     caplog.set_level("DEBUG", logger="shell.monitors")
     shell, _, _ = build(edge({"panel": "edge", "name": "dock", "widget": "dock"}))
     built = [r.getMessage() for r in caplog.records if "building panel" in r.getMessage()]
-    assert built == ["building panel 0 (dock) on HDMI-A-1"]
+    assert built == ["building panel 0 'dock' (dock) on HDMI-A-1"]
     caplog.clear()
     shell.apply(
         make_config(
@@ -1042,7 +1042,7 @@ def test_only_building_a_panel_logs_building_panel(build, make_config, caplog):
         ),
         [Change("panel-rebuild", "HDMI-A-1", 0)],
     )
-    assert "building panel 0 (dock) on HDMI-A-1" in caplog.text
+    assert "building panel 0 'dock' (dock) on HDMI-A-1" in caplog.text
 
 
 # ---- corner panels (spec 19) ------------------------------------------------------------

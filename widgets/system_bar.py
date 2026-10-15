@@ -8,9 +8,9 @@ from fabric.widgets.label import Label
 from gi.repository import GLib
 
 from services.sysinfo import cpu_percent, read_cpu_times, read_meminfo_percent
-from shell.edge_panel import EdgePanel
 from shell.panel_spec import PanelDefaults
 from shell.registry import register_widget
+from shell.widget import Widget, WidgetProps
 
 
 @register_widget(
@@ -24,14 +24,16 @@ from shell.registry import register_widget
         edge="right", length=300, depth=56, label="system bar", align="end", offset=142
     ),
 )
-class SystemBarPanel(EdgePanel):
-    def build_content(self):
+class SystemBarWidget(Widget):
+    def __init__(self) -> None:
+        self._destroyed = False
+        self._repeater_id = 0
+
+    def build(self, props: WidgetProps):
         self._cpu = Label(style_classes="secondary")
         self._mem = Label(style_classes="secondary")
         self._prev = read_cpu_times()
-        self._destroyed = False
         self._repeater_id = invoke_repeater(2000, self._refresh)
-        self.connect("destroy", self._on_destroy)
         return Box(
             name="system-bar",
             orientation="v",
@@ -41,7 +43,7 @@ class SystemBarPanel(EdgePanel):
             children=[self._cpu, self._mem],
         )
 
-    def _on_destroy(self, *_args) -> None:
+    def destroy(self) -> None:
         # Panels are rebuilt on config reload and monitor hot-plug: stop the timer with them.
         self._destroyed = True
         if self._repeater_id:

@@ -32,7 +32,7 @@ def place_at(widget: Gtk.Widget, x: int, y: int) -> None:
 
 
 class CornerPanel(EdgePanel):
-    """Base class for corner widgets: register them with CornerDefaults (shell.registry)."""
+    """The window of a corner panel: an EdgePanel with a corner geometry."""
 
     spec: CornerGeometry
 

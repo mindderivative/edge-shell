@@ -19,6 +19,7 @@ from shell.canvas.canvas import ShapeCanvas
 from shell.canvas.scene import shape_for
 from shell.config.diff import Change
 from shell.config.models import Config
+from shell.corner_panel import CornerPanel
 from shell.edge_panel import EdgePanel
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
@@ -59,6 +60,11 @@ def raise_delays(env=os.environ) -> tuple[int, ...]:
 def _geometry(monitor) -> tuple[int, int, int, int]:
     g = monitor.get_geometry()
     return (g.x, g.y, g.width, g.height)
+
+
+def panel_class(geo: PanelGeometry | CornerGeometry) -> type[EdgePanel]:
+    """The window class of a panel kind: CornerPanel for a corner panel, else EdgePanel."""
+    return CornerPanel if isinstance(geo, CornerGeometry) else EdgePanel
 
 
 def gdk_monitors() -> list[Gdk.Monitor]:
@@ -337,16 +343,15 @@ class MonitorShell:
     def _new_panel(
         self, index: int, geo: PanelGeometry | CornerGeometry, theme, raise_later: bool
     ) -> EdgePanel:
-        """Build one panel window (edge or corner: a CornerPanel is an EdgePanel) and its
-        canvas shape. The class comes from the widget's registration (`widget_class`), not from
-        the geometry type."""
+        """Build one panel window (edge or corner: `panel_class` of the geometry) showing a
+        new instance of the request's widget (`widget_class`), and its canvas shape."""
         self._remeasure.add(index)  # measured when idle if it is a "content" panel
         key = next(self._keys)
         self.canvas.add_panel(key, shape_for(geo))
         req = self._requests[index]
-        log.debug("building panel %d (%s) on %s", index, geo.widget, self.name)
+        log.debug("building panel %d %r (%s) on %s", index, req.name, geo.widget, self.name)
         try:
-            panel = widget_class(geo.widget)(
+            panel = panel_class(geo)(
                 geo,
                 theme,
                 self.monitor,
@@ -356,6 +361,8 @@ class MonitorShell:
                 handle=req.handle,
                 interaction=req.interaction,
                 on_settings=self._on_settings,
+                widget=widget_class(geo.widget)(),
+                props=req.props,
             )
         except Exception:
             self.canvas.remove_panel(key)

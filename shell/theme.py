@@ -51,5 +51,5 @@ window{s} {{ background-color: transparent; }}
 {s} .secondary {{ color: {c["text_secondary"]}; }}
 {s} .active {{ color: {c["accent"]}; }}
 {s} #clock-time {{ font-size: 20px; font-weight: 500; }}
-{s} #widget-panel-time {{ font-size: 32px; font-weight: 500; }}
+{s} #summary-time {{ font-size: 32px; font-weight: 500; }}
 """  # noqa: E501
