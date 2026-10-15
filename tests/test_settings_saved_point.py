@@ -215,3 +215,111 @@ def test_revert_after_save_goes_to_the_start_and_is_dirty(path):
     s.save()
     s.revert()
     assert path.read_text() == USER and s.dirty
+
+
+def kept(path):
+    return sorted(p.name for p in path.parent.iterdir() if "before-revert" in p.name)
+
+
+def broken_then_fixed_and_saved(path):
+    """Open on valid text, save a broken file by hand, fix it in the session and Save."""
+    s = SettingsSession(path)
+    path.write_text(BROKEN)
+    s.rebase()
+    s.apply(lambda d: d.set(SHELL, "edge"))
+    s.save()
+    return s
+
+
+def test_discard_keeps_an_invalid_text_like_revert_all(path):
+    s = broken_then_fixed_and_saved(path)
+    saved = path.read_text()
+    assert s.undo() is True
+    assert path.read_text() == BROKEN and s.dirty and s.keeps_hand_edit()
+    s.discard()
+    assert path.read_text() == saved and not s.dirty
+    assert kept(path) == ["config.toml.before-revert"]
+    assert path.with_name("config.toml.before-revert").read_text() == BROKEN
+
+
+def test_discard_stops_when_the_invalid_text_cannot_be_kept(path, monkeypatch):
+    s = broken_then_fixed_and_saved(path)
+    s.undo()
+
+    def boom(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(files, "keep_before_revert", boom)
+    with pytest.raises(ConfigError, match="cannot write"):
+        s.discard()
+    assert path.read_text() == BROKEN and s.dirty and kept(path) == []
+
+
+def test_discard_of_a_valid_change_keeps_no_copy(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.discard()
+    assert path.read_text() == USER and kept(path) == []
+
+
+def test_save_refuses_while_the_file_is_invalid(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))  # the first write backs up USER
+    path.write_text(BROKEN)
+    s.rebase()
+    assert s.config is None
+    with pytest.raises(ConfigError, match="invalid"):
+        s.save()
+    assert bak(path).read_text() == USER  # the good copy is not replaced by the broken file
+
+
+def test_discard_clears_the_redo_line(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.save()
+    s.apply(lambda d: d.set(SHELL, "both"))
+    s.undo()
+    assert s.redo_history
+    s.discard()
+    assert s.redo_history == [] and s.redo() is False
+
+
+def test_discard_after_save_and_undo_writes_the_saved_text_back(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.save()
+    saved = path.read_text()
+    s.undo()
+    assert path.read_text() == USER and s.dirty
+    s.discard()
+    assert path.read_text() == saved and not s.dirty
+
+
+def test_discard_after_save_writes_nothing(path):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.save()
+    inode = path.stat().st_ino
+    assert s.history and not s.dirty  # history left, but nothing unsaved
+    s.discard()
+    assert path.stat().st_ino == inode and s.history == []
+
+
+def test_a_failed_write_leaves_both_stacks_alone(path, monkeypatch):
+    s = SettingsSession(path)
+    s.apply(lambda d: d.set(DEPTH, 80))
+    s.apply(lambda d: d.set(SHELL, "both"))
+    s.undo()
+    before = (list(s.history), list(s.redo_history), s.text)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(files, "write_atomic", boom)
+    with pytest.raises(ConfigError):
+        s.undo()
+    with pytest.raises(ConfigError):
+        s.redo()
+    with pytest.raises(ConfigError):
+        s.apply(lambda d: d.set(SHELL, "none"))
+    assert (s.history, s.redo_history, s.text) == before

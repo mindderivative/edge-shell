@@ -9,7 +9,8 @@ config.toml.bak (`main.py --restore-config` puts it back).
 The saved point (File > Save): live apply stays, every change is still written at once. Save
 records the current text as the saved point and copies the file to config.toml.bak; the
 session is `dirty` while its text differs from the saved point (an Undo back to it is not
-dirty). Discard writes the saved point back. A hand edit, valid or not, becomes the saved
+dirty). Discard writes the saved point back (keeping an invalid text it replaces as
+config.toml.before-revert, like Revert all). A hand edit, valid or not, becomes the saved
 point: it was saved, in another editor, so Discard never writes over it.
 
 Limits, by design: the file is read with universal newlines, so the first edit rewrites CRLF
@@ -155,12 +156,18 @@ class SettingsSession:
         """File > Save: the current text becomes the saved point and the file is copied to
         config.toml.bak (what `--restore-config` puts back; later changes of this session do
         not overwrite that copy). Refused, with ChangedOutside, after a hand edit (re-read: it
-        is the saved point now). A copy that cannot be written moves nothing."""
+        is the saved point now), and while the file is invalid (the copy would replace a good
+        .bak with a broken file). A copy that cannot be written moves nothing."""
         if self.changed_outside():
             self.rebase()
             raise ChangedOutside(
                 f"{self.path} was changed outside the settings window; it has been re-read "
                 "and is the saved state now"
+            )
+        if self.config is None:
+            raise ConfigError(
+                f"{self.path} is invalid ({self.error}); fix it before saving, "
+                "Save would copy it over the good config.toml.bak"
             )
         backup = files.backup_path(self.path.resolve())
         self._write_file(lambda: files.write_backup(self.path), backup)
@@ -179,6 +186,8 @@ class SettingsSession:
                 "and nothing was discarded"
             )
         if self.dirty:
+            if self.keeps_hand_edit():  # an invalid text being replaced: keep it first
+                self._write_file(lambda: files.keep_before_revert(self.path))
             self._write_file(lambda: files.write_atomic(self.path, self.saved_text))
         self.history.clear()
         self.redo_history.clear()
