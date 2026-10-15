@@ -1,5 +1,7 @@
 """settings.fields: the GTK row of each field kind (widgets only; no window is shown)."""
 
+import dataclasses
+
 import pytest
 
 gi = pytest.importorskip("gi")
@@ -409,13 +411,19 @@ def test_a_disabled_choice_is_greyed_out_and_never_sent():
     )
     row, changes, _ = row_for(spec, "edge")
     combo = row.editor.widget
-    model, (cell,) = combo.get_model(), combo.get_cells()
-    sensitive = []
-    for i in range(3):
-        row.editor._grey_out(combo, cell, model, model.get_iter(i))
-        sensitive.append(cell.get_property("sensitive"))
-    assert sensitive == [True, True, False]
-    combo.set_active_id("float")  # chosen anyway (the keyboard): not sent, edge comes back
+
+    def sensitive(combo):
+        model, (cell,) = combo.get_model(), combo.get_cells()
+        out = []
+        for i in range(3):  # what GTK does for each row before it draws it
+            combo.get_area().apply_attributes(model, model.get_iter(i), False, False)
+            out.append(cell.get_property("sensitive"))
+        return out
+
+    assert sensitive(combo) == [True, True, False]
+    plain, _, _ = row_for(dataclasses.replace(spec, disabled=()), "edge")
+    assert sensitive(plain.editor.widget) == [True, True, True]
+    combo.set_active_id("float")  # chosen programmatically: not sent, edge comes back
     assert changes == [] and combo.get_active_id() == "edge"
     combo.set_active_id("corner")
     assert changes == [(("theme", "x"), "corner")]

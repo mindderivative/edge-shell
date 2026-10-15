@@ -48,6 +48,7 @@ class SettingsView(Gtk.Box):
         self.refused_outside = False
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
+        self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -86,6 +87,9 @@ class SettingsView(Gtk.Box):
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
         or a hand edit); keeps the visible page."""
+        if self._rebuild_idle:  # a deferred rebuild is overtaken by this one
+            GLib.source_remove(self._rebuild_idle)
+            self._rebuild_idle = 0
         visible = self.stack.get_visible_child_name()
         for row in self.rows:
             row.discard()  # pending or typed values go with the old rows, never written later
@@ -219,7 +223,13 @@ class SettingsView(Gtk.Box):
         self.banner.hide()
 
     # ---- edits ---------------------------------------------------------------------------
-    def apply(self, edit: Edit, row: FieldRow | None = None, structural: bool = False) -> bool:
+    def apply(
+        self,
+        edit: Edit,
+        row: FieldRow | None = None,
+        structural: bool = False,
+        defer: bool = False,
+    ) -> bool:
         """Apply one edit; True when it was written. A rejected edit shows its error under
         `row` (or in the banner); a hand edit since the last read reloads everything."""
         try:
@@ -243,29 +253,43 @@ class SettingsView(Gtk.Box):
             row.show_error(None)  # its own edit or reset went through
         self.hide_banner()
         if structural:
-            self._rebuild_soon()
+            self._rebuild_soon(defer)
         else:
             self.refresh()
         return True
 
-    def _rebuild_soon(self) -> None:
+    def _rebuild_soon(self, defer: bool = False) -> None:
         """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
-        destroy the rows that still hold a pending value."""
+        destroy the rows that still hold a pending value. `defer`: when the loop is idle, not
+        now (a name entry's focus-out runs this before the click that caused it is released:
+        a button unparented by the rebuild would lose that click)."""
         if self._flushing:
             self._rebuild_due = True
+        elif defer:
+            if not self._rebuild_idle:
+                self._rebuild_idle = GLib.idle_add(self._rebuild_idle_cb)
         else:
             self.rebuild()
+
+    def _rebuild_idle_cb(self) -> bool:
+        self._rebuild_idle = 0
+        self.rebuild()
+        return False
 
     def _on_change(self, path: tuple, value: Any) -> None:
         titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
         if titled:  # the panel's expander title shows these: rebuild, keep that panel open
+            if not self._flushing:
+                self.flush()  # the rebuild drops the other rows' pending values: apply them first
+                if self.refused_outside:
+                    return  # the file was re-read: this edit was typed for the old file
             self._expand[path[1]] = path[3]
         if len(path) == 5 and path[2] == "panels":  # a panel's own key: maybe a compound edit
             _, entry = lookup(self.session.user, path[:4])
             edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], value))
         else:
             edit = lambda d: d.set(path, value)  # noqa: E731
-        if not self.apply(edit, self._row(path), structural=titled):
+        if not self.apply(edit, self._row(path), structural=titled, defer=True):
             self._expand.pop(path[1], None)
 
     def _on_reset(self, path: tuple) -> None:
@@ -279,7 +303,7 @@ class SettingsView(Gtk.Box):
             edit = lambda d: d.unset(path)  # noqa: E731
         if titled:
             self._expand[path[1]] = path[3]
-        if not self.apply(edit, self._row(path), structural=titled) and titled:
+        if not self.apply(edit, self._row(path), structural=titled, defer=True) and titled:
             self._expand.pop(path[1], None)
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:

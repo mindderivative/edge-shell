@@ -140,7 +140,8 @@ class BoolEditor(_Editor):
 
 class ChoiceEditor(_Editor):
     """A combo box. `disabled` choices are listed greyed out and are never sent (float panels:
-    "coming soon"); if one gets chosen anyway (the keyboard), the shown value comes back."""
+    "coming soon"); if one gets chosen anyway (in GTK3 only a programmatic
+    set_active can), the shown value comes back."""
 
     def __init__(
         self,

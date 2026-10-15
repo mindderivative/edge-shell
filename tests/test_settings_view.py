@@ -12,7 +12,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 pytest.importorskip("tomlkit")
 
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
@@ -49,6 +49,13 @@ def make(tmp_path, fake_registry):
         return SettingsView(SettingsSession(path), list(outputs)), path
 
     return _make
+
+
+def drain():
+    """Run what is waiting on the loop (a titled change rebuilds its pages when idle)."""
+    ctx = GLib.MainContext.default()
+    while ctx.iteration(False):
+        pass
 
 
 def pages(view):
@@ -99,6 +106,7 @@ def test_an_invalid_edit_shows_its_error_under_the_row(make):
     view._on_change(("monitors", "HDMI-A-1", "panels", 0, "pos"), 400)
     align = ("monitors", "HDMI-A-1", "panels", 0, "align")
     view._on_change(align, "end")
+    drain()
     r = row(view, align)
     assert r.error.get_visible() and "pos cannot be combined" in r.error.get_text()
     assert 'align = "end"' not in path.read_text()
@@ -113,9 +121,13 @@ def test_reset_removes_the_key(make, corner_registry):
 
     # resetting a corner also drops an edge the widget's corner cannot hold (one valid edit)
     view._on_change((*P0, "widget"), "box")
+    drain()
     view._on_change((*P0, "corner"), "top-right")
+    drain()
     view._on_change((*P0, "edge"), "right")
+    drain()
     view._on_reset((*P0, "corner"))  # back to the bottom-left corner: no right edge there
+    drain()
     assert "corner =" not in path.read_text() and "edge =" not in path.read_text()
     assert not view.banner.get_visible()
     assert row(view, (*P0, "edge")).source.get_text().endswith("corner default")
@@ -134,6 +146,7 @@ def test_adding_and_removing_panels_rebuilds_the_rows(make):
 def test_changing_a_panel_edge_retitles_it_and_keeps_it_open(make):
     view, path = make()
     view._on_change(("monitors", "HDMI-A-1", "panels", 0, "edge"), "top")
+    drain()
     expander = panel_editor(view).expanders[0]
     assert expander.get_label() == "1. dock: top, center" and expander.get_expanded()
     assert 'edge = "top"' in path.read_text()
@@ -214,7 +227,9 @@ def test_a_dock_turned_into_a_corner_widget_is_one_edit(make, corner_registry):
     reload); the entry then shows the corner rows, and its title follows."""
     view, path = make()
     view._on_change((*P0, "align"), "end")
+    drain()
     view._on_change((*P0, "widget"), "box")
+    drain()
     assert len(view.session.history) == 2  # align, then widget + unset align together
     text = path.read_text()
     assert (
@@ -232,8 +247,11 @@ def test_a_dock_turned_into_a_corner_widget_is_one_edit(make, corner_registry):
 def test_a_new_corner_drops_an_edge_it_does_not_have(make, corner_registry):
     view, path = make()
     view._on_change((*P0, "widget"), "box")
+    drain()
     view._on_change((*P0, "edge"), "left")
+    drain()
     view._on_change((*P0, "corner"), "top-right")
+    drain()
     assert 'corner = "top-right"' in path.read_text() and "edge = " not in path.read_text()
     edge = row(view, (*P0, "edge"))
     assert [r[0] for r in edge.editor.widget.get_model()] == ["top", "right"]
@@ -329,25 +347,33 @@ def test_reset_of_a_title_key_retitles_the_panel_and_keeps_it_open(make, corner_
     view, _ = make()
     plain = title(view)
     view._on_change((*P0, "edge"), "top")
+    drain()
     assert title(view) != plain
     view._on_reset((*P0, "edge"))
+    drain()
     assert title(view) == plain and panel_editor(view).expanders[0].get_expanded()
 
     view._on_change((*P0, "widget"), "box")
+    drain()
     boxed = title(view)
     view._on_change((*P0, "width"), 400)
+    drain()
     assert title(view) != boxed
     view._on_reset((*P0, "width"))
+    drain()
     assert title(view) == boxed and panel_editor(view).expanders[0].get_expanded()
 
 
 def test_reset_of_a_corner_gives_the_edge_combo_the_default_corners_edges(make, corner_registry):
     view, _ = make()
     view._on_change((*P0, "widget"), "box")
+    drain()
     before = (title(view), edge_choices(view))
     view._on_change((*P0, "corner"), "top-right")
+    drain()
     assert edge_choices(view)[0] == ["top", "right"]
     view._on_reset((*P0, "corner"))
+    drain()
     assert (title(view), edge_choices(view)) == before
     assert edge_choices(view)[1] is not None
 
@@ -369,6 +395,7 @@ def test_flush_applies_every_pending_value_even_when_one_rebuilds_the_page(
 ):
     view, path = make()
     view._on_change((*P0, "widget"), "box")
+    drain()
     row(view, (*P0, "width")).editor.widget.set_value(420)  # a title key: its write rebuilds
     row(view, THICKNESS).editor.widget.set_value(17)  # a later row on the same page
     view.flush()
@@ -380,6 +407,7 @@ def test_flush_applies_every_pending_value_even_when_one_rebuilds_the_page(
 def test_flush_rebuilds_once_at_the_end(make, corner_registry, timers):
     view, _ = make()
     view._on_change((*P0, "widget"), "box")
+    drain()
     rebuilds = []
     original = view.rebuild
     view.rebuild = lambda: (rebuilds.append(1), original())
@@ -429,6 +457,7 @@ def test_a_rejected_edit_leaves_no_panel_marked_to_open(make):
     view, _ = make()
     view._on_change((*P0, "pos"), 400)
     view._on_change((*P0, "align"), "end")  # a title key, rejected
+    drain()
     assert view._expand == {}
     panel_editor(view).add("nope")  # a structural edit, rejected
     assert view._expand == {}
@@ -486,12 +515,6 @@ def test_a_refused_edit_snaps_back_and_another_rows_reset_leaves_its_row_alone(m
     assert "max_length = 300" in path.read_text() and not refused.error.get_visible()
 
 
-def drain():
-    ctx = GLib.MainContext.default()
-    while ctx.iteration(False):
-        pass
-
-
 def test_a_rebuild_from_a_widgets_own_signal_destroys_that_widget_only_when_idle(make):
     """The align combo's "changed" (a title key) rebuilds the page. Destroying the combo inside
     its own emission let GTK finish the emission (the popup menu hiding, popup-shown) on a
@@ -503,9 +526,9 @@ def test_a_rebuild_from_a_widgets_own_signal_destroys_that_widget_only_when_idle
     combo.connect("destroy", lambda *_a: destroyed.append(combo))
     combo.set_active_id("end")  # as the user's pick in the popup does
     assert 'align = "end"' in path.read_text()
-    assert row(view, (*P0, "align")).editor.widget is not combo  # the page was rebuilt
     assert not destroyed and combo.get_parent() is not None  # alive through its emission
     drain()
+    assert row(view, (*P0, "align")).editor.widget is not combo  # the page was rebuilt
     assert destroyed == [combo]
 
 
@@ -638,6 +661,7 @@ def tile_view(tmp_path, corner_registry):
 def test_renaming_a_panel_retitles_it_and_keeps_it_open(make):
     view, path = make()
     view._on_change((*P0, "name"), "Bottom dock")
+    drain()
     expander = panel_editor(view).expanders[0]
     assert expander.get_label() == "1. Bottom dock: bottom, center" and expander.get_expanded()
     assert 'name = "Bottom dock"' in path.read_text()
@@ -669,6 +693,7 @@ def test_a_widget_property_is_a_row_and_a_key_of_the_entry(tile_view):
 def test_switching_the_widget_drops_its_property_keys_in_one_write(tile_view):
     view, path = tile_view
     view._on_change((*P0, "widget"), "dock")
+    drain()
     text = path.read_text()
     assert 'widget = "dock"' in text and "size" not in text and 'name = "Tile"' in text
     assert len(view.session.history) == 1
@@ -678,9 +703,11 @@ def test_switching_the_widget_drops_its_property_keys_in_one_write(tile_view):
 def test_the_panel_type_of_a_two_kind_widget_is_switched_in_one_write(tile_view):
     view, path = tile_view
     view._on_change((*P0, "panel"), "corner")
+    drain()
     assert 'panel = "corner"' in path.read_text() and len(view.session.history) == 1
     assert panel_editor(view).expanders[0].get_label() == "1. Tile: top-right, from top, 240x200"
     view._on_change((*P0, "panel"), "float")  # listed, greyed out; refused if it gets through
+    drain()
     assert "float panels are not implemented yet" in row(view, (*P0, "panel")).error.get_text()
 
 
@@ -689,3 +716,30 @@ def test_the_widget_list_shows_the_display_names(tmp_path, corner_registry):
     path.write_text(USER)
     view = SettingsView(SettingsSession(path), [HDMI])
     assert view.form.edge_panel.field("widget").labels == ("Bar", "Box", "Clock", "Dock")
+
+
+def test_a_titled_change_from_a_focus_out_rebuilds_only_when_idle(make):
+    """The name entry's focus-out runs before the click on Remove or Move is released: the
+    rebuild waits for the loop, so that button is not unparented under the click."""
+    view, path = make()
+    entry = row(view, (*P0, "name")).editor.widget
+    remove_button = next(w for w in walk(panel_editor(view)) if isinstance(w, Gtk.Button))
+    entry.set_text("Bottom dock")
+    entry.emit("focus-out-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE))
+    assert 'name = "Bottom dock"' in path.read_text()  # written at once
+    assert row(view, (*P0, "name")).editor.widget is entry  # but the rows are still these
+    assert entry.get_toplevel() is not entry and remove_button.get_parent() is not None
+    drain()
+    assert row(view, (*P0, "name")).editor.widget is not entry  # rebuilt once idle
+    assert panel_editor(view).expanders[0].get_label().startswith("1. Bottom dock")
+
+
+def test_a_rename_keeps_the_other_rows_pending_values(tile_view, pending):
+    view, path = tile_view
+    size = (*P0, "size")
+    row(view, size).editor.widget.set_value(30)  # inside the 400 ms pause
+    view._on_change((*P0, "name"), "Big clock")  # the rename rebuilds the page
+    drain()
+    text = path.read_text()
+    assert "size = 30" in text and 'name = "Big clock"' in text
+    assert row(view, size).editor.widget.get_value() == 30
