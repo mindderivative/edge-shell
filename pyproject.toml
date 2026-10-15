@@ -2,6 +2,8 @@
 name = "edge-shell"
 version = "0.1.0"
 description = "Customizable Fabric desktop shell for KDE Plasma (Wayland)"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 # Fabric (Fabric-Development/fabric) is installed from git into global-base; the PyPI
 # package named "fabric" is a different project. PyGObject must stay below 3.52.
