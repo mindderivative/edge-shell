@@ -1,7 +1,15 @@
 """The settings window's content: a top bar (Undo, Revert all, the file path), a banner for
-errors and notices, and a page per topic (the global theme and layout, then one page per
-monitor: shell mode, panels, theme and layout overrides). A plain Gtk.Box, so it is tested
-without creating a window; settings.window puts it in the toplevel.
+errors and notices, and beside the tree (settings.tree: Theme, the monitors) the page the tree
+selects (panel/widget spec 7). The Theme page and each monitor page have tabs (General,
+Borders, Shadows, Handle, Layout: settings.form.theme_tabs); a monitor page's values override
+the Theme for that monitor, and it has a Panels tab with its shell mode and its panel list. A
+plain Gtk.Box, so it is tested without creating a window; settings.window puts it in the
+toplevel.
+
+Every page is built at each rebuild (as before: every row exists, so flush() and refresh()
+reach every row, on any page); the tree only chooses which one is shown, so switching pages
+never drops a pending value. A rebuild keeps the shown page (by its name, settings.pages) and
+each page's tab (by its title).
 
 Every edit goes through SettingsSession.apply: a valid one is written to the user config and
 the running shell reloads it; an invalid one is shown under its row and not written."""
@@ -9,6 +17,7 @@ the running shell reloads it; an invalid one is shown under its row and not writ
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import gi
@@ -20,11 +29,20 @@ from gi.repository import Gdk, GLib, Gtk
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
 from settings.fields import DEBOUNCE_MS, FieldRow
-from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
+from settings.form import (
+    MODE_HINTS,
+    SectionSpec,
+    TabSpec,
+    config_form,
+    registry_widgets,
+    theme_tabs,
+)
+from settings.pages import THEME, fallback_page, monitor_page, parse_page, tree_entries
 from settings.panels import PanelEditor
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
 from settings.session import ChangedOutside, SettingsSession, check_text
-from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
+from settings.tree import SettingsTree
+from settings.values import field_value, layout_preview, lookup, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
 from shell.registry import requests_for
@@ -91,8 +109,10 @@ class SettingsView(Gtk.Box):
         self.outputs = {o.name: o for o in outputs}
         self.form = config_form(registry_widgets())
         self.rows: list[FieldRow] = []
-        self.previews: dict[str, Gtk.Label] = {}
+        # monitor -> the labels showing its layout warnings (its page; later its panels' pages)
+        self.previews: dict[str, list[Gtk.Label]] = {}
         self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        self._tab_of: dict[str, str] = {}  # page -> the title of the tab last shown on it
         self.save_failed = False  # the last flush() could not write something (shown on screen)
         # the last flush() met a hand edit: that row and the rest were not applied (warning on
         # screen); the caller must not go on to a structural edit or an undo on the re-read file
@@ -127,10 +147,11 @@ class SettingsView(Gtk.Box):
         self.banner.get_content_area().add(self.banner_label)
         self.banner.set_no_show_all(True)
         self.stack = Gtk.Stack()
-        sidebar = Gtk.StackSidebar(stack=self.stack)
-        body = Gtk.Box()
-        body.pack_start(sidebar, False, False, 0)
-        body.pack_start(self.stack, True, True, 0)
+        self.tree = SettingsTree(self.show_page)
+        self.tree.set_property("margin", 6)
+        body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        body.pack1(self.tree, False, False)  # never narrower than its MIN_WIDTH
+        body.pack2(self.stack, True, False)
         self.pack_start(bar, False, False, 0)
         self.pack_start(self.banner, False, False, 0)
         self.pack_start(body, True, True, 0)
@@ -176,14 +197,17 @@ class SettingsView(Gtk.Box):
             GLib.idle_add(_destroy_all, retired)
         self.rows, self.previews = [], {}
         valid = self.session.config is not None
-        self._page("theme", "Theme", self._theme_page(), valid)
-        if valid:
-            for name, connected in monitor_names(self.config, list(self.outputs.values())):
-                title = name if connected else f"{name} (not connected)"
-                self._page(f"monitor:{name}", title, self._monitor_page(name), True)
+        entries = tree_entries(self.session.config, list(self.outputs.values()))
+        self._add_page(THEME, self._theme_page(), valid)
+        for entry in entries[1:]:
+            name = parse_page(entry.page).monitor
+            self._add_page(entry.page, self._monitor_page(name, entry.title), True)
         self.stack.show_all()
-        if visible and self.stack.get_child_by_name(visible) is not None:
-            self.stack.set_visible_child_name(visible)
+        page = self._page_to_show(visible)
+        self.stack.set_visible_child_name(page)
+        # the panel rows come with the panel pages
+        self.tree.show(tuple(replace(e, children=()) for e in entries))
+        self.tree.select(page)
         if valid:
             self.refresh()
         else:
@@ -210,15 +234,73 @@ class SettingsView(Gtk.Box):
         if not self._undo_by_action:
             self.undo_button.set_sensitive(bool(self.session.history))
 
-    def _page(self, name: str, title: str, content: Gtk.Widget, sensitive: bool) -> None:
+    def _page_to_show(self, wanted: str | None) -> str:
+        """`wanted` if it is still a page; else its fallback (a gone panel's monitor), else the
+        Theme page."""
+        for page in (wanted, wanted and fallback_page(wanted)):
+            if page and self.stack.get_child_by_name(page) is not None:
+                return page
+        return THEME
+
+    def show_page(self, page: str) -> None:
+        """Show `page` (the tree's selection)."""
+        if self.stack.get_child_by_name(page) is not None:
+            self.stack.set_visible_child_name(page)
+
+    def _add_page(self, name: str, content: Gtk.Widget, sensitive: bool) -> None:
+        content.set_sensitive(sensitive)
+        self.stack.add_named(content, name)
+
+    def _tabbed(
+        self,
+        page: str,
+        top: list[Gtk.Widget],
+        tabs: tuple[TabSpec, ...],
+        prefix: tuple,
+        extra: tuple[tuple[str, Gtk.Widget], ...] = (),
+    ) -> Gtk.Widget:
+        """A page: `top` (its heading, a banner) above a notebook with one tab per TabSpec
+        (then the `extra` tabs, (title, content)), each tab scrolled on its own. A tab's later
+        parts get a heading of their own (the Handle tab: the handle colours, then "Handle
+        style"). The tab last shown on `page` is shown again."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        for widget in top:
+            box.pack_start(widget, False, False, 0)
+        notebook = Gtk.Notebook(scrollable=True)
+        for tab in tabs:
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            content.set_property("margin", 12)
+            for i, (key, section) in enumerate(tab.parts):
+                if i > 0:
+                    content.pack_start(self._heading(section.label), False, False, 6)
+                content.pack_start(self.section_rows(section, (*prefix, *key)), False, False, 0)
+            self._add_tab(notebook, tab.title, content)
+        for title, content in extra:
+            self._add_tab(notebook, title, content)
+        box.pack_start(notebook, True, True, 0)
+        self._keep_tab(page, notebook)
+        return box
+
+    @staticmethod
+    def _add_tab(notebook: Gtk.Notebook, title: str, content: Gtk.Widget) -> None:
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        content.set_margin_start(16)
-        content.set_margin_end(16)
-        content.set_margin_top(12)
-        content.set_margin_bottom(12)
         scroller.add(content)
-        scroller.set_sensitive(sensitive)
-        self.stack.add_titled(scroller, name, title)
+        scroller.show_all()  # a notebook only switches to a visible page (_keep_tab)
+        notebook.append_page(scroller, Gtk.Label(label=title))
+
+    def _keep_tab(self, page: str, notebook: Gtk.Notebook) -> None:
+        """Show the tab last shown on `page` (by its title) and remember the user's choice."""
+        titles = [notebook.get_tab_label_text(c) for c in notebook.get_children()]
+        if self._tab_of.get(page) in titles:
+            notebook.set_current_page(titles.index(self._tab_of[page]))
+        notebook.connect("switch-page", self._remember_tab, page)
+
+    def _remember_tab(self, notebook: Gtk.Notebook, child: Gtk.Widget, _num, page: str) -> None:
+        self._tab_of[page] = notebook.get_tab_label_text(child)
 
     def section_rows(self, section: SectionSpec, prefix: tuple) -> Gtk.Widget:
         """A box of FieldRows for `section` at key path `prefix`; sub-sections in frames."""
@@ -251,22 +333,33 @@ class SettingsView(Gtk.Box):
         return label
 
     def _theme_page(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.pack_start(self._heading("Theme (every monitor)"), False, False, 0)
-        box.pack_start(self.section_rows(self.form.theme, ("theme",)), False, False, 0)
-        box.pack_start(self._heading("Layout"), False, False, 0)
-        box.pack_start(self.section_rows(self.form.layout, ("layout",)), False, False, 0)
-        return box
+        heading = self._heading("Theme (every monitor)")
+        return self._tabbed(THEME, [heading], theme_tabs(self.form), ())
 
-    def _monitor_page(self, name: str) -> Gtk.Widget:
+    def _preview(self, name: str) -> Gtk.Label:
+        """A label for `name`'s layout warnings (shown by refresh when there are any)."""
+        preview = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        preview.get_style_context().add_class("warning")
+        preview.set_no_show_all(True)
+        self.previews.setdefault(name, []).append(preview)
+        return preview
+
+    def _monitor_page(self, name: str, title: str) -> Gtk.Widget:
+        """A monitor's page: the same tabs as the Theme page at [monitors.NAME], under a banner
+        saying that they override the Theme; a row that is not set shows the Theme's value
+        ("global theme")."""
         prefix = ("monitors", name)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.pack_start(self.section_rows(self.form.monitor, prefix), False, False, 0)
+        banner = Gtk.InfoBar(message_type=Gtk.MessageType.INFO)
+        banner.get_content_area().add(Gtk.Label(label=override_text(name), xalign=0, wrap=True))
+        top = [self._heading(title), banner, self._preview(name)]
+        # until the toolbar and the panel pages take them over: the mode and the panel list
+        panels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panels.set_property("margin", 12)
+        panels.pack_start(self.section_rows(self.form.monitor, prefix), False, False, 0)
         hints = "\n".join(f"{mode}: {hint}" for mode, hint in MODE_HINTS.items())
         note = Gtk.Label(label=hints, xalign=0, wrap=True)
         note.get_style_context().add_class("dim-label")
-        box.pack_start(note, False, False, 0)
-        box.pack_start(self._heading("Panels"), False, False, 0)
+        panels.pack_start(note, False, False, 0)
         editor = PanelEditor(
             self.form,
             name,
@@ -275,20 +368,9 @@ class SettingsView(Gtk.Box):
             lambda edit, expand, n=name: self._structural(n, edit, expand),
             self._expand.pop(name, None),
         )
-        box.pack_start(editor, False, False, 0)
-        preview = Gtk.Label(xalign=0, wrap=True, selectable=True)
-        preview.get_style_context().add_class("warning")
-        preview.set_no_show_all(True)
-        self.previews[name] = preview
-        box.pack_start(preview, False, False, 0)
-        for key, title, section in (
-            ("theme", "Theme override (this monitor only)", self.form.theme),
-            ("layout", "Layout override (this monitor only)", self.form.layout),
-        ):
-            expander = Gtk.Expander(label=title)
-            expander.add(self.section_rows(section, (*prefix, key)))
-            box.pack_start(expander, False, False, 0)
-        return box
+        panels.pack_start(editor, False, False, 0)
+        tabs = theme_tabs(self.form)
+        return self._tabbed(monitor_page(name), top, tabs, prefix, (("Panels", panels),))
 
     # ---- showing values ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -299,11 +381,12 @@ class SettingsView(Gtk.Box):
         config, user = self.config, self.session.user
         for row in self.rows:
             row.show_value(field_value(config, user, row.path), keep_pending=True)
-        for name, label in self.previews.items():
+        for name, labels in self.previews.items():
             out = self.outputs.get(name)
             warnings = layout_preview(config, name, out.width, out.height) if out else []
-            label.set_text("\n".join(warnings))
-            label.set_visible(bool(warnings))
+            for label in labels:
+                label.set_text("\n".join(warnings))
+                label.set_visible(bool(warnings))
         self._sync_undo_button()
         self._on_state()
 
@@ -623,6 +706,14 @@ class SettingsView(Gtk.Box):
                 Gtk.MessageType.INFO,
             )
         self._tell_dropped(dropped, typed)
+
+
+def override_text(name: str) -> str:
+    """The banner of a monitor's page."""
+    return (
+        f"These values override the Theme for {name}. A row you have not set here shows the "
+        "Theme's value."
+    )
 
 
 def _destroy_all(widgets: list[Gtk.Widget]) -> bool:

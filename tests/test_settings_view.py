@@ -213,7 +213,7 @@ def test_an_invalid_file_is_shown_read_only_with_its_error(make):
 
 def test_layout_warnings_are_previewed_for_connected_monitors(make):
     view, _ = make()
-    preview = view.previews["HDMI-A-1"]
+    (preview,) = view.previews["HDMI-A-1"]  # on the monitor page
     assert not preview.get_visible()
     view._on_change(("monitors", "HDMI-A-1", "panels", 0, "length"), 3000)
     assert preview.get_visible() and "monitors.HDMI-A-1" in preview.get_text()
@@ -1091,3 +1091,105 @@ def test_the_not_applied_list_is_capped_at_eight_entries(make):
     assert "theme.key7 = 7" in text and "theme.key8" not in text and "... and 3 more" in text
     view._tell_dropped(edits[:8], [])
     assert "more" not in view.banner_label.get_text().splitlines()[-1]
+
+
+# ---- the tree and the tabbed pages (panel/widget spec 7) -----------------------------------
+
+
+def notebook(view, page):
+    return next(w for w in walk(view.stack.get_child_by_name(page)) if isinstance(w, Gtk.Notebook))
+
+
+def tabs(view, page):
+    nb = notebook(view, page)
+    return [nb.get_tab_label_text(c) for c in nb.get_children()]
+
+
+def current_tab(view, page):
+    nb = notebook(view, page)
+    return nb.get_tab_label_text(nb.get_nth_page(nb.get_current_page()))
+
+
+def show_tab(view, page, title):
+    notebook(view, page).set_current_page(tabs(view, page).index(title))  # as a click does
+
+
+def texts(widget):
+    return [w.get_text() for w in walk(widget) if isinstance(w, Gtk.Label)]
+
+
+def click_row(view, page):
+    """Select a tree row as a click does."""
+    view.tree.list.select_row(view.tree.row_of(page))
+
+
+def test_the_tree_lists_the_theme_and_the_monitors_beside_the_pages(make):
+    view, _ = make()
+    assert [p for p, _t in view.tree.rows()][:2] == ["theme", "monitor:HDMI-A-1"]
+    assert ("monitor:DP-1", "DP-1") in view.tree.rows()
+    assert view.tree.selected() == "theme" == view.stack.get_visible_child_name()
+    paned = view.tree.get_parent()
+    assert isinstance(paned, Gtk.Paned) and paned.get_child2() is view.stack
+    assert view.tree.get_size_request()[0] >= 200
+
+
+def test_selecting_a_tree_row_shows_its_page(make):
+    view, _ = make()
+    click_row(view, "monitor:DP-1")
+    assert view.stack.get_visible_child_name() == "monitor:DP-1"
+
+
+def test_the_theme_page_has_its_tabs(make):
+    view, _ = make()
+    assert tabs(view, "theme") == ["General", "Borders", "Shadows", "Handle", "Layout"]
+    assert "Theme (every monitor)" in texts(view.stack.get_child_by_name("theme"))
+
+
+def test_a_monitor_page_has_the_theme_tabs_under_an_override_banner(make):
+    view, _ = make()
+    assert tabs(view, "monitor:HDMI-A-1")[:5] == tabs(view, "theme")
+    page = view.stack.get_child_by_name("monitor:HDMI-A-1")
+    assert any("These values override the Theme for HDMI-A-1" in t for t in texts(page))
+    accent = row(view, ("monitors", "HDMI-A-1", "theme", "accent"))
+    assert accent.source.get_text() == "global theme"  # not set here: the Theme's value
+    assert row(view, ("monitors", "HDMI-A-1", "layout", "gap")).source.get_text() == (
+        "px between neighbouring panels · global layout"
+    )
+
+
+def test_a_rebuild_keeps_the_page_and_its_tab(make):
+    view, _ = make()
+    click_row(view, "monitor:HDMI-A-1")
+    show_tab(view, "monitor:HDMI-A-1", "Borders")
+    view._on_change(("monitors", "HDMI-A-1", "theme", "border", "width"), 4)
+    view.rebuild()
+    assert view.stack.get_visible_child_name() == "monitor:HDMI-A-1"
+    assert view.tree.selected() == "monitor:HDMI-A-1"
+    assert current_tab(view, "monitor:HDMI-A-1") == "Borders"
+    assert current_tab(view, "theme") == "General"  # each page keeps its own
+
+
+def test_a_page_that_is_gone_after_a_hand_edit_falls_back_to_the_theme(make):
+    view, path = make(outputs=())
+    click_row(view, "monitor:HDMI-A-1")
+    path.write_text('[theme]\naccent = "#112233"\n')  # by hand: no monitor any more
+    view.file_changed()
+    assert pages(view) == ["theme"]
+    assert view.stack.get_visible_child_name() == "theme" == view.tree.selected()
+
+
+def test_an_invalid_file_shows_only_the_theme_in_the_tree(make):
+    view, path = make()
+    path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')
+    view.file_changed()
+    assert view.tree.rows() == [("theme", "Theme")]
+    assert not view.stack.get_child_by_name("theme").get_sensitive()
+
+
+def test_a_later_part_of_a_tab_has_its_own_heading(make):
+    view, _ = make()
+    nb = notebook(view, "theme")
+    handle = nb.get_nth_page(tabs(view, "theme").index("Handle"))
+    assert "Handle style" in texts(handle)
+    borders = nb.get_nth_page(tabs(view, "theme").index("Borders"))
+    assert "Border" not in texts(borders)  # one part: no heading
