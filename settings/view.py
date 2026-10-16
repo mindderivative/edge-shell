@@ -19,9 +19,10 @@ from gi.repository import Gdk, GLib, Gtk
 
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
-from settings.fields import FieldRow
+from settings.fields import DEBOUNCE_MS, FieldRow
 from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
 from settings.panels import PanelEditor
+from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
 from settings.session import ChangedOutside, SettingsSession, check_text
 from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
 from shell.config.models import ConfigError
@@ -98,6 +99,8 @@ class SettingsView(Gtk.Box):
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
         self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
+        self.queue = EditQueue()  # every value edit, applied in order (settings.queue)
+        self._queue_timer = 0  # the one pause timer of the queued spin edits (0: none)
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -142,7 +145,12 @@ class SettingsView(Gtk.Box):
 
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
-        or a hand edit); keeps the visible page."""
+        or a hand edit); keeps the visible page. Edits still queued are applied first (the
+        new rows could not show them): this rebuild then runs once, at the end."""
+        if len(self.queue) and not self._flushing:
+            self._rebuild_due = True
+            self._run_queue()
+            return
         self.cancel_deferred_rebuild()  # overtaken by this one
         visible = self.stack.get_visible_child_name()
         window = self.get_toplevel()
@@ -150,7 +158,7 @@ class SettingsView(Gtk.Box):
         if focus is not None and focus.is_ancestor(self.stack):
             window.set_focus(None)  # not left on a removed widget: shortcuts then find no group
         for row in self.rows:
-            row.discard()  # pending or typed values go with the old rows, never written later
+            row.discard()  # typed text goes with the old rows (queued edits stay queued)
         retired = self.stack.get_children()
         for child in retired:
             self.stack.remove(child)
@@ -209,7 +217,14 @@ class SettingsView(Gtk.Box):
         """A box of FieldRows for `section` at key path `prefix`; sub-sections in frames."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for spec in section.fields:
-            row = FieldRow(spec, (*prefix, spec.key), self._on_change, self._on_reset)
+            row = FieldRow(
+                spec,
+                (*prefix, spec.key),
+                self._on_change,
+                self._on_reset,
+                self._on_queue,
+                self.queue.pending,
+            )
             self.rows.append(row)
             box.pack_start(row, False, False, 0)
         for sub in section.sections:
@@ -336,10 +351,10 @@ class SettingsView(Gtk.Box):
         return True
 
     def _rebuild_soon(self, defer: bool = False) -> None:
-        """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
-        destroy the rows that still hold a pending value. `defer`: when the loop is idle, not
-        now (a name entry's focus-out runs this before the click that caused it is released:
-        a button unparented by the rebuild would lose that click)."""
+        """Rebuild now, or once the queue is applied (one rebuild for every edit that asks for
+        it). `defer`: when the loop is idle, not now (a name entry's focus-out runs this before
+        the click that caused it is released: a button unparented by the rebuild would lose
+        that click)."""
         if self._flushing:
             self._rebuild_due = True
         elif defer:
@@ -349,49 +364,107 @@ class SettingsView(Gtk.Box):
             self.rebuild()
 
     def _rebuild_idle_cb(self) -> bool:
+        """The deferred rebuild: what was queued meanwhile is applied first, then one rebuild."""
         self._rebuild_idle = 0
-        self.rebuild()
+        self._rebuild_due = True
+        self._run_queue()
         return False
 
+    # ---- the edit queue (settings.queue) -------------------------------------------------
     def _on_change(self, path: tuple, value: Any) -> None:
-        titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
-        if titled:  # the panel's expander title shows these: rebuild, keep that panel open
-            if self._flush_first():
-                return
-            self._expand[path[1]] = path[3]
-        if len(path) == 5 and path[2] == "panels":  # a panel's own key: maybe a compound edit
-            _, entry = lookup(self.session.user, path[:4])
-            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], value))
-        else:
-            edit = lambda d: d.set(path, value)  # noqa: E731
-        if not self.apply(edit, self._row(path), structural=titled, defer=True):
-            self._expand.pop(path[1], None)
-
-    def _flush_first(self) -> bool:
-        """A titled change rebuilds the page, which drops the other rows' pending values: apply
-        them first (the rebuild they ask for waits for the idle loop, one rebuild in all).
-        True: a hand edit was met, the file was re-read, and this edit was typed for the old
-        file."""
-        if not self._flushing:
-            self.flush(defer=True)
-            return self.refused_outside
-        return False
+        """An edit of a row (or of the toolbar): applied now, after the edits queued before it."""
+        self.queue.push(path, value)
+        self._run_queue(defer=True)
 
     def _on_reset(self, path: tuple) -> None:
+        self.queue.push(path, RESET)
+        self._run_queue(defer=True)
+
+    def _on_queue(self, path: tuple, value: Any, base: Any) -> None:
+        """A spin button's edit: queued and applied with the rest once the user pauses for
+        DEBOUNCE_MS (one timer for every row, started again by each edit)."""
+        self.queue.push(path, value, base)
+        self._cancel_queue_timer()
+        if len(self.queue):
+            self._queue_timer = GLib.timeout_add(DEBOUNCE_MS, self._queue_due)
+
+    def _queue_due(self) -> bool:
+        self._queue_timer = 0
+        self._run_queue(defer=True)
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_queue_timer(self) -> None:
+        if self._queue_timer:
+            GLib.source_remove(self._queue_timer)
+            self._queue_timer = 0
+
+    def _run_queue(self, defer: bool = False) -> None:
+        """Apply every queued edit in order. Inside a running flush() nothing more happens:
+        that flush applies the new edit in its turn. A rebuild an edit asks for (a title key)
+        waits until the queue is empty: once, `defer`red to the idle loop or not."""
+        if self._flushing:
+            return
+        self.save_failed = False
+        self.refused_outside = False
+        self._flushing = True
+        try:
+            self._drain()
+        finally:
+            self._flushing = False
+            if self._rebuild_due:
+                self._rebuild_due = False
+                self._rebuild_soon(defer)
+
+    def _drain(self) -> None:
+        """Apply the queue, oldest edit first. A hand edit met on the way (the file was
+        re-read) drops that edit and every later one, and says which on screen."""
+        self._cancel_queue_timer()
+        while (item := self.queue.pop()) is not None:
+            self._apply_queued(item)
+            if self.refused_outside:
+                self._tell_dropped([item, *self.queue.drop()], [])
+                break
+
+    def _apply_queued(self, item: QueuedEdit) -> None:
+        """One queued edit: a set or a reset; a panel's own key can be a compound edit
+        (settings.values.panel_ops); a key in a panel's title rebuilds the pages."""
+        path, value = item.path, item.value
         panel_key = len(path) == 5 and path[2] == "panels"
         titled = panel_key and path[4] in TITLE_KEYS  # the title and rows follow: rebuild
-        if panel_key and path[4] == "corner":
-            _, entry = lookup(self.session.user, path[:4])  # resetting a corner also drops an
-            # edge it cannot hold (panel_ops only turns None into an unset for the corner)
-            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], None))
-        else:
+        if panel_key and (value is not RESET or path[4] == "corner"):
+            # resetting a corner also drops an edge it cannot hold (panel_ops turns None into
+            # an unset for the corner only)
+            _, entry = lookup(self.session.user, path[:4])
+            ops = panel_ops(entry or {}, path[4], None if value is RESET else value)
+            edit = _panel_edit(path[:4], ops)
+        elif value is RESET:
             edit = lambda d: d.unset(path)  # noqa: E731
+        else:
+            edit = lambda d: d.set(path, value)  # noqa: E731
         if titled:
-            if self._flush_first():
-                return
-            self._expand[path[1]] = path[3]
-        if not self.apply(edit, self._row(path), structural=titled, defer=True) and titled:
+            self._expand[path[1]] = path[3]  # keep that panel open
+        if not self.apply(edit, self._row(path), structural=titled):
             self._expand.pop(path[1], None)
+
+    def _tell_dropped(self, dropped: list[QueuedEdit], typed: list[tuple]) -> None:
+        """Add to the banner what was not applied because the file changed outside this
+        window (never lost silently): the queued edits and the rows with typed text."""
+        parts = [describe(dropped)] if dropped else []
+        parts += [f"{path_text(path)} (typed text)" for path in typed]
+        if parts:
+            text = self.banner_label.get_text()
+            note = "Not applied (made for the file before it changed): " + ", ".join(parts)
+            self.show_banner(f"{text}\n{note}" if text else note, Gtk.MessageType.WARNING)
+
+    def retire(self) -> None:
+        """The view is going (File > Close, Open, New): no timer or idle rebuild may run on
+        it later. Its queue was applied by the leave question's flush; anything left is
+        dropped."""
+        self.cancel_deferred_rebuild()
+        self._cancel_queue_timer()
+        self.queue.drop()
+        for row in self.rows:
+            row.discard()
 
     def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
@@ -451,30 +524,31 @@ class SettingsView(Gtk.Box):
         return True
 
     def revert(self) -> None:
-        # no flush: a pending value is about to be reverted, and applying it first would
-        # re-read a hand edit and hide the "changed outside" warning
+        # no flush: queued values are about to be reverted (dropped without a word), and
+        # applying them first would re-read a hand edit and hide the "changed outside" warning
+        self._cancel_queue_timer()
+        self.queue.drop()
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
 
     def flush(self, defer: bool = False) -> None:
-        """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
-        a font list without Enter): the window is closing, or the rows are about to be rebuilt
-        (a panel added, removed or moved, Undo). Rows keep their pending
-        edit through the refresh after each apply, so every row is applied in turn; a rebuild an
-        apply asks for waits until the last row was applied (once, at the end). Not for Revert
-        all or a hand edit: their pending values are discarded with the rows. `save_failed` says
-        whether any of them could not be written (the error is on screen); `refused_outside` that
-        a hand edit was met: the rows from that one on were dropped (a rebuild follows).
-        `defer`: the rebuild at the end waits for the idle loop (see _rebuild_soon)."""
+        """The barrier before anything that must see every edit (a panel added, removed or
+        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a font
+        list or a name without Enter, a number without Enter) into the queue, then the whole
+        queue is applied in order (a spin edit inside its pause included). A rebuild an edit
+        asks for waits until the end (once). Not for Revert all or a hand edit: they drop the
+        queue. `save_failed` says whether an edit could not be written (the error is on
+        screen); `refused_outside` that a hand edit was met: that edit and the later ones were
+        dropped and named on screen (a rebuild follows). `defer`: the rebuild at the end waits
+        for the idle loop (see _rebuild_soon)."""
         self.save_failed = False
         self.refused_outside = False
         self._flushing = True
         try:
             for row in list(self.rows):
-                row.flush()
-                if self.refused_outside:
-                    break  # the rest would be applied onto the re-read file
+                row.flush()  # typed text -> the queue (applied below, in its turn)
+            self._drain()
         finally:
             self._flushing = False
             if self._rebuild_due:
@@ -507,17 +581,21 @@ class SettingsView(Gtk.Box):
         try:
             if not self.session.changed_outside():
                 return
-            self.session.rebase()  # pending values go with the rows: they were typed against
-            # the old file
+            self.session.rebase()
         except ConfigError as exc:
             self.show_banner(f"Cannot read the config: {exc}")
             return
+        # queued edits and typed text were made for the old file: dropped, and named below
+        self._cancel_queue_timer()
+        dropped = self.queue.drop()
+        typed = [row.path for row in self.rows if row.unsent()]
         self.rebuild()
         if self.session.config is not None:
             self.show_banner(
                 f"{self.session.path} was changed outside this window; showing the new values",
                 Gtk.MessageType.INFO,
             )
+        self._tell_dropped(dropped, typed)
 
 
 def _destroy_all(widgets: list[Gtk.Widget]) -> bool:

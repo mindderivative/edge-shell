@@ -99,10 +99,10 @@ def make(tmp_path, fake_registry):
 @pytest.fixture
 def pending(monkeypatch):
     """Spin pauses never fire on their own: a typed value stays pending until flushed."""
-    import settings.fields as fields
+    import settings.view as view_module
 
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    monkeypatch.setattr(view_module.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(view_module.GLib, "source_remove", lambda _id: None)
 
 
 def row(c, path):
@@ -357,6 +357,15 @@ def test_close_shows_the_empty_page_where_only_new_open_and_exit_work(make):
     path.write_text(USER + "# by hand\n")
     c.file_changed()
     assert c.view is None
+
+
+def test_closing_retires_the_view(make, pending):
+    c, path = make()
+    view = c.view
+    row(c, DEPTH).editor.widget.set_value(120)  # queued
+    c.dialogs_.unsaved = Answer.DISCARD
+    run(c, "close")
+    assert len(view.queue) == 0 and not view._queue_timer and "depth" not in path.read_text()
 
 
 def test_close_with_unsaved_changes_asks_and_cancel_keeps_the_config(make):

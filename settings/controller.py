@@ -149,9 +149,7 @@ class SettingsController(Gtk.Box):
     def _drop_view(self) -> None:
         view, self.view, self.session = self.view, None, None
         if view is not None:
-            view.cancel_deferred_rebuild()  # it would rebuild a view that is gone
-            for row in view.rows:
-                row.discard()
+            view.retire()  # no queue timer or idle rebuild may run on a view that is gone
             self.body.remove(view)
             # destroyed when idle: an action can run inside a signal of a widget of this view
             GLib.idle_add(lambda: view.destroy() or GLib.SOURCE_REMOVE)

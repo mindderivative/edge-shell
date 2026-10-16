@@ -10,7 +10,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Gdk, GObject, Gtk  # noqa: E402
 
 from settings.form import (  # noqa: E402
     LENGTH_MODES,
@@ -327,9 +327,14 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
 class FieldRow(Gtk.Box):
     """Label, editor, where the value comes from, a reset button and an error line.
 
-    `on_change(path, value)` runs when the user edits the value (spin buttons: after a
-    DEBOUNCE_MS pause); `on_reset(path)` when the reset button is pressed. Values shown with
-    show_value never call back."""
+    `on_change(path, value)` runs when the user edits the value; `on_reset(path)` when the reset
+    button is pressed. A spin button's edits (DEBOUNCED kinds) go to `on_queue(path, value,
+    base)` instead, `base` being the value the row showed (the view's EditQueue applies them
+    after the pause: settings.queue); without `on_queue` they go to on_change at once. The row
+    holds no timer and no pending value of its own: only text typed and not yet sent (a font
+    list, a name, a number without Enter), which flush() sends. `is_pending(path)` says whether
+    the view still has an edit of this row queued (a refresh then keeps the editor as it is).
+    Values shown with show_value never call back."""
 
     def __init__(
         self,
@@ -337,14 +342,16 @@ class FieldRow(Gtk.Box):
         path: tuple,
         on_change: Callable[[tuple, Any], None],
         on_reset: Callable[[tuple], None],
+        on_queue: Callable[[tuple, Any, Any], None] | None = None,
+        is_pending: Callable[[tuple], bool] | None = None,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.spec, self.path = spec, path
         self._on_change = on_change
+        self._on_queue = on_queue
+        self._is_pending = is_pending or (lambda _path: False)
         self._updating = False
-        self._timer = 0
         self._discarding = False  # retired by a rebuild: nothing it holds may be written
-        self._pending: Any = None
         self._shown: Any = _UNSHOWN  # the value last shown or written: a no-op is not written
         self.editor = make_editor(spec, self._changed)
         line = Gtk.Box(spacing=8)
@@ -364,20 +371,18 @@ class FieldRow(Gtk.Box):
         self.error.set_no_show_all(True)
         self.pack_start(line, False, False, 0)
         self.pack_start(self.error, False, False, 0)
-        self.connect("destroy", lambda *_a: self._cancel())  # a stale timer must not write
 
     def show_value(self, value: FieldValue, keep_pending: bool = False) -> None:
         """Show `value` and clear the error. With `keep_pending` (refreshing every row after
-        another row's apply) the error stays, and a row holding an edit that is not applied yet
-        (a debounced spin value, typed text) only updates its source and reset, so that the
+        another row's apply) the error stays, and a row with an edit that is not applied yet
+        (queued in the view, or typed text) only updates its source and reset, so that the
         refresh never drops it."""
         self._shown = value.value
         if not keep_pending:
             self.show_error(None)
-        if keep_pending and (self._timer or self.editor.dirty()):
+        if keep_pending and (self._is_pending(self.path) or self.editor.dirty()):
             self._show_note(value)
             return
-        self._cancel()
         self._updating = True
         try:
             if isinstance(self.editor, LengthEditor):
@@ -398,47 +403,31 @@ class FieldRow(Gtk.Box):
         self.error.set_visible(bool(message))
 
     def flush(self) -> None:
-        """Send what the user changed but has not been applied yet: a debounced spin value
-        or a typed font list (the window is closing)."""
-        self.editor.commit()  # before the timer check: update() re-arms it through _changed
-        if self._timer:
-            self._cancel()
-            self._write(self._pending)
+        """Send text typed and not sent yet (a font list or a name without Enter, a number
+        without Enter): the view applies it with the queue (the window is closing, the pages
+        are about to be rebuilt)."""
+        self.editor.commit()
+
+    def unsent(self) -> bool:
+        """True while the editor holds typed text that was not sent."""
+        return self.editor.dirty()
 
     def _changed(self, value: Any) -> None:
         if self._updating or self._discarding:
             return
-        if self.spec.kind not in DEBOUNCED:
-            self._write(value)
+        if self.spec.kind in DEBOUNCED and self._on_queue is not None:
+            self._on_queue(self.path, value, self._shown)  # the queue un-queues a change back
             return
-        self._cancel()
-        self._pending = value
-        self._timer = GLib.timeout_add(DEBOUNCE_MS, self._flush)
-
-    def _flush(self) -> bool:
-        self._timer = 0
-        self._write(self._pending)
-        return GLib.SOURCE_REMOVE
+        self._write(value)
 
     def _write(self, value: Any) -> None:
-        if self._discarding:
-            return
         if _same(value, self._shown):
             return  # a no-op must not turn an inherited value into an explicit one
         self._shown = value
         self._on_change(self.path, value)
 
-    def cancel_pending(self) -> None:
-        """Drop a debounced value without writing it (the row is about to be discarded)."""
-        self._cancel()
-
     def discard(self) -> None:
-        """The row is retired (a rebuild or a hand-edit reload): drop what it holds and never
-        call back again, also for the focus-out GTK sends when its entry is unparented."""
+        """The row is retired (a rebuild or a hand-edit reload): never call back again, also
+        for the focus-out GTK sends when its entry is unparented. Its queued edits stay in the
+        view's queue (they are not the row's)."""
         self._discarding = True
-        self._cancel()
-
-    def _cancel(self) -> None:
-        if self._timer:
-            GLib.source_remove(self._timer)
-            self._timer = 0

@@ -276,10 +276,10 @@ def test_an_unwritable_folder_shows_in_the_banner(make):
 
 
 def test_close_flushes_a_pending_spin_value(make, monkeypatch):
-    import settings.fields as fields
+    import settings.view as view_module
 
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    monkeypatch.setattr(view_module.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(view_module.GLib, "source_remove", lambda _id: None)
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)  # inside the 400 ms pause
     assert "depth" not in path.read_text()
@@ -290,10 +290,10 @@ def test_close_flushes_a_pending_spin_value(make, monkeypatch):
 @pytest.fixture
 def pending(monkeypatch):
     """Spin pauses never fire on their own: a typed value stays pending until flushed."""
-    import settings.fields as fields
+    import settings.view as view_module
 
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    monkeypatch.setattr(view_module.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(view_module.GLib, "source_remove", lambda _id: None)
 
 
 def test_another_rows_apply_keeps_a_pending_spin_value(make, pending):
@@ -381,10 +381,10 @@ def test_reset_of_a_corner_gives_the_edge_combo_the_default_corners_edges(make, 
 @pytest.fixture
 def timers(monkeypatch):
     """Spin pauses never fire on their own, but their timer ids are real (a flush cancels)."""
-    import settings.fields as fields
+    import settings.view as view_module
 
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 3)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
+    monkeypatch.setattr(view_module.GLib, "timeout_add", lambda _ms, _fn: 3)
+    monkeypatch.setattr(view_module.GLib, "source_remove", lambda _id: None)
 
 
 THICKNESS = ("monitors", "HDMI-A-1", "theme", "thickness")
@@ -485,10 +485,10 @@ MIN_LENGTH, MAX_LENGTH = (*P0, "min_length"), (*P0, "max_length")
 
 
 def type_into(view, path, value):
-    """A user edit of a spin row: the value typed, then its 400 ms pause over."""
+    """A user edit of a spin row: the value typed, then its 400 ms pause over (the queue)."""
     r = row(view, path)
     r.editor.widget.set_value(value)
-    r.flush()
+    view._queue_due()
     return r
 
 
@@ -532,15 +532,19 @@ def test_a_rebuild_from_a_widgets_own_signal_destroys_that_widget_only_when_idle
     assert destroyed == [combo]
 
 
-def test_a_rebuild_cancels_the_old_rows_pending_values_at_once(make, pending):
-    """Their destroy now waits for the idle loop: a pending pause must not write meanwhile."""
+def test_a_hand_edit_drops_the_queue_and_its_timer_at_once(make, monkeypatch):
+    """The old rows are destroyed when the loop is idle: no queued value may be written
+    meanwhile, and none is lost without a word."""
+    started, removed = [], []
+    monkeypatch.setattr(GLib, "timeout_add", lambda _ms, _fn: started.append(7) or 7)
+    monkeypatch.setattr(GLib, "source_remove", removed.append)
     view, path = make()
-    old = row(view, DEPTH)
-    old.editor.widget.set_value(120)
-    assert old._timer
+    row(view, DEPTH).editor.widget.set_value(120)
+    assert view.queue.pending(DEPTH) and started == [7]
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
-    view.file_changed()  # a hand edit: rebuild, pending values go with the old rows
-    assert not old._timer
+    view.file_changed()  # a hand edit: rebuild; the queue was made for the old file
+    assert len(view.queue) == 0 and removed == [7] and not view._queue_timer
+    assert "monitors.HDMI-A-1.panels[0].depth = 120" in view.banner_label.get_text()
 
 
 def test_the_revert_dialog_says_where_an_invalid_hand_edit_is_kept(make):
@@ -861,3 +865,117 @@ def test_an_info_banner_gets_the_class_and_others_do_not(make):
     assert not context.has_class(INFO_NOTE_CLASS)
     view.show_banner("careful", Gtk.MessageType.WARNING)
     assert not context.has_class(INFO_NOTE_CLASS)
+
+
+# ---- the edit queue (settings.queue) ---------------------------------------------------------
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """The queue's pause timer, by hand: (started ids, removed ids, fire())."""
+    started, removed, callbacks = [], [], {}
+
+    def add(_ms, fn):
+        started.append(10 + len(started))
+        callbacks[started[-1]] = fn
+        return started[-1]
+
+    monkeypatch.setattr(GLib, "timeout_add", add)
+    monkeypatch.setattr(GLib, "source_remove", removed.append)
+    return started, removed, lambda: callbacks[started[-1]]()
+
+
+def written_in_order(view):
+    """The keys each write added, in order (from the undo history and the file)."""
+    texts = [*view.session.history, view.session.text]
+    return [
+        next(line for line in b.splitlines() if line not in a.splitlines())
+        for a, b in zip(texts, texts[1:], strict=False)
+    ]
+
+
+def test_spin_edits_of_several_rows_share_one_pause_and_apply_in_order(make, clock):
+    started, removed, fire = clock
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    row(view, THICKNESS).editor.widget.set_value(17)
+    assert started == [10, 11] and removed == [10]  # one timer, started again by each edit
+    assert "depth" not in path.read_text()
+    fire()  # the pause is over
+    assert written_in_order(view) == ["depth = 120", "theme.thickness = 17"]
+    assert len(view.queue) == 0 and not view._queue_timer
+
+
+def test_an_edit_applied_at_once_comes_after_the_queued_ones(make, clock):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    view._on_change(SHELL, "both")  # a combo or a checkbox: applied now
+    assert written_in_order(view) == ["depth = 120", 'shell = "both"']
+
+
+def test_a_spin_changed_back_within_the_pause_writes_nothing(make, clock):
+    view, path = make()
+    spin = row(view, DEPTH).editor.widget
+    spin.set_value(90)
+    spin.set_value(64)  # back to the widget default it showed
+    view.flush()
+    assert path.read_text() == USER and not view.session.history
+
+
+def test_a_rebuild_applies_the_queued_edits_first_and_runs_once(make, clock):
+    view, path = make()
+    rebuilds = _count_rebuilds(view)
+    row(view, DEPTH).editor.widget.set_value(120)
+    view.rebuild()  # e.g. Detect monitors
+    assert "depth = 120" in path.read_text() and len(view.queue) == 0
+    assert row(view, DEPTH).editor.widget.get_value() == 120
+    assert len(rebuilds) == 2  # the call, and the one it runs after the queue
+
+
+def test_a_hand_edit_met_while_applying_names_every_dropped_edit(make, clock):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    row(view, THICKNESS).editor.widget.set_value(17)
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
+    path.write_text(hand)
+    view.flush()
+    assert path.read_text() == hand
+    text = view.banner_label.get_text()
+    assert "changed outside" in text and "Not applied" in text
+    assert "monitors.HDMI-A-1.panels[0].depth = 120" in text
+    assert "monitors.HDMI-A-1.theme.thickness = 17" in text
+
+
+def test_typed_text_dropped_by_a_hand_edit_is_named(make):
+    view, path = make()
+    row(view, FONT).editor.widget.set_text("Typed Font")
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
+    view.file_changed()
+    assert "theme.font (typed text)" in view.banner_label.get_text()
+
+
+def test_the_deferred_rebuild_applies_what_was_queued_meanwhile_once(make, clock):
+    view, path = make()
+    view._on_change((*P0, "name"), "Bottom dock")  # a title key: rebuilt when idle
+    rebuilds = _count_rebuilds(view)
+    row(view, DEPTH).editor.widget.set_value(120)  # queued before the loop is idle
+    drain()
+    assert "depth = 120" in path.read_text() and 'name = "Bottom dock"' in path.read_text()
+    assert len(rebuilds) == 1
+
+
+def test_revert_drops_the_queue_without_a_word(make, clock):
+    view, path = make()
+    view._on_change(SHELL, "both")
+    row(view, DEPTH).editor.widget.set_value(120)
+    view.revert()
+    assert path.read_text() == USER and len(view.queue) == 0
+    assert "Not applied" not in view.banner_label.get_text()
+
+
+def test_a_retired_view_starts_nothing_later(make, clock):
+    started, removed, _ = clock
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    view.retire()
+    assert removed == started and len(view.queue) == 0

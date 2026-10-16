@@ -18,18 +18,14 @@ from settings.form import FieldSpec, WidgetChoice, config_form  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
 
 FORM = config_form(tuple(WidgetChoice(w) for w in ("clock", "dock", "system_bar")))
-REAL_TIMEOUT_ADD = GLib.timeout_add
 
 
-@pytest.fixture(autouse=True)
-def immediate(monkeypatch):
-    """Debounced edits fire at once (no main loop in tests)."""
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, fn: fn() and 0)
-
-
-def row_for(spec, value, is_set=False, path=("theme", "x")):
+def row_for(spec, value, is_set=False, path=("theme", "x"), queued=None):
+    """A row; with `queued` (a list) its spin edits go there as (path, value, base), as they
+    go to the view's queue."""
     changes, resets = [], []
-    row = fields.FieldRow(spec, path, lambda p, v: changes.append((p, v)), resets.append)
+    on_queue = None if queued is None else lambda p, v, b: queued.append((p, v, b))
+    row = fields.FieldRow(spec, path, lambda p, v: changes.append((p, v)), resets.append, on_queue)
     row.show_value(FieldValue(value, is_set, "default"))
     return row, changes, resets
 
@@ -59,32 +55,23 @@ def test_colour_row_writes_hex_with_alpha_only_when_needed():
     assert changes == [(("theme", "accent"), "#00000080"), (("theme", "accent"), "#ffffff")]
 
 
-def test_int_row_takes_its_bounds_from_the_schema_and_is_debounced(monkeypatch):
-    timers, removed = [], []
-    monkeypatch.setattr(
-        fields.GLib, "timeout_add", lambda ms, fn: timers.append((ms, fn)) or 6 + len(timers)
-    )
-    monkeypatch.setattr(fields.GLib, "source_remove", removed.append)
-    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+def test_int_row_takes_its_bounds_from_the_schema_and_queues_its_edits():
+    queued = []
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
     spin = row.editor.widget
     assert tuple(spin.get_range()) == (2.0, 64.0)
     spin.set_value(11)
     spin.set_value(12)
-    assert changes == []  # waits for the pause
-    assert [ms for ms, _fn in timers] == [fields.DEBOUNCE_MS, fields.DEBOUNCE_MS]
-    assert removed == [7]  # one timer per pause: the first was cancelled by the second edit
-    timers[-1][1]()
-    assert changes == [(("theme", "x"), 12)]
+    assert changes == []  # the view applies them after the pause
+    # the base is the value the row showed, also for the second step (the queue un-queues a
+    # change back to it)
+    assert queued == [(("theme", "x"), 11, 10), (("theme", "x"), 12, 10)]
 
 
-def test_a_new_value_cancels_a_pending_edit(monkeypatch):
-    removed = []
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 9)
-    monkeypatch.setattr(fields.GLib, "source_remove", removed.append)
+def test_a_row_without_a_queue_sends_spin_edits_at_once():
     row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
     row.editor.widget.set_value(11)
-    row.show_value(FieldValue(10, False, "default"))  # e.g. the file was re-read
-    assert removed == [9] and changes == []
+    assert changes == [(("theme", "x"), 11)]
 
 
 def test_unset_optional_int_shows_the_minimum():
@@ -164,19 +151,21 @@ def test_the_mouse_wheel_never_edits_a_row():
     assert edits == changes == changes2 == []
 
 
-def test_flush_sends_a_pending_spin_value_and_typed_fonts(monkeypatch):
-    monkeypatch.setattr(fields.GLib, "timeout_add", lambda _ms, _fn: 5)
-    monkeypatch.setattr(fields.GLib, "source_remove", lambda _id: None)
-    spin, changes, _ = row_for(FORM.theme.field("thickness"), 10)
-    spin.editor.widget.set_value(14)
+def test_flush_sends_typed_text_only():
+    queued = []
+    spin, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
+    spin.editor.widget.set_text("14")  # typed, Enter not pressed
     fonts, changes2, _ = row_for(FORM.theme.field("font"), ["A"])
-    fonts.editor.widget.set_text("B, monospace")  # typed, Enter not pressed
+    fonts.editor.widget.set_text("B, monospace")
+    assert spin.unsent() and fonts.unsent()
     spin.flush()
     fonts.flush()
-    assert changes == [(("theme", "x"), 14)]
+    assert queued == [(("theme", "x"), 14, 10)] and changes == []
     assert changes2 == [(("theme", "x"), ["B", "monospace"])]
     spin.flush()
-    assert len(changes) == 1  # nothing pending any more
+    fonts.flush()
+    assert len(queued) == 1 and len(changes2) == 1  # nothing typed any more
+    assert not spin.unsent() and not fonts.unsent()
 
 
 def test_choices_show_their_labels():
@@ -227,54 +216,59 @@ def test_an_unknown_kind_has_no_editor():
         fields.make_editor(FieldSpec("x", "X", "blob"), lambda _v: None)  # type: ignore[arg-type]
 
 
-def fake_timers(monkeypatch):
-    """Debounce timers that never fire on their own: returns (started, removed) id lists."""
-    started, removed = [], []
+def test_a_discarded_row_never_calls_back():
+    queued = []
+    spin, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
+    name, changes2, _ = row_for(FORM.edge_panel.field("name"), "Dock")
+    for row in (spin, name):
+        row.discard()  # retired by a rebuild
+    spin.editor.widget.set_value(30)
+    name.editor.widget.set_text("Typed")
+    name.editor.widget.emit("activate")  # or the focus-out GTK sends when it is unparented
+    spin.flush()
+    name.flush()
+    assert queued == changes == changes2 == []
 
-    def add(_ms, _fn):
-        started.append(5 + len(started))
-        return started[-1]
 
-    monkeypatch.setattr(fields.GLib, "timeout_add", add)
-    monkeypatch.setattr(fields.GLib, "source_remove", removed.append)
-    return started, removed
+def test_a_row_starts_no_timer(monkeypatch):
+    """The spin pause is the view's one queue timer: a row never starts a timer of its own."""
 
+    def no_timer(*_a):
+        raise AssertionError("a row started a timer")
 
-def test_a_destroyed_row_cancels_its_pending_edit(monkeypatch):
-    started, removed = fake_timers(monkeypatch)
-    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    monkeypatch.setattr(GLib, "timeout_add", no_timer)
+    queued = []
+    row, _, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
     row.editor.widget.set_value(30)
-    row.destroy()
-    assert removed == started and changes == []
+    length, _, _ = row_for(FORM.edge_panel.field("length"), 300, queued=queued)
+    length.editor.number.set_value(400)
+    assert [v for _p, v, _b in queued] == [30, 400]
 
 
-def test_a_destroyed_row_never_writes_when_the_loop_runs(monkeypatch):
-    monkeypatch.setattr(fields.GLib, "timeout_add", REAL_TIMEOUT_ADD)
-    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
-    row.editor.widget.set_value(30)
-    row.destroy()
-    deadline = GLib.get_monotonic_time() + 500_000
-    while GLib.get_monotonic_time() < deadline:
-        GLib.MainContext.default().iteration(False)
-    assert changes == []
+def test_a_refresh_keeps_a_queued_edit_and_typed_text():
+    queued, pending = [], set()
 
+    def on_queue(path, value, base):
+        queued.append(value)
+        pending.add(path)
 
-def test_a_refresh_keeps_the_pending_edit_of_another_row(monkeypatch):
-    started, removed = fake_timers(monkeypatch)
-    thick, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    thick = fields.FieldRow(
+        FORM.theme.field("thickness"), ("theme", "x"), id, id, on_queue, pending.__contains__
+    )
+    thick.show_value(FieldValue(10, False, "default"))
     thick.editor.widget.set_value(30)
-    thick.show_value(FieldValue(10, False, "inherited"), keep_pending=True)
-    assert removed == [] and thick.editor.widget.get_value() == 30
+    thick.show_value(FieldValue(10, False, "inherited"), keep_pending=True)  # another apply
+    assert thick.editor.widget.get_value() == 30  # still the queued 30
     assert thick.source.get_text().endswith("inherited")
-    thick.flush()
-    assert changes == [(("theme", "x"), 30)]
-    thick.editor.widget.set_value(12)  # a plain show_value still drops the edit
-    thick.show_value(FieldValue(30, True, "your config"))
-    assert thick.editor.widget.get_value() == 30 and removed == [started[0], started[1]]
+    pending.clear()  # the view applied it
+    thick.show_value(FieldValue(30, True, "your config"), keep_pending=True)
+    assert thick.editor.widget.get_value() == 30 and thick.source.get_text().endswith("config")
+    thick.editor.widget.set_value(12)  # queued again; a plain show_value (a re-read) shows
+    thick.show_value(FieldValue(30, True, "your config"))  # the file's value all the same
+    assert thick.editor.widget.get_value() == 30
 
 
-def test_closing_applies_every_row_even_when_each_apply_refreshes_all(monkeypatch):
-    fake_timers(monkeypatch)
+def test_closing_applies_every_row_even_when_each_apply_refreshes_all():
     result, rows = {}, []
 
     def on_change(path, value):
@@ -295,16 +289,20 @@ def test_closing_applies_every_row_even_when_each_apply_refreshes_all(monkeypatc
     assert result == {"t": 20, "f": ["B", "C"]}
 
 
-def test_a_toggle_within_the_pause_does_not_drop_a_pending_spin(monkeypatch):
-    fake_timers(monkeypatch)
-    result, rows = {}, []
+def test_a_toggle_within_the_pause_does_not_drop_a_queued_spin():
+    result, rows, queue = {}, [], {}
 
     def on_change(path, value):
         result[path[1]] = value
         for row in rows:
             row.show_value(FieldValue(result.get(row.path[1], 10), True, "x"), True)
 
-    thick = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), on_change, id)
+    def on_queue(path, value, _base):
+        queue[path] = value
+
+    thick = fields.FieldRow(
+        FORM.theme.field("thickness"), ("theme", "t"), on_change, id, on_queue, queue.__contains__
+    )
     flag = fields.FieldRow(
         FORM.theme.section("border").field("enabled"), ("theme", "b"), on_change, id
     )
@@ -312,9 +310,9 @@ def test_a_toggle_within_the_pause_does_not_drop_a_pending_spin(monkeypatch):
     thick.show_value(FieldValue(10, False, "default"))
     flag.show_value(FieldValue(False, False, "default"))
     thick.editor.widget.set_value(14)
-    flag.editor.widget.set_active(True)
-    thick.flush()
-    assert result == {"t": 14, "b": True}
+    flag.editor.widget.set_active(True)  # applied now: every row is refreshed
+    assert result == {"b": True} and queue == {("theme", "t"): 14}
+    assert thick.editor.widget.get_value() == 14
 
 
 def test_empty_or_invalid_spin_text_writes_nothing():
@@ -337,8 +335,7 @@ def test_empty_or_invalid_spin_text_writes_nothing():
                 assert changes == [], (spec.key, text)
 
 
-def test_flush_sends_a_number_typed_without_enter(monkeypatch):
-    fake_timers(monkeypatch)
+def test_flush_sends_a_number_typed_without_enter():
     for spec, value, typed, expected in [
         (FORM.theme.field("thickness"), 10, "20", 20),
         (FORM.edge_panel.field("length"), 300, "200", 200),
@@ -353,19 +350,13 @@ def test_flush_sends_a_number_typed_without_enter(monkeypatch):
         assert len(changes) == 1  # invalid text sends nothing
 
 
-def test_a_value_changed_back_within_the_pause_is_not_written(monkeypatch):
-    fake_timers(monkeypatch)
-    row, changes, _ = row_for(FORM.theme.field("thickness"), 10, is_set=False)
+def test_a_value_changed_back_is_queued_with_the_shown_value_as_its_base():
+    """The queue then un-queues it (settings.queue): an inherited value is not pinned."""
+    queued = []
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
     row.editor.widget.set_value(11)
     row.editor.widget.set_value(10)
-    row.flush()
-    assert changes == []  # an inherited value is not pinned by a no-op
-    row.editor.widget.set_value(12)
-    row.flush()
-    assert changes == [(("theme", "x"), 12)]
-    row.editor.widget.set_value(12)
-    row.flush()
-    assert len(changes) == 1
+    assert queued == [(("theme", "x"), 11, 10), (("theme", "x"), 10, 10)] and changes == []
 
 
 def test_choosing_the_same_colour_writes_nothing():
