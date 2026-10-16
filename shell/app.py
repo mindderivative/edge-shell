@@ -26,6 +26,8 @@ from shell.canvas.stats import StatsRecorder
 from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
+from shell.monitor_check import TITLE as MONITOR_TITLE
+from shell.monitor_check import monitor_report, unknown_monitors
 from shell.monitors import MonitorShell, monitors_by_name
 from shell.registry import all_off_paths, deprecated_pos_paths, moved_default_paths
 from shell.theme import scope_class, to_css
@@ -55,6 +57,8 @@ class EdgeShellApp:
         self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
         self._failures_reported: dict[str, list[str]] = {}  # last notified build failures
         self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
+        self._monitors_reported: list[str] = []  # the unknown configured names last notified
+        self._seen_connected: set[str] = set()  # every monitor name connected this session
         self._log_deprecated(store.config)
 
     @property
@@ -81,6 +85,10 @@ class EdgeShellApp:
             # kscreen-doctor failed or a hot-plug flap; closing all would blank every frame
             log.warning("monitor mapping unavailable, keeping current shells")
             return set(), set()
+        try:
+            self._check_monitor_names(connected)
+        except Exception:  # a warning must never break startup or a reload
+            log.exception("checking the monitor names failed")
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -93,6 +101,26 @@ class EdgeShellApp:
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
+
+    def _check_monitor_names(self, connected) -> None:
+        """Warn (log and one notification) when the config names a monitor that looks like
+        a typo: not connected now and never seen connected in this shell session (a name that
+        was connected and is unplugged is right, only the cable is out: nothing is said).
+        At startup a typo and a monitor that is simply absent look the same, so both are
+        reported. Said again only when the set of such names changes, or after every name
+        matched in between, so a reload with the same mismatch or a hot-plug says nothing
+        new. An empty read (kscreen-doctor failed) compares nothing and changes nothing."""
+        if not connected:
+            return
+        self._seen_connected.update(connected)
+        unknown = unknown_monitors(self.config.monitors, self._seen_connected)
+        if unknown == self._monitors_reported:
+            return
+        self._monitors_reported = unknown
+        if unknown:
+            report = monitor_report(unknown, connected)
+            log.warning("monitor names in the config are not connected (%s)", report)
+            self._notify(MONITOR_TITLE, f"{report}\nUse the connected names in the config.")
 
     def _close_shell(self, name: str) -> None:
         self._forget_reports(name)
@@ -326,7 +354,7 @@ class EdgeShellApp:
             # Cut first, then escape: the cut can never split an entity such as `&amp;`.
             body = html.escape(message[:400], quote=False)
             subprocess.Popen(["notify-send", "-a", "Edge Shell", "--", title, body])
-        except OSError:
+        except (OSError, ValueError):  # ValueError: a NUL in the text
             pass  # no notify-send; the log line is enough
 
     def _report_error(self, message: str) -> None:

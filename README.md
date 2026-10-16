@@ -13,6 +13,7 @@ alongside Plasma and does not replace it.
 - [Corner panel plan](docs/superpowers/plans/2026-10-14-corner-panel.md)
 - [Settings window plan](docs/superpowers/plans/2026-10-14-settings-window.md)
 - [Settings menus plan](docs/superpowers/plans/2026-10-15-settings-menus.md)
+- [Settings tree plan](docs/superpowers/plans/2026-10-15-settings-tree.md)
 
 **Status:** early development.
 
@@ -134,6 +135,20 @@ and handle changes apply in place; geometry changes re-lay out the monitor.
 The monitor's `shell` mode decides who draws it: `edge` (Edge Shell only), `both` (Edge Shell
 and Plasma's own panel), `plasma` (Plasma only) and `none` (nothing). Panels are built only
 for `edge` and `both`; the entries of a `plasma` or `none` monitor stay in the file, unused.
+
+Monitors are matched by connector name (`scripts/py main.py --list-outputs` lists them). When
+the config names a monitor that is not connected, the shell logs a warning
+(`monitor names in the config are not connected (config monitors: HDMI-A-2; connected: DP-1,
+HDMI-A-1)`) and sends one "Monitor not connected" notification with the names to use, for
+example `config monitors: HDMI-A-2; connected: DP-1, HDMI-A-1`. A name counts as unknown
+(a probable typo) only when it is not connected now and was never connected during this shell
+session: unplugging and replugging a correctly named monitor says nothing. At startup the shell
+cannot tell a typo from a monitor that is simply absent, so a configured name that is not
+connected then is reported. It says so again only when the set of unknown names changes (a
+reload with the same mistake, or a hot-plug, is silent; fixing it and breaking it again is
+reported again). A connected monitor that the config does not name
+is fine (it gets nothing, as `plasma`), and when `kscreen-doctor` reports no monitor at all
+nothing is compared.
 
 ### Moving from the old format
 
@@ -310,9 +325,9 @@ file.
   Close (Ctrl+W), Exit (Ctrl+Q). **Edit**: Undo (Ctrl+Z), Redo (Shift+Ctrl+Z or Ctrl+Y), Cut,
   Copy, Paste (Ctrl+X, Ctrl+C, Ctrl+V: in the focused text field; greyed out elsewhere),
   Revert all. **Help**: About Edge Shell (name, version, website, authors and the MIT licence).
-  The Undo and Revert all buttons stay above the pages. Ctrl+Z in a text field undoes the last
-  change to the file (the typed text is applied first); Ctrl+X/C/V work in text fields as
-  everywhere in GTK.
+  Undo and Revert all are in the Edit menu only (no buttons above the pages). Ctrl+Z, also
+  with no field focused, undoes the last change to the file (the typed text is applied first);
+  Ctrl+X/C/V work in text fields as everywhere in GTK.
 - **Saving.** Changes still apply at once (the shell follows them). **Save** marks the file as
   it is now as saved and copies it to `config.toml.bak` (what `--restore-config` puts back);
   the title shows the file with a `*` while it has changes since the last save (or since it was
@@ -338,31 +353,67 @@ file.
   Known limit: KDE's dialog may ask "overwrite?" for New on a name that exists; the window then
   refuses it, because New never replaces a file.
 
-- **Theme** page: every theme key, the border, the shadow, the handle style and the layout gap.
-  One page per monitor (connected monitors and the ones in your config): the shell mode
-  (`edge`, `plasma`, `both`, `none`), the panels (add, remove, move up or down; every panel key
-  including the handle and interactions), a preview of the layout warnings the shell would
-  give, and per-monitor theme and layout overrides.
-- Each panel is listed by its name. The add list shows the widgets by their display names
-  (Clock, Dock, Summary, System bar); a new panel gets the widget's first panel type
-  and a name made from its display name that is free on that monitor (`Clock`, `Clock 2`).
-  The rows start with Name, Widget and, for a widget that can be shown in more than one panel
-  type, Panel type (float is listed and greyed out). A widget with properties gets a
-  **Widget** frame with one row per property (the clock: Format, Font, Font size).
-- Corner panels (for example `summary`) are in the same panel list. Their rows are corner,
-  edge (only the corner's two edges), width and height instead of align, offset, length and
-  depth. Switching a panel's widget, or its panel type, removes the keys the new kind or
-  widget does not take in the same change (the name stays); moving a corner panel to a corner
-  without its edge removes that edge. A name already used on the monitor is refused under the
+- **Layout.** A toolbar for the selected screen at the top, a tree on the left (at least
+  200 px wide; drag the divider to widen it) and the selected page on the right. The tree
+  lists **Theme** and every monitor (the connected ones, and the ones in your config: a
+  monitor named in the config that is not connected is shown as "HDMI-A-2 (not connected)");
+  a monitor's panels are listed under it by name (its arrow, or Left and Right, shows and
+  hides them; the choice is kept while you edit). **Detect monitors** above the tree asks
+  `kscreen-doctor` again and says in the banner which monitors are connected, or which names
+  in your config are not and which to use instead; if `kscreen-doctor` fails the list stays as
+  it was. With no monitor found the tree says so.
+- **Toolbar** (the screen of the page shown: a monitor page's, or a panel page's monitor; on
+  the Theme page it says "No screen selected" and is greyed out): the screen's name, **Enable**
+  (Edge Shell on this screen) and a checkbox named after your desktop (**KDE Plasma**,
+  **Hyprland**, ...; "Native desktop" when it is not known). Together they write the monitor's
+  `shell`: Enable only = `edge`, the desktop only = `plasma`, both = `both`, neither = `none`.
+  Edge Shell does not hide or show Plasma's panel yet, so `edge` and `both` look the same today
+  (the note under the checkboxes says so; with both on, keep the bottom edge free of Edge Shell
+  panels). Second line: the panel type list with **Add** (every widget by its display name and
+  panel kind, "Clock (edge panel)", "Summary (corner panel)"; "Float panel (coming soon)" is
+  listed and greyed out), then Move up, Move down and Remove for the panel page shown (greyed
+  on other pages; the first panel cannot move up, the last not down). A new panel gets a name
+  made from the widget's display name that is free on that monitor (`Clock`, `Clock 2`) and
+  its page opens.
+- **Tree keys.** Up and Down move through the rows and show the page; Left collapses a monitor,
+  or goes from a panel to its monitor; Right (or +) expands, - collapses; Delete removes the
+  panel row that has the keyboard focus (nothing on Theme, a monitor, or when the focus is
+  elsewhere). The selected panel row has Move up, Move down and Remove buttons at its right
+  (Tab reaches them); the toolbar has the same three. After a Remove the monitor's row is
+  selected (and keeps the keyboard focus when the tree had it).
+- **Theme** page, tabs: **General** (colours, fonts, thickness, radius, peek, hover zone,
+  duration; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
+  handle colours and the handle style) and **Layout** (the gap). A **monitor** page has the same
+  tabs under a banner that is always shown: "These values override the Theme for HDMI-A-1. A row
+  you have not set here shows the Theme's value." A row not set there reads "global theme".
+  The monitor page also shows the layout warnings the shell would give. Each page keeps the tab
+  you last used.
+- **Panel** pages (select a panel in the tree): its title ("1. Dock: bottom, center"), the
+  layout warnings, and the tabs **Panel** (Name, Widget and, for a widget of several panel
+  types, Panel type), **Position** (edge, align, offset, order, length, depth; a corner panel:
+  corner, edge, width, height), **Handle**, **Interaction** (start state, click, hover, drag)
+  and **Widget** (the widget's own properties, for example the clock's Format, Font and Font
+  size; no tab for a widget without properties). The Name row renames the panel: the tree row
+  and the page title follow at once. A name already used on the monitor is refused under the
   Name row.
+- Switching a panel's widget, or its panel type, removes the keys the new kind or widget does
+  not take in the same change (the name stays); moving a corner panel to a corner without its
+  edge removes that edge.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
-- Changes apply at once (spin buttons 0.4 s after the last change; closing the window applies
-  a pending one); the running shell reloads them like a hand edit. A change the shell would
-  reject is not saved: the reason (with the key path) shows under the row. The mouse wheel
-  scrolls the page and never changes a value, so scrolling past a monitor's mode cannot switch
-  it.
+- Changes apply at once; the running shell reloads them like a hand edit. Spin buttons wait
+  0.4 s after the last change of any spin button, and one queue applies every change in the
+  order you made it: per setting only the last value counts, and a spin button changed and
+  changed back is not written at all. Anything still waiting is applied before a panel is
+  added, moved or removed, before Undo, Save or leaving the config (New, Open, Close, Exit),
+  and before Detect monitors; Revert all drops it. A change the shell would reject is not
+  saved: the reason (with the key path) shows under the row. The mouse wheel scrolls the page
+  and never changes a value, so scrolling over a monitor's shell mode cannot switch it. If the file
+  is changed in an editor while changes are still waiting, they are not applied (they were made
+  for the file before it changed, and panels are tracked by their place in the list) and the
+  banner names them: "Not applied (made for the file before it changed):
+  theme.thickness = 17, monitors.HDMI-A-1.panels[0].depth = 4".
 - **Undo** (Ctrl+Z) steps back one change; **Revert all** puts the file back as it was when
   the window opened, or after your last hand edit. Before its first change, and at every Save,
   the window copies the file to `config.toml.bak` (same permissions); `scripts/py main.py --restore-config` puts
@@ -426,6 +477,13 @@ that need `gi` or Fabric skip themselves there.
   edited; a panel with click, hover and drag all off takes no input while collapsed, so its
   handle cannot open the window (use another handle, the shortcut or `--settings`); KWin
   chooses the window's monitor; inline `panels = [...]` lists are edited by hand.
+- Settings window, tree and toolbar: the tree is a list box, so it has no type-ahead search and
+  no right-click menu; Remove (button or Delete) selects the monitor's row, not a neighbouring
+  panel; a panel's Move and Remove buttons show on the selected row only (not on hover); the
+  mode checkboxes always write `shell` (no reset to the default); two spin buttons changed
+  within 0.4 s are written together after the last change; at narrow widths the tabs scroll
+  sideways; a right-click on a handle opens the window but not yet on that panel's page
+  (follow-up).
 - Settings window, editing limits: unsetting a whole table leaves that table's own label comment
   behind (not reachable from the window, which only resets single keys); after an edit a CRLF
   file may have `\n` endings on the lines the window writes (the session reads with universal

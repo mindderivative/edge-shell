@@ -1,7 +1,16 @@
-"""The settings window's content: a top bar (Undo, Revert all, the file path), a banner for
-errors and notices, and a page per topic (the global theme and layout, then one page per
-monitor: shell mode, panels, theme and layout overrides). A plain Gtk.Box, so it is tested
-without creating a window; settings.window puts it in the toplevel.
+"""The settings window's content: the per-screen toolbar (settings.toolbar), a banner for
+errors and notices, and beside the tree (settings.tree: Theme, the monitors) the page the tree
+selects (panel/widget spec 7). The Theme page and each monitor page have tabs (General,
+Borders, Shadows, Handle, Layout: settings.form.theme_tabs); a monitor page's values override
+the Theme for that monitor. Each panel is a row under its monitor in the tree and has a page of
+its own (tabs Panel, Position, Handle, Interaction and Widget: settings.form.panel_tabs). A
+plain Gtk.Box, so it is tested without creating a window; settings.window puts it in the
+toplevel.
+
+Every page is built at each rebuild (as before: every row exists, so flush() and refresh()
+reach every row, on any page); the tree only chooses which one is shown, so switching pages
+never drops a pending value. A rebuild keeps the shown page (by its name, settings.pages) and
+each page's tab (by its title).
 
 Every edit goes through SettingsSession.apply: a valid one is written to the user config and
 the running shell reloads it; an invalid one is shown under its row and not written."""
@@ -19,12 +28,36 @@ from gi.repository import Gdk, GLib, Gtk
 
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
-from settings.fields import FieldRow
-from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
-from settings.panels import PanelEditor
+from settings.fields import DEBOUNCE_MS, FieldRow
+from settings.form import (
+    AddChoice,
+    SectionSpec,
+    TabSpec,
+    add_choices,
+    config_form,
+    panel_tabs,
+    registry_widgets,
+    theme_tabs,
+)
+from settings.pages import (
+    NOT_CONNECTED,
+    THEME,
+    fallback_page,
+    monitor_page,
+    panel_page,
+    parse_page,
+    screen_of,
+    tree_entries,
+)
+from settings.panels import add_step, panel_section, panel_step, panel_title
+from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
+from settings.screens import DetectError, desktop_label, detect_outputs
 from settings.session import ChangedOutside, SettingsSession, check_text
-from settings.values import field_value, layout_preview, lookup, monitor_names, panel_ops
+from settings.toolbar import ScreenToolbar
+from settings.tree import SettingsTree
+from settings.values import field_value, layout_preview, lookup, panel_ops
 from shell.config.models import ConfigError
+from shell.monitor_check import monitor_report
 from shell.outputs import Output
 from shell.registry import requests_for
 
@@ -65,9 +98,10 @@ def install_info_note_css() -> Gtk.CssProvider:
     return _info_note_provider
 
 
-# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
-# and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
-# the page and keeps that panel open
+# shown in a panel's tree row and page heading (panel_title), or deciding its rows (widget:
+# the kind and the Widget tab; panel: the kind's rows; corner: the edge choices): a change
+# rebuilds the pages (the panel's page stays shown)
+MAX_NAMED = 8  # the most dropped edits the banner names (then "... and N more")
 TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "height")
 
 
@@ -78,7 +112,12 @@ class SettingsView(Gtk.Box):
         outputs: list[Output],
         confirm_revert: Callable[[Any, str], bool] | None = None,
         on_state: Callable[[], None] | None = None,
+        desktop: str | None = None,
+        detect: Callable[[], list[Output]] | None = None,
     ):
+        """`desktop`: the native desktop checkbox's label (None: from XDG_CURRENT_DESKTOP,
+        settings.screens.desktop_label). `detect`: Detect monitors' reader (None:
+        kscreen-doctor, settings.screens.detect_outputs; tests pass a fake)."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
@@ -87,45 +126,53 @@ class SettingsView(Gtk.Box):
         # window updates its menu items and title
         self._on_state = on_state or (lambda: None)
         self.outputs = {o.name: o for o in outputs}
-        self.form = config_form(registry_widgets())
+        self._detect = detect or detect_outputs
+        widgets = registry_widgets()
+        self.form = config_form(widgets)
         self.rows: list[FieldRow] = []
-        self.previews: dict[str, Gtk.Label] = {}
-        self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        # monitor -> the labels showing its layout warnings (its page and its panels' pages)
+        self.previews: dict[str, list[Gtk.Label]] = {}
+        self._select: str | None = None  # the page to show after the next rebuild (an add, ...)
+        self._tab_of: dict[str, str] = {}  # page -> the title of the tab last shown on it
         self.save_failed = False  # the last flush() could not write something (shown on screen)
         # the last flush() met a hand edit: that row and the rest were not applied (warning on
         # screen); the caller must not go on to a structural edit or an undo on the re-read file
         self.refused_outside = False
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
+        self._refocus: tuple | None = None  # the row of a title key just edited (see rebuild)
         self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
+        self.queue = EditQueue()  # every value edit, applied in order (settings.queue)
+        self._queue_timer = 0  # the one pause timer of the queued spin edits (0: none)
+        # what a drain dropped after a hand edit: (edits, typed paths, the warning). Named on
+        # screen by the rebuild that follows, after it has written its own banner.
+        self._unapplied: tuple[list[QueuedEdit], list[tuple], str] | None = None
+        self._outside_warning = ""  # the last ChangedOutside message
 
-        bar = Gtk.Box(spacing=6, margin=6)
-        self.undo_button = Gtk.Button(label="Undo")
-        self.undo_button.set_tooltip_text("Undo the last change (Ctrl+Z)")
-        self._undo_clicked = self.undo_button.connect("clicked", lambda _b: self.undo())
-        self._undo_by_action = False
-        self.revert_button = Gtk.Button(label="Revert all")
-        self.revert_button.set_tooltip_text("Put back the file as it was when this window opened")
-        self.revert_button.connect("clicked", lambda _b: self.confirm_revert())
-        where = Gtk.Label(label=str(session.path), xalign=1, selectable=True)
-        where.get_style_context().add_class("dim-label")
-        bar.pack_start(self.undo_button, False, False, 0)
-        bar.pack_start(self.revert_button, False, False, 0)
-        bar.pack_end(where, True, True, 0)
-
+        # Undo and Revert all are in the Edit menu (and Ctrl+Z); the file is in the title
+        self.toolbar = ScreenToolbar(
+            add_choices(widgets),
+            desktop or desktop_label(),
+            self._on_mode,
+            self.add_panel,
+            lambda action: self.on_panel_action(self.stack.get_visible_child_name(), action),
+        )
         install_info_note_css()
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
         self.banner.get_content_area().add(self.banner_label)
         self.banner.set_no_show_all(True)
         self.stack = Gtk.Stack()
-        sidebar = Gtk.StackSidebar(stack=self.stack)
-        body = Gtk.Box()
-        body.pack_start(sidebar, False, False, 0)
-        body.pack_start(self.stack, True, True, 0)
-        self.pack_start(bar, False, False, 0)
+        self.tree = SettingsTree(self.show_page, self.on_panel_action)
+        self.tree.set_property("margin", 6)
+        self.tree.detect_button.connect("clicked", lambda _b: self.detect_monitors())
+        body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        body.pack1(self.tree, False, False)  # never narrower than its MIN_WIDTH
+        body.pack2(self.stack, True, False)
+        self.pack_start(self.toolbar, False, False, 0)
         self.pack_start(self.banner, False, False, 0)
         self.pack_start(body, True, True, 0)
+        self.connect("destroy", lambda _w: self.retire())  # whichever way the view goes
         self.rebuild()
 
     # ---- building ------------------------------------------------------------------------
@@ -142,15 +189,27 @@ class SettingsView(Gtk.Box):
 
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
-        or a hand edit); keeps the visible page."""
+        or a hand edit); keeps the visible page. Edits still queued are applied first (the
+        new rows could not show them): this rebuild then runs once, at the end."""
+        if len(self.queue) and not self._flushing:
+            self._rebuild_due = True
+            self._run_queue()
+            return
         self.cancel_deferred_rebuild()  # overtaken by this one
-        visible = self.stack.get_visible_child_name()
+        visible = self._select or self.stack.get_visible_child_name()
+        self._select = None
+        tree_focused = self.tree.holds_focus()  # asked before the rows are replaced
         window = self.get_toplevel()
         focus = window.get_focus() if isinstance(window, Gtk.Window) else None
+        refocus, self._refocus = self._refocus, None
         if focus is not None and focus.is_ancestor(self.stack):
+            if refocus is not None:  # a title key was edited: the row keeps the focus
+                refocus = next((r.path for r in self.rows if focus.is_ancestor(r)), refocus)
             window.set_focus(None)  # not left on a removed widget: shortcuts then find no group
+        else:
+            refocus = None  # the focus was elsewhere (the tree): it stays there
         for row in self.rows:
-            row.discard()  # pending or typed values go with the old rows, never written later
+            row.discard()  # typed text goes with the old rows (queued edits stay queued)
         retired = self.stack.get_children()
         for child in retired:
             self.stack.remove(child)
@@ -162,14 +221,22 @@ class SettingsView(Gtk.Box):
             GLib.idle_add(_destroy_all, retired)
         self.rows, self.previews = [], {}
         valid = self.session.config is not None
-        self._page("theme", "Theme", self._theme_page(), valid)
-        if valid:
-            for name, connected in monitor_names(self.config, list(self.outputs.values())):
-                title = name if connected else f"{name} (not connected)"
-                self._page(f"monitor:{name}", title, self._monitor_page(name), True)
+        entries = tree_entries(self.session.config, list(self.outputs.values()))
+        self._add_page(THEME, self._theme_page(), valid)
+        for entry in entries[1:]:
+            name = parse_page(entry.page).monitor
+            self._add_page(entry.page, self._monitor_page(name, entry.title), True)
+            for i, req in enumerate(requests_for(self.config, name)):
+                self._add_page(panel_page(name, i), self._panel_page(name, i, req), True)
         self.stack.show_all()
-        if visible and self.stack.get_child_by_name(visible) is not None:
-            self.stack.set_visible_child_name(visible)
+        page = self._page_to_show(visible)
+        self.stack.set_visible_child_name(page)
+        self.tree.show(entries, valid)
+        self.tree.select(page)
+        if refocus is not None and (row := self._row(refocus)) is not None:
+            row.editor.widget.child_focus(Gtk.DirectionType.TAB_FORWARD)
+        if tree_focused:  # the tree's rows were replaced or the selection moved: the focus
+            self.tree.row_of(page).grab_focus()  # follows to the page shown (the moved panel)
         if valid:
             self.refresh()
         else:
@@ -180,36 +247,104 @@ class SettingsView(Gtk.Box):
                 f"\n{self.session.error}",
                 Gtk.MessageType.ERROR,
             )
-        self._sync_undo_button()
+            self._sync_toolbar()  # refresh() does it for a valid file
         self._on_state()
+        self._tell_unapplied()  # after the banner above, which would replace it
 
-    def use_undo_action(self, name: str) -> None:
-        """Hand the Undo button to a window action ("win.undo"): it then clicks through the
-        action and is enabled exactly when the menu's Undo is. Without this (the view alone)
-        the button undoes by itself and follows the history."""
-        self._undo_by_action = True
-        self.undo_button.disconnect(self._undo_clicked)
-        self.undo_button.set_action_name(name)
+    def _sync_toolbar(self) -> None:
+        """The toolbar shows the screen of the page shown (a monitor page's, a panel page's
+        monitor) with its `shell` value in effect; none on the Theme page or while the file is
+        invalid. On a panel page its Move up, Move down and Remove act on that panel."""
+        page = self.stack.get_visible_child_name()
+        screen = screen_of(page)
+        if screen is None or self.session.config is None:
+            self.toolbar.show_screen(None)
+            return
+        title = screen if screen in self.outputs else screen + NOT_CONNECTED
+        monitor = self.config.monitor(screen)
+        index = parse_page(page).index
+        panel = None if index is None else (index, len(monitor.panels))
+        self.toolbar.show_screen(screen, title, monitor.shell, panel)
 
-    def _sync_undo_button(self) -> None:
-        if not self._undo_by_action:
-            self.undo_button.set_sensitive(bool(self.session.history))
+    def _page_to_show(self, wanted: str | None) -> str:
+        """`wanted` if it is still a page; else its fallback (a gone panel's monitor), else the
+        Theme page."""
+        for page in (wanted, wanted and fallback_page(wanted)):
+            if page and self.stack.get_child_by_name(page) is not None:
+                return page
+        return THEME
 
-    def _page(self, name: str, title: str, content: Gtk.Widget, sensitive: bool) -> None:
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        content.set_margin_start(16)
-        content.set_margin_end(16)
-        content.set_margin_top(12)
-        content.set_margin_bottom(12)
+    def show_page(self, page: str) -> None:
+        """Show `page` (the tree's selection)."""
+        if self.stack.get_child_by_name(page) is not None:
+            self.stack.set_visible_child_name(page)
+            self._sync_toolbar()
+
+    def _add_page(self, name: str, content: Gtk.Widget, sensitive: bool) -> None:
+        content.set_sensitive(sensitive)
+        self.stack.add_named(content, name)
+
+    def _tabbed(
+        self,
+        page: str,
+        top: list[Gtk.Widget],
+        tabs: tuple[TabSpec, ...],
+        prefix: tuple,
+    ) -> Gtk.Widget:
+        """A page: `top` (its heading, a banner) above a notebook with one tab per TabSpec,
+        each tab scrolled on its own (sideways too when the window is narrow). A tab's later
+        parts get a heading of their own (the Handle tab: the handle colours, then "Handle
+        style"). The tab last shown on `page` is shown again."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        for widget in top:
+            box.pack_start(widget, False, False, 0)
+        notebook = Gtk.Notebook(scrollable=True)
+        for tab in tabs:
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            content.set_property("margin", 12)
+            for i, (key, section) in enumerate(tab.parts):
+                if i > 0:
+                    content.pack_start(self._heading(section.label), False, False, 6)
+                content.pack_start(self.section_rows(section, (*prefix, *key)), False, False, 0)
+            self._add_tab(notebook, tab.title, content)
+        box.pack_start(notebook, True, True, 0)
+        self._keep_tab(page, notebook)
+        return box
+
+    @staticmethod
+    def _add_tab(notebook: Gtk.Notebook, title: str, content: Gtk.Widget) -> None:
+        # AUTOMATIC: the widest row would otherwise set the window's minimum width (947 px)
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
         scroller.add(content)
-        scroller.set_sensitive(sensitive)
-        self.stack.add_titled(scroller, name, title)
+        scroller.show_all()  # a notebook only switches to a visible page (_keep_tab)
+        notebook.append_page(scroller, Gtk.Label(label=title))
+
+    def _keep_tab(self, page: str, notebook: Gtk.Notebook) -> None:
+        """Show the tab last shown on `page` (by its title) and remember the user's choice."""
+        titles = [notebook.get_tab_label_text(c) for c in notebook.get_children()]
+        if self._tab_of.get(page) in titles:
+            notebook.set_current_page(titles.index(self._tab_of[page]))
+        notebook.connect("switch-page", self._remember_tab, page)
+
+    def _remember_tab(self, notebook: Gtk.Notebook, child: Gtk.Widget, _num, page: str) -> None:
+        self._tab_of[page] = notebook.get_tab_label_text(child)
 
     def section_rows(self, section: SectionSpec, prefix: tuple) -> Gtk.Widget:
         """A box of FieldRows for `section` at key path `prefix`; sub-sections in frames."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for spec in section.fields:
-            row = FieldRow(spec, (*prefix, spec.key), self._on_change, self._on_reset)
+            row = FieldRow(
+                spec,
+                (*prefix, spec.key),
+                self._on_change,
+                self._on_reset,
+                self._on_queue,
+                self.queue.pending,
+            )
             self.rows.append(row)
             box.pack_start(row, False, False, 0)
         for sub in section.sections:
@@ -229,44 +364,35 @@ class SettingsView(Gtk.Box):
         return label
 
     def _theme_page(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.pack_start(self._heading("Theme (every monitor)"), False, False, 0)
-        box.pack_start(self.section_rows(self.form.theme, ("theme",)), False, False, 0)
-        box.pack_start(self._heading("Layout"), False, False, 0)
-        box.pack_start(self.section_rows(self.form.layout, ("layout",)), False, False, 0)
-        return box
+        heading = self._heading("Theme (every monitor)")
+        return self._tabbed(THEME, [heading], theme_tabs(self.form), ())
 
-    def _monitor_page(self, name: str) -> Gtk.Widget:
-        prefix = ("monitors", name)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.pack_start(self.section_rows(self.form.monitor, prefix), False, False, 0)
-        hints = "\n".join(f"{mode}: {hint}" for mode, hint in MODE_HINTS.items())
-        note = Gtk.Label(label=hints, xalign=0, wrap=True)
-        note.get_style_context().add_class("dim-label")
-        box.pack_start(note, False, False, 0)
-        box.pack_start(self._heading("Panels"), False, False, 0)
-        editor = PanelEditor(
-            self.form,
-            name,
-            requests_for(self.config, name),
-            self.section_rows,
-            lambda edit, expand, n=name: self._structural(n, edit, expand),
-            self._expand.pop(name, None),
-        )
-        box.pack_start(editor, False, False, 0)
+    def _preview(self, name: str) -> Gtk.Label:
+        """A label for `name`'s layout warnings (shown by refresh when there are any)."""
         preview = Gtk.Label(xalign=0, wrap=True, selectable=True)
         preview.get_style_context().add_class("warning")
         preview.set_no_show_all(True)
-        self.previews[name] = preview
-        box.pack_start(preview, False, False, 0)
-        for key, title, section in (
-            ("theme", "Theme override (this monitor only)", self.form.theme),
-            ("layout", "Layout override (this monitor only)", self.form.layout),
-        ):
-            expander = Gtk.Expander(label=title)
-            expander.add(self.section_rows(section, (*prefix, key)))
-            box.pack_start(expander, False, False, 0)
-        return box
+        self.previews.setdefault(name, []).append(preview)
+        return preview
+
+    def _monitor_page(self, name: str, title: str) -> Gtk.Widget:
+        """A monitor's page: the same tabs as the Theme page at [monitors.NAME], under a banner
+        saying that they override the Theme; a row that is not set shows the Theme's value
+        ("global theme")."""
+        prefix = ("monitors", name)
+        banner = Gtk.InfoBar(message_type=Gtk.MessageType.INFO)
+        banner.get_style_context().add_class(INFO_NOTE_CLASS)  # not the theme's orange or white
+        banner.get_content_area().add(Gtk.Label(label=override_text(name), xalign=0, wrap=True))
+        top = [self._heading(title), banner, self._preview(name)]
+        return self._tabbed(monitor_page(name), top, theme_tabs(self.form), prefix)
+
+    def _panel_page(self, name: str, index: int, req) -> Gtk.Widget:
+        """A panel's page: its title ("1. Dock: bottom, center") and the layout warnings of
+        its monitor above the tabs Panel, Position, Handle, Interaction and, when its widget
+        has properties, Widget (settings.form.panel_tabs); every row is a key of the entry."""
+        top = [self._heading(panel_title(index, req)), self._preview(name)]
+        tabs = panel_tabs(panel_section(self.form, req), self.form.widget_props(req.widget))
+        return self._tabbed(panel_page(name, index), top, tabs, ("monitors", name, "panels", index))
 
     # ---- showing values ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -277,12 +403,13 @@ class SettingsView(Gtk.Box):
         config, user = self.config, self.session.user
         for row in self.rows:
             row.show_value(field_value(config, user, row.path), keep_pending=True)
-        for name, label in self.previews.items():
+        for name, labels in self.previews.items():
             out = self.outputs.get(name)
             warnings = layout_preview(config, name, out.width, out.height) if out else []
-            label.set_text("\n".join(warnings))
-            label.set_visible(bool(warnings))
-        self._sync_undo_button()
+            for label in labels:
+                label.set_text("\n".join(warnings))
+                label.set_visible(bool(warnings))
+        self._sync_toolbar()
         self._on_state()
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
@@ -313,6 +440,8 @@ class SettingsView(Gtk.Box):
             self.session.apply(edit)
         except ChangedOutside as exc:
             self.refused_outside = True
+            self._select = None  # a page picked for the old file could be another panel now
+            self._outside_warning = str(exc)
             self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
@@ -336,10 +465,10 @@ class SettingsView(Gtk.Box):
         return True
 
     def _rebuild_soon(self, defer: bool = False) -> None:
-        """Rebuild now, or at the end of the running flush(): a rebuild in the middle would
-        destroy the rows that still hold a pending value. `defer`: when the loop is idle, not
-        now (a name entry's focus-out runs this before the click that caused it is released:
-        a button unparented by the rebuild would lose that click)."""
+        """Rebuild now, or once the queue is applied (one rebuild for every edit that asks for
+        it). `defer`: when the loop is idle, not now (a name entry's focus-out runs this before
+        the click that caused it is released: a button unparented by the rebuild would lose
+        that click)."""
         if self._flushing:
             self._rebuild_due = True
         elif defer:
@@ -349,60 +478,197 @@ class SettingsView(Gtk.Box):
             self.rebuild()
 
     def _rebuild_idle_cb(self) -> bool:
+        """The deferred rebuild: what was queued meanwhile is applied first, then one rebuild."""
         self._rebuild_idle = 0
-        self.rebuild()
+        self._rebuild_due = True
+        self._run_queue()
         return False
 
+    # ---- the edit queue (settings.queue) -------------------------------------------------
     def _on_change(self, path: tuple, value: Any) -> None:
-        titled = len(path) == 5 and path[2] == "panels" and path[4] in TITLE_KEYS
-        if titled:  # the panel's expander title shows these: rebuild, keep that panel open
-            if self._flush_first():
-                return
-            self._expand[path[1]] = path[3]
-        if len(path) == 5 and path[2] == "panels":  # a panel's own key: maybe a compound edit
-            _, entry = lookup(self.session.user, path[:4])
-            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], value))
-        else:
-            edit = lambda d: d.set(path, value)  # noqa: E731
-        if not self.apply(edit, self._row(path), structural=titled, defer=True):
-            self._expand.pop(path[1], None)
-
-    def _flush_first(self) -> bool:
-        """A titled change rebuilds the page, which drops the other rows' pending values: apply
-        them first (the rebuild they ask for waits for the idle loop, one rebuild in all).
-        True: a hand edit was met, the file was re-read, and this edit was typed for the old
-        file."""
-        if not self._flushing:
-            self.flush(defer=True)
-            return self.refused_outside
-        return False
+        """An edit of a row (or of the toolbar): applied now, after the edits queued before it."""
+        self.queue.push(path, value)
+        self._run_queue(defer=True)
 
     def _on_reset(self, path: tuple) -> None:
+        self.queue.push(path, RESET)
+        self._run_queue(defer=True)
+
+    def _on_queue(self, path: tuple, value: Any, base: Any) -> None:
+        """A spin button's edit: queued and applied with the rest once the user pauses for
+        DEBOUNCE_MS (one timer for every row, started again by each edit)."""
+        self.queue.push(path, value, base)
+        self._cancel_queue_timer()
+        if len(self.queue):
+            self._queue_timer = GLib.timeout_add(DEBOUNCE_MS, self._queue_due)
+
+    def _queue_due(self) -> bool:
+        self._queue_timer = 0
+        self._run_queue(defer=True)
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_queue_timer(self) -> None:
+        if self._queue_timer:
+            GLib.source_remove(self._queue_timer)
+            self._queue_timer = 0
+
+    def _run_queue(self, defer: bool = False) -> None:
+        """Apply every queued edit in order. Inside a running flush() nothing more happens:
+        that flush applies the new edit in its turn. A rebuild an edit asks for (a title key)
+        waits until the queue is empty: once, `defer`red to the idle loop or not."""
+        if self._flushing:
+            return
+        self.save_failed = False
+        self.refused_outside = False
+        self._flushing = True
+        try:
+            self._drain()
+        finally:
+            self._flushing = False
+            if self._rebuild_due:
+                self._rebuild_due = False
+                self._rebuild_soon(defer)
+
+    def _drain(self) -> None:
+        """Apply the queue, oldest edit first. A hand edit met on the way (the file was
+        re-read) drops that edit and every later one, and says which on screen."""
+        self._cancel_queue_timer()
+        while (item := self.queue.pop()) is not None:
+            self._apply_queued(item)
+            if self.refused_outside:
+                typed = [row.path for row in self.rows if row.unsent()]
+                self._unapplied = ([item, *self.queue.drop()], typed, self._outside_warning)
+                break
+
+    def _apply_queued(self, item: QueuedEdit) -> None:
+        """One queued edit: a set or a reset; a panel's own key can be a compound edit
+        (settings.values.panel_ops); a key in a panel's title rebuilds the pages."""
+        path, value = item.path, item.value
         panel_key = len(path) == 5 and path[2] == "panels"
         titled = panel_key and path[4] in TITLE_KEYS  # the title and rows follow: rebuild
-        if panel_key and path[4] == "corner":
-            _, entry = lookup(self.session.user, path[:4])  # resetting a corner also drops an
-            # edge it cannot hold (panel_ops only turns None into an unset for the corner)
-            edit = _panel_edit(path[:4], panel_ops(entry or {}, path[4], None))
-        else:
+        if panel_key and (value is not RESET or path[4] == "corner"):
+            # resetting a corner also drops an edge it cannot hold (panel_ops turns None into
+            # an unset for the corner only)
+            _, entry = lookup(self.session.user, path[:4])
+            ops = panel_ops(entry or {}, path[4], None if value is RESET else value)
+            edit = _panel_edit(path[:4], ops)
+        elif value is RESET:
             edit = lambda d: d.unset(path)  # noqa: E731
-        if titled:
-            if self._flush_first():
-                return
-            self._expand[path[1]] = path[3]
-        if not self.apply(edit, self._row(path), structural=titled, defer=True) and titled:
-            self._expand.pop(path[1], None)
+        else:
+            edit = lambda d: d.set(path, value)  # noqa: E731
+        if self.apply(edit, self._row(path), structural=titled) and titled:
+            self._refocus = path  # the rebuild puts the focus back on this row (rebuild)
 
-    def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
+    def _tell_unapplied(self) -> None:
+        """Name what a drain dropped (see _drain), once the rebuild has written its banner."""
+        if self._unapplied is not None:
+            (dropped, typed, warning), self._unapplied = self._unapplied, None
+            self._tell_dropped(dropped, typed, warning)
+
+    def _tell_dropped(
+        self, dropped: list[QueuedEdit], typed: list[tuple], warning: str = ""
+    ) -> None:
+        """Add to the banner what was not applied because the file changed outside this
+        window (never lost silently): the queued edits and the rows with typed text, at most
+        MAX_NAMED of them. `warning`: the hand-edit warning, added when the banner no longer
+        has it (the rebuild of an invalid file replaced it)."""
+        parts = [describe([edit]) for edit in dropped]
+        parts += [f"{path_text(path)} (typed text)" for path in typed]
+        if not parts:
+            return
+        if len(parts) > MAX_NAMED:
+            parts = [*parts[:MAX_NAMED], f"... and {len(parts) - MAX_NAMED} more"]
+        text = self.banner_label.get_text()
+        if warning and warning not in text:
+            text = f"{text}\n{warning}" if text else warning
+        note = "Not applied (made for the file before it changed): " + ", ".join(parts)
+        self.show_banner(f"{text}\n{note}" if text else note, Gtk.MessageType.WARNING)
+
+    def detect_monitors(self) -> None:
+        """Detect monitors: ask kscreen-doctor again and list the connected monitors with the
+        ones in the config (a barrier: queued edits are applied first). The banner names the
+        connected monitors and, when the config names one that is not connected, the names to
+        use instead (shell.monitor_check, the same text as the shell's warning). A failure
+        keeps the list as it was, and so does an empty read (the shell also treats it as
+        nothing to compare); with an invalid file the failure is added under the invalid-file
+        banner, which says how to fix the file."""
+        self.flush()
+        if self.refused_outside:
+            return
+        try:
+            outputs = self._detect()
+            text = (
+                None if outputs else "kscreen-doctor reported no monitors; the list was not changed"
+            )
+        except DetectError as exc:
+            text = f"{exc}; the monitor list is unchanged"
+        if text:
+            if self.session.config is None and self.banner.get_visible():
+                shown = self.banner_label.get_text()
+                if text not in shown:
+                    self.show_banner(f"{shown}\n{text}", self.banner.get_message_type())
+            else:
+                self.show_banner(text, Gtk.MessageType.WARNING)
+            return
+        self.outputs = {o.name: o for o in outputs}
+        self.rebuild()
+        if self.session.config is None:
+            return  # the invalid-file banner stays
+        report = monitor_report(self.config.monitors, self.outputs)
+        found = ", ".join(self.outputs) or "none"
+        if report is None:
+            self.show_banner(f"Connected monitors: {found}.", Gtk.MessageType.INFO)
+        else:
+            self.show_banner(
+                f"Monitors in the config that are not connected ({report}): use the connected "
+                "names in the config.",
+                Gtk.MessageType.WARNING,
+            )
+
+    def retire(self) -> None:
+        """The view is going (File > Close, Open, New): no timer or idle rebuild may run on
+        it later. Its queue was applied by the leave question's flush; anything left is
+        dropped."""
+        self.cancel_deferred_rebuild()
+        self._cancel_queue_timer()
+        self.queue.drop()
+        for row in self.rows:
+            row.discard()
+
+    def _structural(self, edit: Edit, show: str) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
-        rows that may point at an entry that is gone). `expand`: the entry to show open."""
-        self.flush()  # pending values go to the row indexes they were typed for, before they move
+        rows that may point at an entry that is gone), then show the page `show`. A barrier:
+        the queue is applied first, to the indexes its edits were made for."""
+        self.flush()
         if self.refused_outside:
             return  # the file was re-read: these row indexes may mean other panels now
-        if expand is not None:
-            self._expand[monitor] = expand
+        self._select = show
         if not self.apply(edit, structural=True):
-            self._expand.pop(monitor, None)
+            self._select = None
+
+    def on_panel_action(self, page: str, action: str) -> None:
+        """Move up, Move down or Remove, from a tree row's buttons or the toolbar, on the panel
+        of `page` (nothing on another page)."""
+        ref = parse_page(page)
+        if ref.kind != "panel":
+            return
+        step = panel_step(
+            ref.monitor, ref.index, len(self.config.monitor(ref.monitor).panels), action
+        )
+        if step is not None:
+            self._structural(*step)
+
+    def _on_mode(self, screen: str, mode: str) -> None:
+        """A toolbar checkbox: write `shell` (an error goes to the banner); the checkboxes
+        then show what is in effect, also when the write was refused."""
+        self._on_change(("monitors", screen, "shell"), mode)
+        self._sync_toolbar()
+
+    def add_panel(self, screen: str, choice: AddChoice) -> None:
+        """The toolbar's Add: a new entry of the chosen widget and kind with a free name
+        (settings.values.new_panel_entry); its page is shown."""
+        count = len(self.config.monitor(screen).panels)
+        self._structural(*add_step(screen, count, choice.widget, choice.kind))
 
     def _row(self, path: tuple) -> FieldRow | None:
         return next((r for r in self.rows if r.path == path), None)
@@ -451,30 +717,34 @@ class SettingsView(Gtk.Box):
         return True
 
     def revert(self) -> None:
-        # no flush: a pending value is about to be reverted, and applying it first would
-        # re-read a hand edit and hide the "changed outside" warning
+        # no flush: queued values are about to be reverted (dropped without a word), and
+        # applying them first would re-read a hand edit and hide the "changed outside" warning
+        self._cancel_queue_timer()
+        typed = [row.path for row in self.rows if row.unsent()]
+        dropped = self.queue.drop()
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
+        else:
+            self._tell_dropped(dropped, typed)  # refused: nothing was reverted, say what went
 
     def flush(self, defer: bool = False) -> None:
-        """Apply what is typed or pending in any row (a spin button inside its 400 ms pause,
-        a font list without Enter): the window is closing, or the rows are about to be rebuilt
-        (a panel added, removed or moved, Undo). Rows keep their pending
-        edit through the refresh after each apply, so every row is applied in turn; a rebuild an
-        apply asks for waits until the last row was applied (once, at the end). Not for Revert
-        all or a hand edit: their pending values are discarded with the rows. `save_failed` says
-        whether any of them could not be written (the error is on screen); `refused_outside` that
-        a hand edit was met: the rows from that one on were dropped (a rebuild follows).
-        `defer`: the rebuild at the end waits for the idle loop (see _rebuild_soon)."""
+        """The barrier before anything that must see every edit (a panel added, removed or
+        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a font
+        list or a name without Enter, a number without Enter) into the queue, then the whole
+        queue is applied in order (a spin edit inside its pause included). A rebuild an edit
+        asks for waits until the end (once). Not for Revert all or a hand edit: they drop the
+        queue. `save_failed` says whether an edit could not be written (the error is on
+        screen); `refused_outside` that a hand edit was met: that edit and the later ones were
+        dropped and named on screen (a rebuild follows). `defer`: the rebuild at the end waits
+        for the idle loop (see _rebuild_soon)."""
         self.save_failed = False
         self.refused_outside = False
         self._flushing = True
         try:
             for row in list(self.rows):
-                row.flush()
-                if self.refused_outside:
-                    break  # the rest would be applied onto the re-read file
+                row.flush()  # typed text -> the queue (applied below, in its turn)
+            self._drain()
         finally:
             self._flushing = False
             if self._rebuild_due:
@@ -496,7 +766,7 @@ class SettingsView(Gtk.Box):
         return text
 
     def confirm_revert(self) -> None:
-        """Revert all, after the confirmation dialog (the button and Edit > Revert all)."""
+        """Revert all, after the confirmation dialog (Edit > Revert all)."""
         if self._ask_revert(self.get_toplevel(), self.revert_text()):
             self.revert()
 
@@ -507,17 +777,29 @@ class SettingsView(Gtk.Box):
         try:
             if not self.session.changed_outside():
                 return
-            self.session.rebase()  # pending values go with the rows: they were typed against
-            # the old file
+            self.session.rebase()
         except ConfigError as exc:
             self.show_banner(f"Cannot read the config: {exc}")
             return
+        # queued edits and typed text were made for the old file: dropped, and named below
+        self._cancel_queue_timer()
+        dropped = self.queue.drop()
+        typed = [row.path for row in self.rows if row.unsent()]
         self.rebuild()
         if self.session.config is not None:
             self.show_banner(
                 f"{self.session.path} was changed outside this window; showing the new values",
                 Gtk.MessageType.INFO,
             )
+        self._tell_dropped(dropped, typed)
+
+
+def override_text(name: str) -> str:
+    """The banner of a monitor's page."""
+    return (
+        f"These values override the Theme for {name}. A row you have not set here shows the "
+        "Theme's value."
+    )
 
 
 def _destroy_all(widgets: list[Gtk.Widget]) -> bool:

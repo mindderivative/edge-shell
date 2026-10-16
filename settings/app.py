@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,8 +15,9 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 from settings.menus import ACCELS
+from settings.screens import DetectError, detect_outputs
 from shell.config.loader import DEFAULT_PATH
-from shell.outputs import Output, parse_kscreen, read_kscreen_json
+from shell.outputs import Output, read_kscreen_json
 
 log = logging.getLogger(__name__)
 
@@ -37,9 +37,9 @@ def connected_outputs() -> list[Output]:
     """Connected monitors (names and sizes) from kscreen-doctor; [] when it fails (the window
     then lists only the configured monitors and shows no layout preview)."""
     try:
-        return parse_kscreen(read_kscreen_json())
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        log.warning("kscreen-doctor failed, showing configured monitors only: %s", exc)
+        return detect_outputs(read_kscreen_json)
+    except DetectError as exc:
+        log.warning("%s; showing configured monitors only", exc)
         return []
 
 

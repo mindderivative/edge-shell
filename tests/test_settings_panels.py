@@ -1,26 +1,17 @@
-"""settings.panels: the panel list editor of one monitor (widgets only; no window shown)."""
+"""settings.panels: each panel's title and rows, and the add, move and remove edits with the
+page shown after each (pure)."""
 
 import pytest
 
-gi = pytest.importorskip("gi")
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
 pytest.importorskip("tomlkit")
-
-from gi.repository import Gtk  # noqa: E402
-
-import settings.panels as panels  # noqa: E402
-
-if not Gtk.init_check()[0]:
-    pytest.skip("no display", allow_module_level=True)
 
 from settings.document import UserDocument  # noqa: E402
 from settings.form import WidgetChoice, config_form, registry_widgets  # noqa: E402
+from settings.panels import add_step, panel_section, panel_step, panel_title  # noqa: E402
 from shell.panel_spec import CornerDefaults, PanelDefaults  # noqa: E402
 from shell.registry import requests_for  # noqa: E402
 from shell.widget import Widget, WidgetProps  # noqa: E402
 
-FORM = config_form(tuple(WidgetChoice(w) for w in ("bar", "clock", "dock")))
 CORNER_FORM = config_form(
     (
         WidgetChoice("bar", "Bar"),
@@ -29,111 +20,31 @@ CORNER_FORM = config_form(
         WidgetChoice("dock", "Dock"),
     )
 )
-USER = (
-    '[[monitors.M.panels]]\npanel = "edge"\nname = "dock"\nwidget = "dock"\n'
-    '[[monitors.M.panels]]\npanel = "edge"\nname = "clock"\nwidget = "clock"\n'
-)
+THREE = ("dock", "clock", "bar")
 
 
-@pytest.fixture
-def editor(make_config, fake_registry):
-    config = make_config(
-        monitors={
-            "M": {
-                "panels": [
-                    {"panel": "edge", "name": "dock", "widget": "dock"},
-                    {"panel": "edge", "name": "clock", "widget": "clock"},
-                ]
-            }
-        }
-    )
-    made, edits = [], []
-
-    def make_rows(section, prefix):
-        made.append((section.label, prefix))
-        return Gtk.Box()
-
-    on_edit = lambda edit, open_index: edits.append((edit, open_index))  # noqa: E731
-    ed = panels.PanelEditor(FORM, "M", requests_for(config, "M"), make_rows, on_edit, 1)
-    return ed, made, edits
-
-
-def apply(edits):
-    doc = UserDocument(USER)
-    for edit, _open in edits:
-        edit(doc)
+def widgets_after(edit):
+    entry = '[[monitors.M.panels]]\npanel = "edge"\nname = "{0}"\nwidget = "{0}"\n'
+    doc = UserDocument("".join(entry.format(w) for w in THREE))
+    edit(doc)
     return [p["widget"] for p in doc.data["monitors"]["M"].get("panels", [])]
-
-
-def test_one_expander_per_entry_with_its_rows(editor):
-    ed, made, _ = editor
-    assert [e.get_label() for e in ed.expanders] == [
-        "1. dock: bottom, center",
-        "2. clock: top, center",
-    ]
-    assert made == [
-        ("Panel", ("monitors", "M", "panels", 0)),
-        ("Panel", ("monitors", "M", "panels", 1)),
-    ]
-    assert [e.get_expanded() for e in ed.expanders] == [False, True]
-
-
-def test_add_remove_and_move_are_document_edits(editor):
-    ed, _, edits = editor
-    ed.add("bar")
-    assert apply(edits) == ["dock", "clock", "bar"] and edits[0][1] == 2  # the new one opens
-    edits.clear()
-    ed.move(1, 0)
-    assert apply(edits) == ["clock", "dock"] and edits[0][1] == 0  # the moved one opens
-    edits.clear()
-    ed.remove(0)
-    assert apply(edits) == ["clock"] and edits[0][1] is None
-
-
-def test_the_widget_list_comes_from_the_form(editor):
-    ed, _, edits = editor
-    model = ed.widget_choice.get_model()
-    assert [row[0] for row in model] == ["bar", "clock", "dock"]
-    ed.add(None)  # nothing chosen: no edit
-    assert edits == []
-
-
-def test_first_cannot_move_up_and_last_cannot_move_down(editor):
-    ed, _, _ = editor
-
-    def buttons(i):
-        body = ed.expanders[i].get_child()
-        return body.get_children()[0].get_children()
-
-    up0, down0, _ = buttons(0)
-    up1, down1, _ = buttons(1)
-    assert (up0.get_sensitive(), down0.get_sensitive()) == (False, True)
-    assert (up1.get_sensitive(), down1.get_sensitive()) == (True, False)
 
 
 def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_registry):
     """Spec 19: a corner widget's entry shows corner, edge (only its corner's two), width and
     height, never align or length; its title names the corner, the edge and the size."""
-    form = CORNER_FORM
     entries = [
         {"panel": "edge", "name": "dock", "widget": "dock"},
         {"panel": "corner", "name": "box", "widget": "box"},
         {"panel": "corner", "name": "box 2", "widget": "box", "corner": "top-right"},
     ]
-    config = make_config(monitors={"M": {"panels": entries}})
-    sections = []
-
-    def make_rows(section, _prefix):
-        sections.append(section)
-        return Gtk.Box()
-
-    ed = panels.PanelEditor(form, "M", requests_for(config, "M"), make_rows, lambda *_a: None)
-    assert [e.get_label() for e in ed.expanders] == [
+    requests = requests_for(make_config(monitors={"M": {"panels": entries}}), "M")
+    assert [panel_title(i, r) for i, r in enumerate(requests)] == [
         "1. dock: bottom, center",
         "2. box: bottom-left, from bottom, 300x390",
         "3. box 2: top-right, from top, 300x390",  # the name, not the widget
     ]
-    dock, box, moved = sections
+    dock, box, moved = (panel_section(CORNER_FORM, r) for r in requests)
     assert "align" in {f.key for f in dock.fields} and "corner" not in {f.key for f in dock.fields}
     assert [f.key for f in box.fields] == [
         "name",
@@ -146,116 +57,56 @@ def test_corner_panels_get_their_own_rows_title_and_edges(make_config, corner_re
     ]
     assert box.field("edge").choices == ("bottom", "left")
     assert moved.field("edge").choices == ("top", "right")
-    assert [row[0] for row in ed.widget_choice.get_model()] == ["Bar", "Box", "Clock", "Dock"]
-    edits = []
-    ed._on_edit = lambda edit, open_index: edits.append((edit, open_index))
-    ed.add("box")
-    doc = UserDocument("")
-    edits[0][0](doc)
-    assert (
-        doc.data
-        == {"monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}}
-        and edits[0][1] == 3
-    )
-
-
-THREE = ("dock", "clock", "bar")
-
-
-def three_panel_editor(make_config, form=FORM):
-    panels_ = [{"panel": "edge", "name": w, "widget": w} for w in THREE]
-    config = make_config(monitors={"M": {"panels": panels_}})
-    edits = []
-    ed = panels.PanelEditor(
-        form,
-        "M",
-        requests_for(config, "M"),
-        lambda *_a: Gtk.Box(),
-        lambda edit, open_index: edits.append((edit, open_index)),
-    )
-    return ed, edits
-
-
-def row_buttons(ed, i):
-    return ed.expanders[i].get_child().get_children()[0].get_children()
-
-
-def widgets_after(edit):
-    entry = '[[monitors.M.panels]]\npanel = "edge"\nname = "{0}"\nwidget = "{0}"\n'
-    doc = UserDocument("".join(entry.format(w) for w in THREE))
-    edit(doc)
-    return [p["widget"] for p in doc.data["monitors"]["M"].get("panels", [])]
 
 
 @pytest.mark.parametrize("i", [0, 1, 2])
-def test_each_rows_remove_button_removes_its_own_entry(make_config, fake_registry, i):
-    ed, edits = three_panel_editor(make_config)
-    row_buttons(ed, i)[2].clicked()
-    ((edit, open_index),) = edits
-    assert open_index is None
+def test_remove_takes_out_its_own_entry_and_shows_the_monitor(fake_registry, i):
+    edit, page = panel_step("M", i, 3, "remove")
     assert widgets_after(edit) == [w for k, w in enumerate(THREE) if k != i]
+    assert page == "monitor:M"
 
 
 @pytest.mark.parametrize("i", [1, 2])
-def test_each_rows_move_up_button_moves_its_own_entry_up(make_config, fake_registry, i):
-    ed, edits = three_panel_editor(make_config)
-    row_buttons(ed, i)[0].clicked()
-    ((edit, open_index),) = edits
-    assert open_index == i - 1
+def test_move_up_moves_its_own_entry_and_shows_it(fake_registry, i):
+    edit, page = panel_step("M", i, 3, "up")
     expected = list(THREE)
     expected[i - 1], expected[i] = expected[i], expected[i - 1]
-    assert widgets_after(edit) == expected
+    assert widgets_after(edit) == expected and page == f"panel:M:{i - 1}"
 
 
 @pytest.mark.parametrize("i", [0, 1])
-def test_each_rows_move_down_button_moves_its_own_entry_down(make_config, fake_registry, i):
-    ed, edits = three_panel_editor(make_config)
-    row_buttons(ed, i)[1].clicked()
-    ((edit, open_index),) = edits
-    assert open_index == i + 1
+def test_move_down_moves_its_own_entry_and_shows_it(fake_registry, i):
+    edit, page = panel_step("M", i, 3, "down")
     expected = list(THREE)
     expected[i], expected[i + 1] = expected[i + 1], expected[i]
-    assert widgets_after(edit) == expected
+    assert widgets_after(edit) == expected and page == f"panel:M:{i + 1}"
 
 
-def click_add(ed):
-    adder = ed.get_children()[-1]
-    next(c for c in adder.get_children() if isinstance(c, Gtk.Button)).clicked()
+@pytest.mark.parametrize("index, action", [(0, "up"), (2, "down"), (3, "remove"), (-1, "remove")])
+def test_nothing_to_do_is_none(index, action):
+    assert panel_step("M", index, 3, action) is None
 
 
-def test_add_panel_button_writes_the_edge_widgets_id_and_opens_it(make_config, fake_registry):
-    ed, edits = three_panel_editor(make_config)
-    ed.widget_choice.set_active_id("clock")
-    click_add(ed)
-    ((edit, open_index),) = edits
-    assert open_index == 3  # len(requests): the new entry opens
-    assert widgets_after(edit) == [*THREE, "clock"]
+def test_an_unknown_action_is_an_error():
+    with pytest.raises(ValueError, match="unknown panel action"):
+        panel_step("M", 0, 3, "sideways")
 
 
-def test_add_panel_button_writes_a_corner_widgets_id_not_its_label(make_config, corner_registry):
-    form = CORNER_FORM
-    ed, edits = three_panel_editor(make_config, form)
-    ed.widget_choice.set_active_id("box")
-    assert ed.widget_choice.get_active_text() == "Box"
-    click_add(ed)
-    ((edit, open_index),) = edits
-    assert open_index == 3
+def test_add_writes_the_widget_and_kind_with_a_free_name_and_shows_it(fake_registry):
+    edit, page = add_step("M", 3, "clock")
+    assert widgets_after(edit) == [*THREE, "clock"] and page == "panel:M:3"
     doc = UserDocument("")
-    edit(doc)
+    add_step("M", 0, "clock")[0](doc)
+    add_step("M", 1, "clock")[0](doc)
+    assert [p["name"] for p in doc.data["monitors"]["M"]["panels"]] == ["Clock", "Clock 2"]
+
+
+def test_add_writes_a_corner_widgets_id_and_kind(corner_registry):
+    doc = UserDocument("")
+    add_step("M", 0, "box", "corner")[0](doc)
     assert doc.data == {
         "monitors": {"M": {"panels": [{"panel": "corner", "name": "Box", "widget": "box"}]}}
     }
-
-
-def test_the_wheel_over_the_add_combo_does_not_change_the_choice(make_config, fake_registry):
-    from gi.repository import Gdk
-
-    ed, _ = three_panel_editor(make_config)
-    ed.widget_choice.set_active(0)
-    event = Gdk.Event.new(Gdk.EventType.SCROLL)
-    event.scroll.direction = Gdk.ScrollDirection.DOWN
-    ed.widget_choice.emit("scroll-event", event)
-    assert ed.widget_choice.get_active() == 0
 
 
 class TileProps(WidgetProps):
@@ -275,37 +126,19 @@ def tile(corner_registry):
     return corner_registry
 
 
-def test_titles_use_the_panel_name_and_a_widget_frame_shows_its_properties(make_config, tile):
+def test_titles_use_the_panel_name_and_a_two_kind_widget_gets_the_panel_type_row(make_config, tile):
     entries = [
         {"panel": "edge", "name": "Bottom dock", "widget": "dock"},
         {"panel": "corner", "name": "My tile", "widget": "tile", "corner": "top-left"},
     ]
-    config = make_config(monitors={"M": {"panels": entries}})
-    made = []
-
-    def make_rows(section, prefix):
-        made.append((section, prefix))
-        return Gtk.Box()
-
-    form = config_form(registry_widgets())
-    ed = panels.PanelEditor(form, "M", requests_for(config, "M"), make_rows, lambda *_a: None)
-    assert [e.get_label() for e in ed.expanders] == [
+    requests = requests_for(make_config(monitors={"M": {"panels": entries}}), "M")
+    assert [panel_title(i, r) for i, r in enumerate(requests)] == [
         "1. Bottom dock: bottom, center",
         "2. My tile: top-left, from top, 240x200",
     ]
-    (dock, p0), (tile_rows, p1), (widget, p2) = made
+    form = config_form(registry_widgets())
+    dock, tile_rows = (panel_section(form, r) for r in requests)
     assert "panel" not in [f.key for f in dock.fields]  # the dock has one kind
     kind = tile_rows.field("panel")  # the tile has two: the panel type row
     assert kind.choices == ("edge", "corner", "float") and kind.disabled == ("float",)
-    assert (widget.label, [f.key for f in widget.fields]) == ("Widget", ["size"])
-    assert p1 == p2 == ("monitors", "M", "panels", 1)  # widget keys sit in the entry itself
-    frames = [w for w in walk(ed.expanders[1]) if isinstance(w, Gtk.Frame)]
-    assert [f.get_label() for f in frames] == ["Widget"]
-    assert not [w for w in walk(ed.expanders[0]) if isinstance(w, Gtk.Frame)]
-
-
-def walk(widget):
-    yield widget
-    if isinstance(widget, Gtk.Container):
-        for child in widget.get_children():
-            yield from walk(child)
+    assert form.widget_props("tile").label == "Widget" and form.widget_props("dock") is None
