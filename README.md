@@ -140,9 +140,13 @@ Monitors are matched by connector name (`scripts/py main.py --list-outputs` list
 the config names a monitor that is not connected, the shell logs a warning
 (`monitor names in the config are not connected (config monitors: HDMI-A-2; connected: DP-1,
 HDMI-A-1)`) and sends one "Monitor not connected" notification with the names to use, for
-example `config monitors: HDMI-A-2; connected: DP-1, HDMI-A-1`. It says so again only when the
-set of unknown names changes (a reload with the same mistake, or a hot-plug, is silent; fixing
-it and breaking it again is reported again). A connected monitor that the config does not name
+example `config monitors: HDMI-A-2; connected: DP-1, HDMI-A-1`. A name counts as unknown
+(a probable typo) only when it is not connected now and was never connected during this shell
+session: unplugging and replugging a correctly named monitor says nothing. At startup the shell
+cannot tell a typo from a monitor that is simply absent, so a configured name that is not
+connected then is reported. It says so again only when the set of unknown names changes (a
+reload with the same mistake, or a hot-plug, is silent; fixing it and breaking it again is
+reported again). A connected monitor that the config does not name
 is fine (it gets nothing, as `plasma`), and when `kscreen-doctor` reports no monitor at all
 nothing is compared.
 
@@ -405,7 +409,7 @@ file.
   added, moved or removed, before Undo, Save or leaving the config (New, Open, Close, Exit),
   and before Detect monitors; Revert all drops it. A change the shell would reject is not
   saved: the reason (with the key path) shows under the row. The mouse wheel scrolls the page
-  and never changes a value, so scrolling past a monitor's mode cannot switch it. If the file
+  and never changes a value, so scrolling over a monitor's shell mode cannot switch it. If the file
   is changed in an editor while changes are still waiting, they are not applied (they were made
   for the file before it changed, and panels are tracked by their place in the list) and the
   banner names them: "Not applied (made for the file before it changed):

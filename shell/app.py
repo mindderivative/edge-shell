@@ -58,6 +58,7 @@ class EdgeShellApp:
         self._failures_reported: dict[str, list[str]] = {}  # last notified build failures
         self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
         self._monitors_reported: list[str] = []  # the unknown configured names last notified
+        self._seen_connected: set[str] = set()  # every monitor name connected this session
         self._log_deprecated(store.config)
 
     @property
@@ -102,20 +103,22 @@ class EdgeShellApp:
         return set(close), set(open_)
 
     def _check_monitor_names(self, connected) -> None:
-        """Warn (log and one notification) when the config names a monitor that is not
-        connected, with the names to use; again only when the set of unknown configured
-        names changes (the config names another monitor), so a reload with the same
-        mismatch, a hot-plug, or a correctly named monitor leaving and returning says
-        nothing new. A match forgets the last report: a later mismatch is reported again.
-        An empty read (kscreen-doctor failed) compares nothing and changes nothing."""
+        """Warn (log and one notification) when the config names a monitor that looks like
+        a typo: not connected now and never seen connected in this shell session (a name that
+        was connected and is unplugged is right, only the cable is out: nothing is said).
+        At startup a typo and a monitor that is simply absent look the same, so both are
+        reported. Said again only when the set of such names changes, or after every name
+        matched in between, so a reload with the same mismatch or a hot-plug says nothing
+        new. An empty read (kscreen-doctor failed) compares nothing and changes nothing."""
         if not connected:
             return
-        unknown = unknown_monitors(self.config.monitors, connected)
+        self._seen_connected.update(connected)
+        unknown = unknown_monitors(self.config.monitors, self._seen_connected)
         if unknown == self._monitors_reported:
             return
         self._monitors_reported = unknown
         if unknown:
-            report = monitor_report(self.config.monitors, connected)
+            report = monitor_report(unknown, connected)
             log.warning("monitor names in the config are not connected (%s)", report)
             self._notify(MONITOR_TITLE, f"{report}\nUse the connected names in the config.")
 

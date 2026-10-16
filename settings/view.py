@@ -589,14 +589,26 @@ class SettingsView(Gtk.Box):
         ones in the config (a barrier: queued edits are applied first). The banner names the
         connected monitors and, when the config names one that is not connected, the names to
         use instead (shell.monitor_check, the same text as the shell's warning). A failure
-        keeps the list as it was."""
+        keeps the list as it was, and so does an empty read (the shell also treats it as
+        nothing to compare); with an invalid file the failure is added under the invalid-file
+        banner, which says how to fix the file."""
         self.flush()
         if self.refused_outside:
             return
         try:
             outputs = self._detect()
+            text = (
+                None if outputs else "kscreen-doctor reported no monitors; the list was not changed"
+            )
         except DetectError as exc:
-            self.show_banner(f"{exc}; the monitor list is unchanged", Gtk.MessageType.WARNING)
+            text = f"{exc}; the monitor list is unchanged"
+        if text:
+            if self.session.config is None and self.banner.get_visible():
+                shown = self.banner_label.get_text()
+                if text not in shown:
+                    self.show_banner(f"{shown}\n{text}", self.banner.get_message_type())
+            else:
+                self.show_banner(text, Gtk.MessageType.WARNING)
             return
         self.outputs = {o.name: o for o in outputs}
         self.rebuild()
@@ -754,7 +766,7 @@ class SettingsView(Gtk.Box):
         return text
 
     def confirm_revert(self) -> None:
-        """Revert all, after the confirmation dialog (the button and Edit > Revert all)."""
+        """Revert all, after the confirmation dialog (Edit > Revert all)."""
         if self._ask_revert(self.get_toplevel(), self.revert_text()):
             self.revert()
 

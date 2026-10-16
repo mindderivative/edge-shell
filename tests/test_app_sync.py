@@ -855,9 +855,50 @@ def test_the_report_comes_again_after_the_names_matched(env, monkeypatch):
     app.sync_monitors()
     mapping["HDMI-A-1"] = object()  # plugged in: every name matches, nothing said
     app.sync_monitors()
-    del mapping["HDMI-A-1"]  # out again: said again
+    del mapping["HDMI-A-1"]  # out again: the name is right, the cable is out: nothing new
     app.sync_monitors()
-    assert len(notes) == 2
+    assert len(notes) == 1
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    del mapping["HDMI-A-1"]
+    app.sync_monitors()
+    assert len(notes) == 1
+
+
+def test_a_correctly_named_monitor_unplugged_says_nothing(env, monkeypatch):
+    app, mapping = env  # the config names HDMI-A-1
+    notes = _notes(monkeypatch)
+    mapping["HDMI-A-1"] = object()
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    del mapping["HDMI-A-1"]  # the cable is out; the name is right
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_a_name_never_seen_connected_is_reported_once_even_after_others_came_and_went(
+    env, monkeypatch
+):
+    app, mapping = env  # the config names HDMI-A-1, which was never connected here
+    notes = _notes(monkeypatch)
+    mapping["DP-1"] = object()  # at startup a typo and an absent monitor look the same
+    app.sync_monitors()
+    assert len(notes) == 1
+    mapping["DP-2"] = object()
+    del mapping["DP-1"]  # other monitors come and go: still the same unknown name
+    app.sync_monitors()
+    assert len(notes) == 1
+
+
+def test_a_typo_is_still_reported_after_a_correct_name_was_seen(renv, monkeypatch):
+    app, store, _errors, mapping, make_config = renv
+    notes = _notes(monkeypatch)
+    panels = [{"panel": "edge", "name": "dock", "widget": "dock"}]
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=panels), "HDMI-A-9": mon()})
+    app.reload()
+    assert [n[1].splitlines()[0] for n in notes] == [
+        "config monitors: HDMI-A-9; connected: HDMI-A-1"
+    ]  # HDMI-A-1 was seen; HDMI-A-9 never: remembering names must not hide it
 
 
 def test_a_connected_monitor_the_config_does_not_name_is_fine(env, monkeypatch):

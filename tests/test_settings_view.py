@@ -1802,4 +1802,34 @@ def test_no_monitor_at_all_says_how_to_find_one(tmp_path, fake_registry):
     assert view.tree.rows() == [("theme", "Theme")] and view.tree.hint.get_visible()
     assert view.toolbar.screen is None
     view.tree.detect_button.clicked()
-    assert view.banner_label.get_text() == "Connected monitors: none."
+    assert "Connected monitors" not in view.banner_label.get_text()  # see the empty-read test
+
+
+def test_an_empty_detection_keeps_the_list_like_a_failed_one(tmp_path, fake_registry):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = detect_view(path, [HDMI, DP], [])
+    rows = view.tree.rows()
+    view.tree.detect_button.clicked()
+    assert view.tree.rows() == rows and set(view.outputs) == {"HDMI-A-1", "DP-2"}
+    assert ("monitor:HDMI-A-1", "HDMI-A-1") in view.tree.rows()  # not turned "(not connected)"
+    assert view.banner_label.get_text() == (
+        "kscreen-doctor reported no monitors; the list was not changed"
+    )
+    assert view.banner.get_message_type() == Gtk.MessageType.WARNING
+
+
+def test_a_failed_detection_keeps_the_invalid_file_explanation(tmp_path, fake_registry):
+    from settings.screens import DetectError
+
+    path = tmp_path / "config.toml"
+    path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')
+    view = detect_view(path, [HDMI], DetectError("kscreen-doctor failed: timed out"))
+    view.file_changed()
+    before = view.banner_label.get_text()
+    assert "is not valid" in before and "--restore-config" in before
+    view.tree.detect_button.clicked()
+    after = view.banner_label.get_text()
+    assert after.startswith(before) and "kscreen-doctor failed: timed out" in after
+    view.tree.detect_button.clicked()  # again: not added twice
+    assert view.banner_label.get_text() == after
