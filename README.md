@@ -334,7 +334,9 @@ file.
   so once.
 - **File dialogs** start in `~/.config/edge-shell` and are KDE's own, through the desktop
   portal (the settings process sets `GTK_USE_PORTAL=1` unless it is already set; start it with
-  `GTK_USE_PORTAL=0 scripts/py main.py --settings` for GTK's own dialog).
+  `GTK_USE_PORTAL=0 scripts/py main.py --settings` for GTK's own dialog, whose look differs a lot; the portal is the default).
+  Known limit: KDE's dialog may ask "overwrite?" for New on a name that exists; the window then
+  refuses it, because New never replaces a file.
 
 - **Theme** page: every theme key, the border, the shadow, the handle style and the layout gap.
   One page per monitor (connected monitors and the ones in your config): the shell mode

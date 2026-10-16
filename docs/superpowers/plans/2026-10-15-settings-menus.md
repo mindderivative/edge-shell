@@ -3567,6 +3567,8 @@ Clean up after the gate: `rm -r /tmp/edge-menus` (Phil). Stop the shell with Ctr
 
 ### Task 11: Record the gate results
 
+**Recorded (2026-10-15):** Results (Phil, live on HDMI-A-1, 2026-10-15): all 15 gate items passed. Item 1 passed but the once-only "not the default config" note was not blue and its text was orange in a focused window and white in an unfocused one (GTK's theme infobar colours); fixed with a theme-independent style class (blue background, white text, with a `:backdrop` rule) installed once at USER priority. Item 15 (`GTK_USE_PORTAL=0` against the default): with `GTK_USE_PORTAL=0` the window looks very different (GTK's own dialogs and look); Phil prefers the default, so portal stays on and `os.environ.setdefault("GTK_USE_PORTAL", "1")` stays (`GTK_USE_PORTAL=0` still overrides it). Known limits: KDE's portal dialog may ask "overwrite?" for New on an existing name, after which the window refuses it (New never replaces a file); the Panel type row and the other panel-model items are unaffected. Open question 6 is answered: portal on.
+
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (section 6: the section's note already reads "Implemented (2026-10-15, ...; the live gate results are recorded after it)" (replacing "Planned (...)"): append the results after it and keep that wording), `docs/superpowers/specs/2026-10-11-edge-shell-design.md` (section 13: one sentence after the Gate B results naming the menus plan and its gate result), `README.md` (any limitation the gate found)
 
@@ -3576,7 +3578,7 @@ Clean up after the gate: `rm -r /tmp/edge-menus` (Phil). Stop the shell with Ctr
 
 ```bash
 git add docs/superpowers/specs/2026-10-14-panel-widget-model-design.md docs/superpowers/specs/2026-10-11-edge-shell-design.md README.md
-git commit -m "docs: record the settings menus gate results" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "docs: record the settings menus gate results" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ## Self-review
