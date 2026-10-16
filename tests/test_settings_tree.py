@@ -452,3 +452,16 @@ def test_delete_acts_on_the_focused_panel_row_not_the_selected_one(tree, focused
     assert focused.get_focus() is tree.row_of("panel:HDMI-A-1:1")
     key_from(focused.get_focus(), Gdk.KEY_Delete)
     assert tree.actions == [("panel:HDMI-A-1:1", "remove")]
+
+
+def test_delete_with_the_focus_on_a_monitor_row_ignores_the_selected_panel(tree, focused):
+    """Up moved the keyboard focus off the selected panel: Delete must not remove it."""
+    click(tree, "panel:HDMI-A-1:0")  # selected
+    tree.row_of("monitor:HDMI-A-1").grab_focus()  # focused, not selected
+    assert focused.get_focus() is tree.row_of("monitor:HDMI-A-1")
+    assert tree.selected() == "panel:HDMI-A-1:0"
+    key_from(focused.get_focus(), Gdk.KEY_Delete)
+    assert tree.actions == []
+    tree.row_of("theme").grab_focus()
+    key_from(focused.get_focus(), Gdk.KEY_KP_Delete)
+    assert tree.actions == []

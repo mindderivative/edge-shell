@@ -311,12 +311,11 @@ class SettingsTree(Gtk.Box):
             return False  # a button of a row has its own keys; the selection stays under it
         key = event.keyval
         if key in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
-            # the focused row when it is a panel (Ctrl+Up/Down move the focus, not the
-            # selection), else the selected one
-            target = focus if isinstance(focus, TreeRow) and focus.parent_page else row
-            if target.parent_page is None:
-                return False  # Theme and the monitors cannot be removed here
-            self._on_action(target.page, "remove")
+            # only the focused row, and only a panel (Ctrl+Up/Down move the focus, not the
+            # selection): never the selected panel while the focus is on another row
+            if not (isinstance(focus, TreeRow) and focus.parent_page):
+                return False  # Theme, the monitors, no focus: nothing is removed
+            self._on_action(focus.page, "remove")
             return True
         if key in (Gdk.KEY_Left, Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
             if row.parent_page is not None:  # a panel: to its monitor
