@@ -13,6 +13,7 @@ walks its schema the same way: ConfigForm.widget_props(widget_id).
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
@@ -429,12 +430,19 @@ class AddChoice:
 
 def add_choices(widgets: tuple[WidgetChoice, ...]) -> tuple[AddChoice, ...]:
     """The panel types the toolbar can add: one per widget and panel kind it can be shown in,
-    by display name ("Clock (edge panel)", "Summary (corner panel)"), edge panels first, each
-    kind sorted by display name; then "Float panel (coming soon)", listed and disabled (spec
+    by display name ("Clock (edge panel)", "Summary (corner panel)"; two widgets with one title
+    add their id: "Clock (clock, edge panel)"), edge panels first, each kind sorted by display
+    name without case; then "Float panel (coming soon)", listed and disabled (spec
     3.3: float panels are reserved)."""
     ordered = sorted(widgets, key=lambda w: (w.label.casefold(), w.id))
+    titles = Counter(w.label for w in ordered)
+
+    def label(w: WidgetChoice, noun: str) -> str:
+        # widgets that share a title are told apart by their id: "Clock (clock, edge panel)"
+        return f"{w.label} ({w.id}, {noun})" if titles[w.label] > 1 else f"{w.label} ({noun})"
+
     choices = [
-        AddChoice(f"{kind}:{w.id}", f"{w.label} ({noun})", kind, w.id)
+        AddChoice(f"{kind}:{w.id}", label(w, noun), kind, w.id)
         for kind, noun in KIND_NOUNS.items()
         for w in ordered
         if kind in w.kinds

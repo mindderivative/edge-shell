@@ -31,10 +31,30 @@ def test_a_monitor_name_with_a_colon_round_trips():
     assert parse_page(panel_page("a:b", 10)) == PageRef("panel", "a:b", 10)
 
 
-@pytest.mark.parametrize("name", ["", "monitor", "panel:M", "panel:M:x", "panel:M:²", "other:M"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "monitor",
+        "monitor:",
+        "panel:M",
+        "panel:M:x",
+        "panel:M:²",
+        "panel::0",
+        "panel:M:007",
+        "panel:M:-1",
+        "panel:M:+1",
+        "other:M",
+    ],
+)
 def test_anything_else_is_not_a_page(name):
     with pytest.raises(ValueError, match="not a settings page"):
         parse_page(name)
+
+
+def test_the_screen_of_a_page_with_a_colon_in_the_monitor_name():
+    assert screen_of(panel_page("a:b", 0)) == "a:b"
+    assert screen_of(monitor_page("a:b")) == "a:b"
 
 
 def test_the_screen_of_a_page():

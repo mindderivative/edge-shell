@@ -12,6 +12,7 @@ from settings.form import (
     LABELS,
     MODE_HINTS,
     WidgetChoice,
+    add_choices,
     config_form,
     format_fonts,
     join_length,
@@ -418,3 +419,37 @@ def test_a_text_row_carries_the_schemas_max_length():
 
     fmt = props_section(Props).field("format")
     assert fmt.max_length == 64
+
+
+def test_the_panel_types_are_sorted_by_display_name_without_case():
+    choices = add_choices(
+        (
+            WidgetChoice("aa", "beta"),
+            WidgetChoice("zz", "Alpha"),
+            WidgetChoice("mm", "Gamma"),
+        )
+    )
+    assert [c.id for c in choices] == ["edge:zz", "edge:aa", "edge:mm", "float"]
+    assert [c.label for c in choices[:3]] == [
+        "Alpha (edge panel)",
+        "beta (edge panel)",
+        "Gamma (edge panel)",
+    ]
+
+
+def test_widgets_with_one_title_get_distinct_panel_type_labels():
+    choices = add_choices(
+        (
+            WidgetChoice("clock", "Clock", ("edge", "corner")),
+            WidgetChoice("clock2", "Clock"),
+            WidgetChoice("dock", "Dock"),
+        )
+    )
+    assert [c.label for c in choices] == [
+        "Clock (clock, edge panel)",
+        "Clock (clock2, edge panel)",
+        "Dock (edge panel)",
+        "Clock (clock, corner panel)",
+        "Float panel (coming soon)",
+    ]
+    assert len({c.label for c in choices}) == len(choices)

@@ -40,11 +40,11 @@ def parse_page(page: str) -> PageRef:
     if page == THEME:
         return PageRef("theme")
     kind, sep, rest = page.partition(":")
-    if kind == "monitor" and sep:
+    if kind == "monitor" and sep and rest:
         return PageRef("monitor", rest)
     if kind == "panel":
         name, sep, index = rest.rpartition(":")
-        if sep and index.isascii() and index.isdigit():
+        if sep and name and index.isascii() and index.isdigit() and str(int(index)) == index:
             return PageRef("panel", name, int(index))
     raise ValueError(f"not a settings page: {page!r}")
 

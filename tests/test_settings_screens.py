@@ -43,6 +43,16 @@ def test_every_shell_value_has_its_checkboxes():
     assert {mode_of(*mode_flags(m)) for m in get_args(ShellMode)} == set(get_args(ShellMode))
 
 
+def test_the_mode_takes_any_truthy_or_falsy_value():
+    assert mode_of("yes", []) == "edge"
+    assert mode_of(0, "x") == "plasma"
+
+
+def test_every_table_entry_is_labelled():
+    for key, label in screens.DESKTOP_NAMES.items():
+        assert desktop_label({"XDG_CURRENT_DESKTOP": key}) == label
+
+
 def test_an_unknown_shell_value_is_an_error():
     with pytest.raises(KeyError):
         mode_flags("sideways")
@@ -57,6 +67,19 @@ def test_an_unknown_shell_value_is_an_error():
         ("Hyprland", "Hyprland"),
         ("GNOME:GNOME-Classic", "GNOME"),
         ("X-Cinnamon", "Cinnamon"),
+        ("ubuntu:GNOME", "GNOME"),
+        ("pop:GNOME", "GNOME"),
+        ("zorin:GNOME", "GNOME"),
+        (":GNOME", "GNOME"),
+        ("Unity:Unity7:ubuntu", NATIVE_FALLBACK),
+        ("sway", "Sway"),
+        ("niri", "niri"),
+        ("XFCE", "Xfce"),
+        ("LXQt", "LXQt"),
+        ("MATE", "MATE"),
+        ("Budgie", "Budgie"),
+        ("COSMIC", "COSMIC"),
+        ("ubuntu:KDE", "KDE Plasma"),
         ("SomethingNew", NATIVE_FALLBACK),
         ("", NATIVE_FALLBACK),
         (" : ", NATIVE_FALLBACK),
@@ -94,6 +117,20 @@ def test_a_failed_detection_raises_with_the_reason(error):
 
     with pytest.raises(DetectError, match="kscreen-doctor failed"):
         detect_outputs(read)
+
+
+def test_the_reason_is_in_the_message():
+    def read():
+        raise OSError("no kscreen-doctor here")
+
+    with pytest.raises(DetectError, match="no kscreen-doctor here"):
+        detect_outputs(read)
+
+
+@pytest.mark.parametrize("text", ["[" * 100000, "{" * 100000])
+def test_a_deeply_nested_output_is_a_detect_error(text):
+    with pytest.raises(DetectError, match="kscreen-doctor failed"):
+        detect_outputs(lambda: text)
 
 
 def test_unexpected_output_raises():

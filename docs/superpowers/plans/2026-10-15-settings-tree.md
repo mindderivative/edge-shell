@@ -13,7 +13,7 @@
 **Phil's request (verbatim):** "2. Toolbar: remove Undo and Revert all. Add the following that applies separately for each screen: Label of screen selected; Enable edge shell checkbox with label of Enable; Enable native desktop environment checkbox with a label of the native desktop environment, e.g. checkbox + KDE Plasma or checkbox + Hyprland; Panels type drop down with add button (Give all widgets/panels a clear distinct name. None of this widget_panel (Corner Panel) stuff. The python code of the widget/panel should have a unique name as well as an identifier.) 3. Left menu: Auto-detect monitors on system; List Theme and Monitors, same as currently displayed. Monitors will expand and contract like a tree or accordion with a list of added panels which are individually selectable; Minimum width should be 200 px. 3. Theme selected content: Navigation tabs that separate the customization sections: General, Borders, Shadows, Handle, Layout. 4. Monitor selected content: Same contents as Theme but make it clear this is an override of the overall theme. 5. Panel selected content: Navigation tabs that separate the customization sections tailored to the panels available customizations. Add a renaming key : value for easier identification in the settings window and in the config file."
 
 **Decided with Phil (2026-10-15, his words in quotes; applied as decided):**
-1. The two checkboxes map onto the existing `shell` key: edge on + native off = `edge`; edge off + native on = `plasma`; both on = `both`; both off = `none`. Edge Shell does not hide or show Plasma's panel (deferred), so `edge` and `both` behave the same at runtime today; the window shows a one-line note about it. The native checkbox's label comes from `XDG_CURRENT_DESKTOP` (first component, through a small name table, fallback "Native desktop"). Plan 2 kept the Undo and Revert all buttons; this plan removes them from the top bar.
+1. The two checkboxes map onto the existing `shell` key: edge on + native off = `edge`; edge off + native on = `plasma`; both on = `both`; both off = `none`. Edge Shell does not hide or show Plasma's panel (deferred), so `edge` and `both` behave the same at runtime today; the window shows a one-line note about it. The native checkbox's label comes from `XDG_CURRENT_DESKTOP` (first known component, through a small name table, fallback "Native desktop"). Plan 2 kept the Undo and Revert all buttons; this plan removes them from the top bar.
 2. Theme keys: "Sort the theme keys based on their relation, borders would be under the Border tab." (decision 2).
 3. Move up / Move down / Remove: "can be on the toolbar or on the tree to the right of the tree item label (if that is possible)" (decision 6: both).
 4. Monitors: "The shell should detect the monitors and compare them against the config, if they match everything is fine, if they do not then a warning should be output with the monitor names that should be used." (decision 9; Task 3 in the shell, Task 9 in the window).
@@ -891,7 +891,7 @@ index 0000000..be9cfe5
 +    "Plasma's panel is not hidden or shown by Edge Shell yet; with both on, keep the bottom "
 +    "edge free of Edge Shell panels"
 +)
-+# XDG_CURRENT_DESKTOP's first component (matched without case) -> the checkbox's label
++# XDG_CURRENT_DESKTOP's first known component (matched without case) -> the checkbox's label
 +DESKTOP_NAMES = {
 +    "KDE": "KDE Plasma",
 +    "Hyprland": "Hyprland",
@@ -919,7 +919,7 @@ index 0000000..be9cfe5
 +
 +
 +def desktop_label(env: Mapping[str, str] | None = None) -> str:
-+    """The native desktop's name: the first component of XDG_CURRENT_DESKTOP ("KDE" in
++    """The native desktop's name: the first known component of XDG_CURRENT_DESKTOP ("KDE" in
 +    "KDE:plasma") through DESKTOP_NAMES; NATIVE_FALLBACK when it is unset, empty or unknown."""
 +    env = os.environ if env is None else env
 +    first = env.get("XDG_CURRENT_DESKTOP", "").split(":")[0].strip().casefold()

@@ -28,7 +28,7 @@ SHELL_NOTE = (
     "Plasma's panel is not hidden or shown by Edge Shell yet; with both on, keep the bottom "
     "edge free of Edge Shell panels"
 )
-# XDG_CURRENT_DESKTOP's first component (matched without case) -> the checkbox's label
+# XDG_CURRENT_DESKTOP's first known component (matched without case) -> the checkbox's label
 DESKTOP_NAMES = {
     "KDE": "KDE Plasma",
     "Hyprland": "Hyprland",
@@ -56,12 +56,15 @@ def mode_of(edge: bool, native: bool) -> str:
 
 
 def desktop_label(env: Mapping[str, str] | None = None) -> str:
-    """The native desktop's name: the first component of XDG_CURRENT_DESKTOP ("KDE" in
-    "KDE:plasma") through DESKTOP_NAMES; NATIVE_FALLBACK when it is unset, empty or unknown."""
+    """The native desktop's name: the first known component of XDG_CURRENT_DESKTOP ("KDE" in
+    "KDE:plasma", "GNOME" in "ubuntu:GNOME") through DESKTOP_NAMES; NATIVE_FALLBACK when it
+    is unset, empty or has no known component."""
     env = os.environ if env is None else env
-    first = env.get("XDG_CURRENT_DESKTOP", "").split(":")[0].strip().casefold()
     names = {key.casefold(): label for key, label in DESKTOP_NAMES.items()}
-    return names.get(first, NATIVE_FALLBACK)
+    for part in env.get("XDG_CURRENT_DESKTOP", "").split(":"):
+        if part.strip().casefold() in names:
+            return names[part.strip().casefold()]
+    return NATIVE_FALLBACK
 
 
 class DetectError(Exception):
@@ -73,5 +76,5 @@ def detect_outputs(read: Callable[[], str] | None = None) -> list[Output]:
     it fails or prints something unexpected. Tests always pass `read`."""
     try:
         return parse_kscreen((read or read_kscreen_json)())
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, RecursionError) as exc:
         raise DetectError(f"kscreen-doctor failed: {exc}") from None
