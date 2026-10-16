@@ -65,6 +65,13 @@ def _reset_fake_shell(monkeypatch):
         monkeypatch.setattr(FakeShell, attr, value)
 
 
+@pytest.fixture(autouse=True)
+def _no_notify_send(monkeypatch):
+    """No test here starts notify-send (a monitor-name warning would show on the desktop);
+    a test that checks the command patches Popen itself."""
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+
+
 @pytest.fixture
 def env(monkeypatch, make_config):
     mapping: dict = {}
@@ -817,3 +824,64 @@ def test_a_panel_that_fails_again_after_a_relayout_rebuild_is_notified_again(env
     shell = app.shells["HDMI-A-1"]
     shell.on_error(shell)
     assert notes.count(failure) == 2
+
+
+# ---- monitor names in the config against the connected monitors --------------------------
+
+
+def test_a_configured_monitor_that_is_not_connected_is_reported_once(env, monkeypatch, caplog):
+    app, mapping = env  # the config names HDMI-A-1
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    caplog.set_level("WARNING", logger="shell.app")
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    app.sync_monitors()  # the same mismatch: nothing new
+    assert notes == [
+        (
+            "Monitor not connected",
+            "config monitors: HDMI-A-1; connected: DP-1\nUse the connected names in the config.",
+        )
+    ]
+    assert caplog.text.count("config monitors: HDMI-A-1; connected: DP-1") == 1
+    assert app.shells == {}  # unchanged behaviour: no frame for a monitor that is not there
+
+
+def test_the_report_comes_again_after_the_names_matched(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    mapping["HDMI-A-1"] = object()  # plugged in: every name matches, nothing said
+    app.sync_monitors()
+    del mapping["HDMI-A-1"]  # out again: said again
+    app.sync_monitors()
+    assert len(notes) == 2
+
+
+def test_a_connected_monitor_the_config_does_not_name_is_fine(env, monkeypatch):
+    app, mapping = env
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    mapping["HDMI-A-1"] = object()
+    mapping["DP-1"] = object()  # not in the config: it keeps plasma
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_a_reload_with_the_same_mismatch_says_nothing_new(renv, monkeypatch):
+    app, store, _errors, mapping, make_config = renv
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    panels = [{"panel": "edge", "name": "dock", "widget": "dock"}]
+    store.pending = make_config(monitors={"HDMI-A-1": mon(panels=panels), "HDMI-A-2": mon()})
+    app.reload()
+    store.pending = make_config(
+        theme={"accent": "#112233"},
+        monitors={"HDMI-A-1": mon(panels=panels), "HDMI-A-2": mon()},
+    )
+    app.reload()  # e.g. the next change from the settings window
+    assert [n[1].splitlines()[0] for n in notes] == [
+        "config monitors: HDMI-A-2; connected: HDMI-A-1"
+    ]

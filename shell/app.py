@@ -26,6 +26,8 @@ from shell.canvas.stats import StatsRecorder
 from shell.config.diff import diff_configs
 from shell.config.store import ConfigStore
 from shell.config.watcher import ConfigWatcher
+from shell.monitor_check import TITLE as MONITOR_TITLE
+from shell.monitor_check import monitor_report
 from shell.monitors import MonitorShell, monitors_by_name
 from shell.registry import all_off_paths, deprecated_pos_paths, moved_default_paths
 from shell.theme import scope_class, to_css
@@ -55,6 +57,7 @@ class EdgeShellApp:
         self._layout_reported: dict[str, list[str]] = {}  # last notified warnings per monitor
         self._failures_reported: dict[str, list[str]] = {}  # last notified build failures
         self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
+        self._monitors_reported: str | None = None  # the last monitor_report notified
         self._log_deprecated(store.config)
 
     @property
@@ -81,6 +84,7 @@ class EdgeShellApp:
             # kscreen-doctor failed or a hot-plug flap; closing all would blank every frame
             log.warning("monitor mapping unavailable, keeping current shells")
             return set(), set()
+        self._check_monitor_names(connected)
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -93,6 +97,20 @@ class EdgeShellApp:
         if close or open_:
             self.refresh_css()
         return set(close), set(open_)
+
+    def _check_monitor_names(self, connected) -> None:
+        """Warn (log and one notification) when the config names a monitor that is not
+        connected, with the names to use; again only when the text changes (a config that
+        names another monitor, a monitor plugged in or out), so a reload with the same
+        mismatch, such as each change from the settings window, says nothing new. A match
+        forgets the last report: a later mismatch is reported again."""
+        report = monitor_report(self.config.monitors, connected)
+        if report == self._monitors_reported:
+            return
+        self._monitors_reported = report
+        if report is not None:
+            log.warning("monitor names in the config are not connected (%s)", report)
+            self._notify(MONITOR_TITLE, f"{report}\nUse the connected names in the config.")
 
     def _close_shell(self, name: str) -> None:
         self._forget_reports(name)
