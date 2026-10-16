@@ -261,16 +261,20 @@ def unique_name(base: str, taken: list[str]) -> str:
         n += 1
 
 
-def new_panel_entry(user: dict, monitor: str, widget: str) -> dict[str, str]:
+def new_panel_entry(
+    user: dict, monitor: str, widget: str, kind: str | None = None
+) -> dict[str, str]:
     """The keys a new panel of `widget` on `monitor` is written with (`user`: the user file's
-    plain data): the first kind the widget supports, a name made from its title that is not
-    used on that monitor yet ("Clock", "Clock 2", ...) and the widget; every other key comes
-    from the widget's defaults. An unknown widget is written as an edge panel named after its
-    id (the session's check rejects it with the shell's text)."""
+    plain data): `kind` (None: the first kind the widget supports), a name made from its title
+    that is not used on that monitor yet ("Clock", "Clock 2", ...) and the widget; every other
+    key comes from the widget's defaults. An unknown widget is written as an edge panel named
+    after its id, a kind the widget does not support as given (the session's check rejects
+    both with the shell's text)."""
     try:
-        kind, title = supported_kinds(widget)[0], widget_title(widget)
+        first, title = supported_kinds(widget)[0], widget_title(widget)
     except KeyError:
-        kind, title = "edge", widget
+        first, title = "edge", widget
+    kind = kind or first
     _, panels = lookup(user, ("monitors", monitor, "panels"))
     taken = [p.get("name") for p in panels or () if isinstance(p, dict)]
     return {"panel": kind, "name": unique_name(title, taken), "widget": widget}

@@ -340,6 +340,109 @@ def config_form(widgets: tuple[WidgetChoice, ...] = ()) -> ConfigForm:
     )
 
 
+# ---- tabs: which rows each page shows on which tab (panel/widget spec 7) ------------------
+# The Theme page and every monitor page have these tabs; [layout] is the Layout tab, and every
+# [theme] key or table goes on the tab THEME_TAB_OF names, any other one (a key added to the
+# model later included) on General.
+THEME_TABS = ("General", "Borders", "Shadows", "Handle", "Layout")
+THEME_TAB_OF = {
+    "border": "Borders",
+    "shadow": "Shadows",
+    "handle": "Handle",  # the handle colour
+    "handle_hover": "Handle",
+    "handle_style": "Handle",
+}
+# A panel page's tabs; every key of the entry goes on the tab PANEL_TAB_OF names, any other
+# one (edge, align, length, corner, width, ... and a key added later) on Position. Widget is
+# the widget's own properties, absent when it has none.
+PANEL_TABS = ("Panel", "Position", "Handle", "Interaction", "Widget")
+PANEL_TAB_OF = {
+    "name": "Panel",
+    "widget": "Panel",
+    "panel": "Panel",
+    "handle": "Handle",
+    "interaction": "Interaction",
+    "state": "Interaction",
+}
+
+Part = tuple[tuple[str, ...], SectionSpec]
+
+
+@dataclass(frozen=True)
+class TabSpec:
+    """One tab of a page: its title and its parts. A part is a section shown at a key path
+    relative to the page's own (the Theme page: (); a monitor page: ("monitors", NAME); a panel
+    page: ("monitors", NAME, "panels", i)); a sub-table's part shows its rows flat."""
+
+    title: str
+    parts: tuple[Part, ...]
+
+
+def _parts(
+    section: SectionSpec, key: tuple[str, ...], tab_of: dict[str, str], title: str, default: str
+) -> tuple[Part, ...]:
+    """The parts of `section` (at `key`) on the tab `title`: its own rows on that tab in one
+    part, then each of its sub-tables on that tab as a part of its own."""
+    rows = tuple(f for f in section.fields if tab_of.get(f.key, default) == title)
+    parts: list[Part] = [(key, replace(section, fields=rows, sections=()))] if rows else []
+    for sub in section.sections:
+        if tab_of.get(sub.key, default) == title:
+            parts.append(((*key, sub.key), sub))
+    return tuple(parts)
+
+
+def theme_tabs(form: ConfigForm) -> tuple[TabSpec, ...]:
+    """The tabs of the Theme page (a monitor page shows the same at its own prefix)."""
+    tabs = [
+        TabSpec(title, _parts(form.theme, ("theme",), THEME_TAB_OF, title, "General"))
+        for title in THEME_TABS[:-1]
+    ]
+    tabs.append(TabSpec("Layout", ((("layout",), form.layout),)))
+    return tuple(t for t in tabs if t.parts)
+
+
+def panel_tabs(section: SectionSpec, props: SectionSpec | None = None) -> tuple[TabSpec, ...]:
+    """The tabs of a panel page: `section` is the entry's rows (ConfigForm.panel_for), `props`
+    its widget's "Widget" section (ConfigForm.widget_props; None: no Widget tab)."""
+    tabs = [
+        TabSpec(title, _parts(section, (), PANEL_TAB_OF, title, "Position"))
+        for title in PANEL_TABS[:-1]
+    ]
+    if props is not None:
+        tabs.append(TabSpec("Widget", (((), props),)))
+    return tuple(t for t in tabs if t.parts)
+
+
+# ---- the toolbar's panel type list ---------------------------------------------------------
+KIND_NOUNS = {"edge": "edge panel", "corner": "corner panel"}
+FLOAT_CHOICE = "float"
+
+
+@dataclass(frozen=True)
+class AddChoice:
+    id: str  # "edge:clock" (kind:widget), or FLOAT_CHOICE
+    label: str  # "Clock (edge panel)"
+    kind: str
+    widget: str | None  # None: the float entry (nothing to add yet)
+    enabled: bool = True
+
+
+def add_choices(widgets: tuple[WidgetChoice, ...]) -> tuple[AddChoice, ...]:
+    """The panel types the toolbar can add: one per widget and panel kind it can be shown in,
+    by display name ("Clock (edge panel)", "Summary (corner panel)"), edge panels first, each
+    kind sorted by display name; then "Float panel (coming soon)", listed and disabled (spec
+    3.3: float panels are reserved)."""
+    ordered = sorted(widgets, key=lambda w: (w.label.casefold(), w.id))
+    choices = [
+        AddChoice(f"{kind}:{w.id}", f"{w.label} ({noun})", kind, w.id)
+        for kind, noun in KIND_NOUNS.items()
+        for w in ordered
+        if kind in w.kinds
+    ]
+    choices.append(AddChoice(FLOAT_CHOICE, "Float panel (coming soon)", "float", None, False))
+    return tuple(choices)
+
+
 # ---- value conversions between the config and the editor widgets ------------------------
 
 
