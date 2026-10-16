@@ -200,3 +200,189 @@ def test_the_detect_button_is_above_the_list(tree):
     assert tree.get_children()[0] is tree.detect_button
     assert tree.detect_button.get_label() == "Detect monitors"
     assert tree.list.get_accessible().get_name() == "Settings pages"
+
+
+# ---- keyboard focus, accessibility, the hint (review of Tasks 5 and 6) ---------------------
+
+
+def realize_all(widget):
+    """Realize `widget` and every visible widget below it (top down), without showing a window."""
+    if widget.get_visible():
+        widget.realize()
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children():
+                realize_all(child)
+
+
+@pytest.fixture
+def focused(tree):
+    """The tree in a window that is never shown (realized, so key events can reach its
+    widgets); tests put the focus on one of its rows."""
+    window = Gtk.Window()
+    window.add(tree)
+    tree.show_all()
+    window.realize()
+    realize_all(tree)
+    yield window
+    window.remove(tree)  # the tree fixture destroys it
+    window.destroy()
+
+
+def key_from(widget, keyval):
+    """A key press the way GTK delivers it: to the focus widget, then up through its parents
+    until one handles it (an unshown window cannot take real events)."""
+    event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+    event.keyval = keyval
+    event.window = widget.get_toplevel().get_window()  # realized, never mapped
+    while widget is not None:
+        if widget.emit("key-press-event", event):
+            return True
+        widget = widget.get_parent()
+    return False
+
+
+def focus_row(window, tree, page):
+    click(tree, page)
+    tree.row_of(page).grab_focus()
+    assert window.get_focus() is tree.row_of(page)
+
+
+def test_left_moves_the_focus_with_the_selection(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:1")
+    key_from(focused.get_focus(), Gdk.KEY_Left)
+    assert tree.selected() == "monitor:HDMI-A-1"
+    assert focused.get_focus() is tree.row_of("monitor:HDMI-A-1")
+
+
+def test_the_second_left_collapses_and_the_focus_stays_on_the_monitor(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:1")
+    key_from(focused.get_focus(), Gdk.KEY_Left)
+    key_from(focused.get_focus(), Gdk.KEY_Left)
+    assert not tree.is_expanded("monitor:HDMI-A-1")
+    assert focused.get_focus() is tree.row_of("monitor:HDMI-A-1")  # not dropped with the panel
+    key_from(focused.get_focus(), Gdk.KEY_Right)
+    assert tree.is_expanded("monitor:HDMI-A-1")
+    assert focused.get_focus() is tree.row_of("monitor:HDMI-A-1")
+
+
+def test_the_arrow_collapsing_a_focused_panels_monitor_takes_the_focus_there(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:0")
+    tree.row_of("monitor:HDMI-A-1").arrow.clicked()
+    assert tree.selected() == "monitor:HDMI-A-1"
+    assert focused.get_focus() is tree.row_of("monitor:HDMI-A-1")
+
+
+def test_the_focus_is_not_taken_when_the_list_does_not_have_it(tree, focused):
+    tree.detect_button.grab_focus()
+    click(tree, "panel:HDMI-A-1:0")
+    press(tree, Gdk.KEY_Left)
+    assert tree.selected() == "monitor:HDMI-A-1"
+    assert focused.get_focus() is tree.detect_button
+
+
+def test_up_after_left_starts_from_the_monitor(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:1")
+    key_from(focused.get_focus(), Gdk.KEY_Left)
+    # what Up does in the list box (a synthetic key cannot find its binding): it moves from the
+    # row that has the focus, so that must be the monitor
+    tree.list.emit("move-cursor", Gtk.MovementStep.DISPLAY_LINES, -1)
+    assert tree.selected() == "theme"
+
+
+def test_delete_on_a_focused_panel_row_removes_it(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:1")
+    key_from(focused.get_focus(), Gdk.KEY_Delete)
+    assert tree.actions == [("panel:HDMI-A-1:1", "remove")]
+
+
+def test_delete_does_nothing_on_a_monitor_or_theme(tree, focused):
+    focus_row(focused, tree, "monitor:HDMI-A-1")
+    key_from(focused.get_focus(), Gdk.KEY_Delete)
+    focus_row(focused, tree, "theme")
+    key_from(focused.get_focus(), Gdk.KEY_Delete)
+    assert tree.actions == []
+
+
+def test_left_and_right_on_a_row_button_leave_the_selection_under_it(tree, focused):
+    focus_row(focused, tree, "panel:HDMI-A-1:1")
+    button = tree.row_of("panel:HDMI-A-1:1").buttons["up"]
+    button.grab_focus()
+    assert focused.get_focus() is button
+    for keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_minus, Gdk.KEY_plus, Gdk.KEY_Delete):
+        key_from(button, keyval)
+    assert tree.selected() == "panel:HDMI-A-1:1" and tree.actions == []
+    assert tree.is_expanded("monitor:HDMI-A-1") and focused.get_focus() is button
+
+
+def test_the_hint_is_not_shown_for_an_invalid_file(tree):
+    tree.show(ENTRIES[:1], readable=False)  # the file is invalid: read-only, Theme alone
+    assert not tree.hint.get_visible()
+    tree.show(ENTRIES[:1])
+    assert tree.hint.get_visible()
+
+
+def test_the_hint_with_exactly_one_monitor_is_not_shown(tree):
+    tree.show(ENTRIES[:2])
+    assert not tree.hint.get_visible()
+
+
+def test_a_collapsed_monitor_that_gets_its_first_panel_shows_it(tree):
+    tree.row_of("monitor:DP-1").arrow.clicked()
+    assert tree.collapsed == {"monitor:DP-1"}
+    bare = tuple(TreeEntry(e.page, e.title) if e.page == "monitor:DP-1" else e for e in ENTRIES)
+    tree.show(bare)  # its last panel was removed: nothing left to collapse
+    assert tree.collapsed == set()
+    tree.show(ENTRIES)  # and one comes back
+    assert "panel:DP-1:0" in visible(tree) and tree.is_expanded("monitor:DP-1")
+
+
+def with_children(page, children, title=None):
+    """ENTRIES with `page`'s children (and title) replaced."""
+    return tuple(
+        TreeEntry(e.page, title or e.title, children) if e.page == page else e for e in ENTRIES
+    )
+
+
+def test_the_arrow_has_an_accessible_name_that_follows_the_state(tree):
+    arrow = tree.row_of("monitor:HDMI-A-1").arrow
+    assert arrow.get_accessible().get_name() == "Collapse HDMI-A-1"
+    arrow.clicked()
+    assert arrow.get_accessible().get_name() == "Expand HDMI-A-1"
+    tree.show(with_children("monitor:DP-1", ENTRIES[2].children, "Renamed"))  # a rename
+    name = tree.row_of("monitor:DP-1").arrow.get_accessible().get_name()
+    assert name == "Collapse Renamed"
+
+
+def test_a_monitor_row_says_whether_it_is_expandable_and_expanded(tree):
+    import gi
+
+    gi.require_version("Atk", "1.0")
+    from gi.repository import Atk
+
+    def states(page):
+        s = tree.row_of(page).get_accessible().ref_state_set()
+        return s.contains_state(Atk.StateType.EXPANDABLE), s.contains_state(Atk.StateType.EXPANDED)
+
+    assert states("monitor:HDMI-A-1") == (True, True)
+    assert states("monitor:DP-2") == (False, False)  # no panels
+    tree.row_of("monitor:HDMI-A-1").arrow.clicked()
+    assert states("monitor:HDMI-A-1") == (True, False)
+
+
+def test_the_row_buttons_are_named_for_a_screen_reader(tree):
+    buttons = tree.row_of("panel:HDMI-A-1:0").buttons
+    names = {a: b.get_accessible().get_name() for a, b in buttons.items()}
+    assert names == {"up": "Move up", "down": "Move down", "remove": "Remove panel Dock"}
+    tree.show(with_children("monitor:HDMI-A-1", (TreeEntry("panel:HDMI-A-1:0", "Bottom dock"),)))
+    renamed = tree.row_of("panel:HDMI-A-1:0").buttons["remove"]
+    assert renamed.get_accessible().get_name() == "Remove panel Bottom dock"
+
+
+def test_a_long_name_is_ellipsized_and_does_not_widen_the_tree(tree):
+    from gi.repository import Pango
+
+    long = "A very long panel name " * 8
+    tree.show(with_children("monitor:HDMI-A-1", (TreeEntry("panel:HDMI-A-1:0", long),)))
+    label = tree.row_of("panel:HDMI-A-1:0").label
+    assert label.get_ellipsize() == Pango.EllipsizeMode.END
+    assert tree.get_preferred_width().minimum_width <= MIN_WIDTH + 60  # not the name's width

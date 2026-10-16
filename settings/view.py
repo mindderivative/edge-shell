@@ -206,7 +206,7 @@ class SettingsView(Gtk.Box):
         page = self._page_to_show(visible)
         self.stack.set_visible_child_name(page)
         # the panel rows come with the panel pages
-        self.tree.show(tuple(replace(e, children=()) for e in entries))
+        self.tree.show(tuple(replace(e, children=()) for e in entries), valid)
         self.tree.select(page)
         if valid:
             self.refresh()
@@ -258,11 +258,14 @@ class SettingsView(Gtk.Box):
         tabs: tuple[TabSpec, ...],
         prefix: tuple,
         extra: tuple[tuple[str, Gtk.Widget], ...] = (),
+        override: Gtk.Widget | None = None,
     ) -> Gtk.Widget:
         """A page: `top` (its heading, a banner) above a notebook with one tab per TabSpec
-        (then the `extra` tabs, (title, content)), each tab scrolled on its own. A tab's later
-        parts get a heading of their own (the Handle tab: the handle colours, then "Handle
-        style"). The tab last shown on `page` is shown again."""
+        (then the `extra` tabs, (title, content)), each tab scrolled on its own (sideways too
+        when the window is narrow). A tab's later parts get a heading of their own (the Handle
+        tab: the handle colours, then "Handle style"). The tab last shown on `page` is shown
+        again. `override` (in `top`): the banner saying the tabs override the Theme; it is
+        hidden on the `extra` tabs, which are not."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_margin_start(16)
         box.set_margin_end(16)
@@ -283,11 +286,22 @@ class SettingsView(Gtk.Box):
             self._add_tab(notebook, title, content)
         box.pack_start(notebook, True, True, 0)
         self._keep_tab(page, notebook)
+        if override is not None:
+            extra_titles = tuple(title for title, _content in extra)
+
+            def follow(nb: Gtk.Notebook, child: Gtk.Widget, _num) -> None:
+                override.set_visible(nb.get_tab_label_text(child) not in extra_titles)
+
+            override.set_no_show_all(True)  # shown or hidden by the tab, not by show_all
+            current = notebook.get_nth_page(notebook.get_current_page())
+            follow(notebook, current, None)
+            notebook.connect("switch-page", follow)
         return box
 
     @staticmethod
     def _add_tab(notebook: Gtk.Notebook, title: str, content: Gtk.Widget) -> None:
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        # AUTOMATIC: the widest row would otherwise set the window's minimum width (947 px)
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
         scroller.add(content)
         scroller.show_all()  # a notebook only switches to a visible page (_keep_tab)
         notebook.append_page(scroller, Gtk.Label(label=title))
@@ -350,6 +364,7 @@ class SettingsView(Gtk.Box):
         ("global theme")."""
         prefix = ("monitors", name)
         banner = Gtk.InfoBar(message_type=Gtk.MessageType.INFO)
+        banner.get_style_context().add_class(INFO_NOTE_CLASS)  # not the theme's orange or white
         banner.get_content_area().add(Gtk.Label(label=override_text(name), xalign=0, wrap=True))
         top = [self._heading(title), banner, self._preview(name)]
         # until the toolbar and the panel pages take them over: the mode and the panel list
@@ -370,7 +385,8 @@ class SettingsView(Gtk.Box):
         )
         panels.pack_start(editor, False, False, 0)
         tabs = theme_tabs(self.form)
-        return self._tabbed(monitor_page(name), top, tabs, prefix, (("Panels", panels),))
+        extra = (("Panels", panels),)
+        return self._tabbed(monitor_page(name), top, tabs, prefix, extra, override=banner)
 
     # ---- showing values ------------------------------------------------------------------
     def refresh(self) -> None:

@@ -1193,3 +1193,114 @@ def test_a_later_part_of_a_tab_has_its_own_heading(make):
     assert "Handle style" in texts(handle)
     borders = nb.get_nth_page(tabs(view, "theme").index("Borders"))
     assert "Border" not in texts(borders)  # one part: no heading
+
+
+# ---- review of Tasks 5 and 6: banner colours, window width, rows once per page --------------
+
+
+def leaf_paths(section, prefix):
+    """Every field path of `section` at `prefix`, its sub-sections included."""
+    paths = [(*prefix, spec.key) for spec in section.fields]
+    for sub in section.sections:
+        paths += leaf_paths(sub, (*prefix, sub.key))
+    return paths
+
+
+def page_paths(view, page):
+    """The paths of the rows on `page`, the panel rows left out (their own tests)."""
+    prefix = ("theme",) if page == "theme" else ("monitors", page.partition(":")[2])
+    return [r.path for r in view.rows if r.path[: len(prefix)] == prefix and "panels" not in r.path]
+
+
+def test_every_key_of_the_form_is_on_its_page_exactly_once(make):
+    view, _ = make()
+    form = view.form
+    theme_page = [*leaf_paths(form.theme, ("theme",)), *leaf_paths(form.layout, ("layout",))]
+    paths = [r.path for r in view.rows if r.path[0] != "monitors"]
+    assert sorted(paths) == sorted(theme_page)  # each once: no key missing, none twice
+    for name in ("HDMI-A-1", "DP-1"):
+        prefix = ("monitors", name)
+        expected = [
+            *leaf_paths(form.theme, (*prefix, "theme")),
+            *leaf_paths(form.layout, (*prefix, "layout")),
+            *leaf_paths(form.monitor, prefix),
+        ]
+        assert sorted(page_paths(view, f"monitor:{name}")) == sorted(expected)
+
+
+def banner_of(view, page):
+    page_widget = view.stack.get_child_by_name(page)
+    return [w for w in walk(page_widget) if isinstance(w, Gtk.InfoBar)]
+
+
+def test_the_override_banner_keeps_the_info_notes_colours(make):
+    from settings.view import INFO_NOTE_CLASS
+
+    view, _ = make()
+    (bar,) = banner_of(view, "monitor:HDMI-A-1")
+    assert bar.get_style_context().has_class(INFO_NOTE_CLASS)  # not the theme's orange or white
+
+
+def test_the_theme_page_has_no_override_banner(make):
+    view, _ = make()
+    assert banner_of(view, "theme") == []
+    assert not any("override" in t for t in texts(view.stack.get_child_by_name("theme")))
+
+
+def test_the_banner_is_hidden_on_the_panels_tab_only(make):
+    view, _ = make()
+    (bar,) = banner_of(view, "monitor:HDMI-A-1")
+    assert bar.get_visible()
+    show_tab(view, "monitor:HDMI-A-1", "Panels")  # the panel list is not a Theme override
+    assert not bar.get_visible()
+    show_tab(view, "monitor:HDMI-A-1", "Layout")
+    assert bar.get_visible()
+
+
+def test_the_banner_is_hidden_after_a_rebuild_on_the_panels_tab(make):
+    view, _ = make()
+    show_tab(view, "monitor:HDMI-A-1", "Panels")
+    view.rebuild()
+    (bar,) = banner_of(view, "monitor:HDMI-A-1")
+    assert current_tab(view, "monitor:HDMI-A-1") == "Panels" and not bar.get_visible()
+
+
+def test_a_monitor_page_is_sensitive_and_the_theme_page_too(make):
+    view, _ = make()
+    assert view.stack.get_child_by_name("monitor:HDMI-A-1").get_sensitive()
+    assert view.stack.get_child_by_name("monitor:DP-1").get_sensitive()
+    assert view.stack.get_child_by_name("theme").get_sensitive()
+
+
+def test_a_monitor_page_is_headed_by_its_tree_title(make):
+    view, _ = make(outputs=(HDMI,))  # DP-1 is not connected, but the config knows it
+    view.session.apply(lambda d: d.set(("monitors", "DP-1", "shell"), "edge"))
+    view.rebuild()
+    assert "HDMI-A-1" in texts(view.stack.get_child_by_name("monitor:HDMI-A-1"))
+    assert "DP-1 (not connected)" in texts(view.stack.get_child_by_name("monitor:DP-1"))
+
+
+def test_the_window_can_be_narrow(make):
+    view, _ = make()
+    view.show_all()  # a widget flag only: no window exists to show it
+    assert view.get_preferred_width().minimum_width < 800  # 947 px after the tabs (was 757)
+
+
+def test_a_default_size_of_860_is_honoured(make):
+    view, _ = make()
+    window = Gtk.Window()  # never shown
+    window.add(view)
+    window.set_default_size(860, 680)
+    view.show_all()
+    assert window.get_preferred_width().minimum_width <= 860
+    assert window.get_default_size() == (860, 680)
+    window.remove(view)
+    window.destroy()
+
+
+def test_a_tab_scrolls_sideways_rather_than_widening_the_window(make):
+    view, _ = make()
+    for page in ("theme", "monitor:HDMI-A-1"):
+        nb = notebook(view, page)
+        scrollers = nb.get_children()
+        assert scrollers and all(s.get_policy()[0] == Gtk.PolicyType.AUTOMATIC for s in scrollers)
