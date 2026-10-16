@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 TITLE = "Monitor not connected"
+MAX_LISTED = 10  # unknown names in the text; the rest is counted
 
 
 def unknown_monitors(configured: Iterable[str], connected: Iterable[str]) -> list[str]:
@@ -21,12 +22,23 @@ def unknown_monitors(configured: Iterable[str], connected: Iterable[str]) -> lis
     return sorted(name for name in set(configured) if name not in known)
 
 
+def _shown(name: str) -> str:
+    """A name as typed, or its repr when it has whitespace or a control character (a stray
+    leading space must be visible, and a NUL must not reach notify-send)."""
+    return name if name.isprintable() and name == name.strip() else repr(name)
+
+
 def monitor_report(configured: Iterable[str], connected: Iterable[str]) -> str | None:
     """The text 'config monitors: HDMI-A-2; connected: DP-1, HDMI-A-1', or None when every
     configured name is connected (or the config names none). With nothing connected known
-    (kscreen-doctor failed, or a hot-plug flap) there is nothing to compare against: None."""
+    (kscreen-doctor failed, or a hot-plug flap) there is nothing to compare against: None.
+    The names are compared exactly (case and spaces count). At most 10 unknown names are
+    listed, so the connected names to use, which come last, are not cut off."""
     connected = sorted(set(connected))
     unknown = unknown_monitors(configured, connected)
     if not unknown or not connected:
         return None
-    return f"config monitors: {', '.join(unknown)}; connected: {', '.join(connected)}"
+    listed = ", ".join(_shown(name) for name in unknown[:MAX_LISTED])
+    if len(unknown) > MAX_LISTED:
+        listed += f", ... and {len(unknown) - MAX_LISTED} more"
+    return f"config monitors: {listed}; connected: {', '.join(_shown(n) for n in connected)}"

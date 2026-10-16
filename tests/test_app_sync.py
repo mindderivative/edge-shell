@@ -885,3 +885,144 @@ def test_a_reload_with_the_same_mismatch_says_nothing_new(renv, monkeypatch):
     assert [n[1].splitlines()[0] for n in notes] == [
         "config monitors: HDMI-A-2; connected: HDMI-A-1"
     ]
+
+
+def _notes(monkeypatch):
+    notes = []
+    monkeypatch.setattr(app_mod.EdgeShellApp, "_notify", lambda self, *a: notes.append(a))
+    return notes
+
+
+def _name(app, make_config, *names, shell="edge"):
+    """The config names exactly these monitors."""
+    app.store.config = make_config(monitors={n: {"shell": shell} for n in names})
+
+
+def test_a_failed_read_does_not_forget_the_report(env, monkeypatch):
+    app, mapping = env
+    notes = _notes(monkeypatch)
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    mapping.clear()  # kscreen-doctor failed, no shell open
+    app.sync_monitors()
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    assert len(notes) == 1
+
+
+def test_a_failed_read_after_a_match_says_nothing(env, monkeypatch, make_config):
+    app, mapping = env
+    _name(
+        app, make_config, "HDMI-A-1", shell="plasma"
+    )  # no shell opens: the empty read is not skipped
+    notes = _notes(monkeypatch)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()  # the name matches
+    mapping.clear()  # kscreen-doctor failed
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_notify_survives_a_value_error(env, monkeypatch):
+    app, _mapping = env
+
+    def refuse(*_a, **_k):
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(app_mod.subprocess, "Popen", refuse)
+    app._notify("t", "m")  # no raise
+
+
+def test_a_control_character_in_a_monitor_name_does_not_break_the_sync(
+    env, monkeypatch, make_config
+):
+    app, mapping = env
+    _name(app, make_config, "HDMI\x00X")
+    mapping["DP-1"] = object()
+
+    def popen(argv, **_kw):
+        if any("\x00" in part for part in argv):
+            raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(app_mod.subprocess, "Popen", popen)
+    app.sync_monitors()  # must not raise
+
+
+def test_a_failing_name_check_never_breaks_the_sync(env, monkeypatch, caplog):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+
+    def boom(*_a):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_mod, "unknown_monitors", boom)
+    app.sync_monitors()
+    assert "HDMI-A-1" in app.shells
+    assert "boom" in caplog.text
+
+
+def test_an_unconfigured_monitor_coming_and_going_does_not_warn(env, monkeypatch, make_config):
+    app, mapping = env
+    _name(app, make_config, "HDMI-A-1")
+    notes = _notes(monkeypatch)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()  # the name matches
+    mapping["DP-2"] = object()  # not in the config: plugged in, out, in
+    app.sync_monitors()
+    del mapping["DP-2"]
+    app.sync_monitors()
+    mapping["DP-2"] = object()
+    app.sync_monitors()
+    assert notes == []
+
+
+def test_an_existing_typo_is_not_reported_on_every_hot_plug(env, monkeypatch):
+    app, mapping = env  # the config names HDMI-A-1, which is a typo here
+    notes = _notes(monkeypatch)
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    mapping["DP-2"] = object()  # another monitor plugged in
+    app.sync_monitors()
+    del mapping["DP-1"]
+    app.sync_monitors()
+    assert len(notes) == 1
+
+
+def test_a_new_typo_is_reported_when_the_unknown_set_changes(env, monkeypatch, make_config):
+    app, mapping = env
+    notes = _notes(monkeypatch)
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    _name(app, make_config, "HDMI-A-1", "HDMI-A-9")
+    app.sync_monitors()
+    assert len(notes) == 2
+    assert "HDMI-A-1, HDMI-A-9" in notes[1][1]
+
+
+def test_the_names_to_use_survive_the_notification_cut(env, monkeypatch, make_config):
+    app, mapping = env
+    _name(app, make_config, *[f"BAD-{n:02d}" for n in range(60)])
+    notes = _notes(monkeypatch)
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    assert "connected: DP-1" in notes[0][1][:400]
+
+
+def test_a_name_with_a_stray_space_is_visible(env, monkeypatch, make_config):
+    app, mapping = env
+    _name(app, make_config, " HDMI-A-1")
+    notes = _notes(monkeypatch)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert "' HDMI-A-1'" in notes[0][1]
+
+
+def test_a_plasma_mode_monitor_that_is_not_connected_is_still_reported(
+    env, monkeypatch, make_config
+):
+    app, mapping = env
+    _name(app, make_config, "DP-1", shell="plasma")
+    notes = _notes(monkeypatch)
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    assert notes and "config monitors: DP-1" in notes[0][1]
