@@ -157,6 +157,14 @@ def test_left_and_right_collapse_expand_and_go_up(tree):
     assert press(tree, Gdk.KEY_Down) is False  # left to the list box
 
 
+@pytest.mark.parametrize("collapse", [Gdk.KEY_minus, Gdk.KEY_KP_Subtract, Gdk.KEY_Left])
+@pytest.mark.parametrize("expand", [Gdk.KEY_plus, Gdk.KEY_KP_Add, Gdk.KEY_Right])
+def test_each_collapse_and_expand_key_works_on_a_monitor(tree, collapse, expand):
+    click(tree, "monitor:HDMI-A-1")
+    assert press(tree, collapse) is True and not tree.is_expanded("monitor:HDMI-A-1")
+    assert press(tree, expand) is True and tree.is_expanded("monitor:HDMI-A-1")
+
+
 def test_a_rename_only_changes_the_title_and_keeps_the_selection(tree):
     click(tree, "panel:HDMI-A-1:0")
     old = tree.row_of("panel:HDMI-A-1:0")

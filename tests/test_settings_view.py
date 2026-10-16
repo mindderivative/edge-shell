@@ -18,6 +18,7 @@ if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
 from settings.panels import PanelEditor  # noqa: E402
+from settings.screens import mode_of  # noqa: E402
 from settings.session import SettingsSession  # noqa: E402
 from settings.view import SettingsView  # noqa: E402
 from shell.outputs import Output  # noqa: E402
@@ -66,6 +67,12 @@ def row(view, path):
     return next(r for r in view.rows if r.path == path)
 
 
+def shown_mode(view, screen="HDMI-A-1"):
+    """The `shell` value the toolbar's checkboxes show for `screen` (its page shown)."""
+    view.show_page(f"monitor:{screen}")
+    return mode_of(view.toolbar.edge.get_active(), view.toolbar.native.get_active())
+
+
 def walk(widget):
     yield widget
     if isinstance(widget, Gtk.Container):
@@ -83,7 +90,7 @@ def test_a_page_for_the_theme_and_each_monitor(make):
     assert pages(view) == ["theme", "monitor:HDMI-A-1", "monitor:DP-1"]
     accent = row(view, ("theme", "accent")).editor.widget.get_rgba()
     assert accent.to_string() == "rgb(143,211,182)"
-    assert row(view, ("monitors", "DP-1", "shell")).editor.widget.get_active_id() == "plasma"
+    assert shown_mode(view, "DP-1") == "plasma"  # not in the file: the default
     assert row(view, DEPTH).editor.widget.get_value() == 64  # the widget's default
 
 
@@ -98,7 +105,7 @@ def test_a_valid_edit_is_written_and_shown(make):
     assert "depth = 90" in path.read_text() and "# gate config" in path.read_text()
     r = row(view, DEPTH)
     assert r.editor.widget.get_value() == 90 and r.reset.get_sensitive()
-    assert view.undo_button.get_sensitive()
+    assert view.session.history
 
 
 def test_an_invalid_edit_shows_its_error_under_the_row(make):
@@ -167,7 +174,7 @@ def test_undo_and_revert(make):
     assert "depth = 90" in path.read_text() and 'shell = "edge"' in path.read_text()
     view.revert()
     assert path.read_text() == USER
-    assert not view.undo_button.get_sensitive()
+    assert not view.session.history
 
 
 def test_the_visible_page_survives_a_rebuild(make):
@@ -181,7 +188,7 @@ def test_a_hand_edit_is_reloaded_and_announced(make):
     view, path = make()
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
-    assert row(view, SHELL).editor.widget.get_active_id() == "both"
+    assert shown_mode(view) == "both"
     assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
 
 
@@ -330,7 +337,7 @@ def test_a_pending_value_does_not_break_a_hand_edit_reload(make, pending):
     row(view, DEPTH).editor.widget.set_value(120)
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
-    assert row(view, SHELL).editor.widget.get_active_id() == "both"
+    assert shown_mode(view) == "both"
     assert "depth" not in path.read_text()
 
 
@@ -472,13 +479,14 @@ def test_the_invalid_file_banner_names_the_restore_command(make):
     assert "--restore-config" in view.banner_label.get_text()
 
 
-def test_undo_is_insensitive_after_a_rebuild_with_no_history(make):
+def test_an_invalid_file_leaves_the_toolbar_without_a_screen(make):
     view, path = make()
-    view._on_change(DEPTH, 90)
-    assert view.undo_button.get_sensitive()
+    view.show_page("monitor:HDMI-A-1")
+    assert view.toolbar.screen == "HDMI-A-1"
     path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')  # invalid: no refresh runs
     view.file_changed()
-    assert not view.session.history and not view.undo_button.get_sensitive()
+    assert view.toolbar.screen is None and not view.toolbar.edge.get_sensitive()
+    assert not view.toolbar.add_button.get_sensitive()
 
 
 MIN_LENGTH, MAX_LENGTH = (*P0, "min_length"), (*P0, "max_length")
@@ -1183,6 +1191,7 @@ def test_an_invalid_file_shows_only_the_theme_in_the_tree(make):
     path.write_text('[monitors.HDMI-A-1]\nshell = "sideways"\n')
     view.file_changed()
     assert view.tree.rows() == [("theme", "Theme")]
+    assert not view.tree.hint.get_visible()  # not "connect a monitor": the file is the problem
     assert not view.stack.get_child_by_name("theme").get_sensitive()
 
 
@@ -1223,8 +1232,7 @@ def test_every_key_of_the_form_is_on_its_page_exactly_once(make):
         expected = [
             *leaf_paths(form.theme, (*prefix, "theme")),
             *leaf_paths(form.layout, (*prefix, "layout")),
-            *leaf_paths(form.monitor, prefix),
-        ]
+        ]  # the monitor's own keys (shell) are the toolbar's now
         assert sorted(page_paths(view, f"monitor:{name}")) == sorted(expected)
 
 
@@ -1304,3 +1312,113 @@ def test_a_tab_scrolls_sideways_rather_than_widening_the_window(make):
         nb = notebook(view, page)
         scrollers = nb.get_children()
         assert scrollers and all(s.get_policy()[0] == Gtk.PolicyType.AUTOMATIC for s in scrollers)
+
+
+# ---- the per-screen toolbar ------------------------------------------------------------------
+
+
+def test_the_toolbar_follows_the_selected_screen(make):
+    view, _ = make()
+    assert view.toolbar.screen is None  # the Theme page
+    click_row(view, "monitor:HDMI-A-1")
+    assert view.toolbar.screen == "HDMI-A-1"
+    assert (view.toolbar.edge.get_active(), view.toolbar.native.get_active()) == (True, False)
+    click_row(view, "theme")
+    assert view.toolbar.screen is None and not view.toolbar.edge.get_sensitive()
+
+
+def test_a_checkbox_writes_the_mode_in_one_change(make):
+    view, path = make()
+    click_row(view, "monitor:HDMI-A-1")
+    view.toolbar.native.set_active(True)  # as a click does: edge + native
+    assert 'shell = "both"' in path.read_text() and len(view.session.history) == 1
+    view.toolbar.edge.set_active(False)
+    view.toolbar.native.set_active(False)
+    assert 'shell = "none"' in path.read_text()
+    assert shown_mode(view) == "none"
+
+
+def test_a_monitor_with_no_shell_key_shows_the_default(make):
+    view, path = make()
+    assert shown_mode(view, "DP-1") == "plasma"  # in no file: plasma
+    view.toolbar.edge.set_active(True)  # writes a [monitors.DP-1] table (a test file only)
+    assert '[monitors.DP-1]\nshell = "both"' in path.read_text()
+
+
+def test_a_refused_mode_change_shows_the_mode_in_the_file(make):
+    view, path = make()
+    click_row(view, "monitor:HDMI-A-1")
+    hand = USER.replace('shell = "edge"', 'shell = "plasma"')
+    path.write_text(hand)  # by hand, not seen yet
+    view.toolbar.native.set_active(True)  # the user meant edge -> both
+    drain()
+    assert path.read_text() == hand
+    assert "changed outside" in view.banner_label.get_text()
+    assert shown_mode(view) == "plasma"  # the re-read file, not the click
+
+
+def test_add_puts_the_chosen_panel_on_the_selected_screen(make):
+    view, path = make()
+    click_row(view, "monitor:HDMI-A-1")
+    view.toolbar.kind.widget.set_active_id("edge:clock")
+    view.toolbar.add_button.clicked()
+    entries = view.session.user["monitors"]["HDMI-A-1"]["panels"]
+    assert entries[-1] == {"panel": "edge", "name": "Clock", "widget": "clock"}
+    assert view.stack.get_visible_child_name() == "monitor:HDMI-A-1"
+
+
+def test_the_mode_row_left_the_monitor_page(make):
+    view, _ = make()
+    assert not any(r.path == SHELL for r in view.rows)
+
+
+def test_a_failed_mode_write_shows_the_mode_in_the_file(make, monkeypatch):
+    from shell.config.models import ConfigError
+
+    view, path = make()
+    click_row(view, "monitor:HDMI-A-1")
+
+    def refuse(_edit):
+        raise ConfigError("disk full")
+
+    monkeypatch.setattr(view.session, "apply", refuse)
+    view.toolbar.native.set_active(True)  # the user meant edge -> both
+    assert "Not saved" in view.banner_label.get_text()
+    assert (view.toolbar.edge.get_active(), view.toolbar.native.get_active()) == (True, False)
+    assert path.read_text() == USER  # the checkboxes show the file's mode, not the click
+
+
+def test_the_toolbar_names_no_screen_while_the_config_cannot_be_read(make, monkeypatch):
+    view, _ = make()
+    click_row(view, "monitor:HDMI-A-1")
+    monkeypatch.setattr(view.session, "config", None)
+    view._sync_toolbar()
+    assert view.toolbar.screen is None
+
+
+def test_add_a_corner_panel_writes_the_corner_kind(make, corner_registry):
+    view, _ = make()
+    click_row(view, "monitor:HDMI-A-1")
+    view.toolbar.kind.widget.set_active_id("corner:box")
+    view.toolbar.add_button.clicked()
+    entries = view.session.user["monitors"]["HDMI-A-1"]["panels"]
+    assert entries[-1]["panel"] == "corner" and entries[-1]["widget"] == "box"
+
+
+def test_the_toolbar_shows_a_mode_written_by_another_way(make):
+    view, _ = make()
+    click_row(view, "monitor:HDMI-A-1")
+    view._on_change(SHELL, "both")  # not a click on the toolbar: the checkboxes still follow
+    assert (view.toolbar.edge.get_active(), view.toolbar.native.get_active()) == (True, True)
+    view.undo()
+    assert (view.toolbar.edge.get_active(), view.toolbar.native.get_active()) == (True, False)
+
+
+def test_the_toolbar_names_a_screen_that_is_not_connected(make):
+    view, _ = make(outputs=(HDMI,))
+    view.session.apply(lambda d: d.set(("monitors", "DP-1", "shell"), "edge"))
+    view.rebuild()
+    view.show_page("monitor:DP-1")
+    assert view.toolbar.title.get_text() == "DP-1 (not connected)"
+    view.show_page("monitor:HDMI-A-1")
+    assert view.toolbar.title.get_text() == "HDMI-A-1"

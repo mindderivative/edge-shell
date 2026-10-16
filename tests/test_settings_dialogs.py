@@ -58,7 +58,7 @@ def view(tmp_path, fake_registry):
 
 def test_revert_all_asks_through_the_seam_and_cancel_keeps_the_change(view):
     view._on_change(("monitors", "HDMI-A-1", "shell"), "both")
-    view.revert_button.emit("clicked")
+    view.confirm_revert()  # Edit > Revert all
     assert len(view.asked) == 1 and "goes back to how it was" in view.asked[0]
     assert 'shell = "both"' in view.path.read_text()
 

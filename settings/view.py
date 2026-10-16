@@ -1,8 +1,8 @@
-"""The settings window's content: a top bar (Undo, Revert all, the file path), a banner for
+"""The settings window's content: the per-screen toolbar (settings.toolbar), a banner for
 errors and notices, and beside the tree (settings.tree: Theme, the monitors) the page the tree
 selects (panel/widget spec 7). The Theme page and each monitor page have tabs (General,
 Borders, Shadows, Handle, Layout: settings.form.theme_tabs); a monitor page's values override
-the Theme for that monitor, and it has a Panels tab with its shell mode and its panel list. A
+the Theme for that monitor, and it has a Panels tab with its panel list. A
 plain Gtk.Box, so it is tested without creating a window; settings.window puts it in the
 toplevel.
 
@@ -30,19 +30,30 @@ from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
 from settings.fields import DEBOUNCE_MS, FieldRow
 from settings.form import (
-    MODE_HINTS,
+    AddChoice,
     SectionSpec,
     TabSpec,
+    add_choices,
     config_form,
     registry_widgets,
     theme_tabs,
 )
-from settings.pages import THEME, fallback_page, monitor_page, parse_page, tree_entries
+from settings.pages import (
+    NOT_CONNECTED,
+    THEME,
+    fallback_page,
+    monitor_page,
+    parse_page,
+    screen_of,
+    tree_entries,
+)
 from settings.panels import PanelEditor
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
+from settings.screens import desktop_label
 from settings.session import ChangedOutside, SettingsSession, check_text
+from settings.toolbar import ScreenToolbar
 from settings.tree import SettingsTree
-from settings.values import field_value, layout_preview, lookup, panel_ops
+from settings.values import field_value, layout_preview, lookup, new_panel_entry, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
 from shell.registry import requests_for
@@ -98,7 +109,10 @@ class SettingsView(Gtk.Box):
         outputs: list[Output],
         confirm_revert: Callable[[Any, str], bool] | None = None,
         on_state: Callable[[], None] | None = None,
+        desktop: str | None = None,
     ):
+        """`desktop`: the native desktop checkbox's label (None: from XDG_CURRENT_DESKTOP,
+        settings.screens.desktop_label)."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
@@ -107,7 +121,8 @@ class SettingsView(Gtk.Box):
         # window updates its menu items and title
         self._on_state = on_state or (lambda: None)
         self.outputs = {o.name: o for o in outputs}
-        self.form = config_form(registry_widgets())
+        widgets = registry_widgets()
+        self.form = config_form(widgets)
         self.rows: list[FieldRow] = []
         # monitor -> the labels showing its layout warnings (its page; later its panels' pages)
         self.previews: dict[str, list[Gtk.Label]] = {}
@@ -127,20 +142,10 @@ class SettingsView(Gtk.Box):
         self._unapplied: tuple[list[QueuedEdit], list[tuple], str] | None = None
         self._outside_warning = ""  # the last ChangedOutside message
 
-        bar = Gtk.Box(spacing=6, margin=6)
-        self.undo_button = Gtk.Button(label="Undo")
-        self.undo_button.set_tooltip_text("Undo the last change (Ctrl+Z)")
-        self._undo_clicked = self.undo_button.connect("clicked", lambda _b: self.undo())
-        self._undo_by_action = False
-        self.revert_button = Gtk.Button(label="Revert all")
-        self.revert_button.set_tooltip_text("Put back the file as it was when this window opened")
-        self.revert_button.connect("clicked", lambda _b: self.confirm_revert())
-        where = Gtk.Label(label=str(session.path), xalign=1, selectable=True)
-        where.get_style_context().add_class("dim-label")
-        bar.pack_start(self.undo_button, False, False, 0)
-        bar.pack_start(self.revert_button, False, False, 0)
-        bar.pack_end(where, True, True, 0)
-
+        # Undo and Revert all are in the Edit menu (and Ctrl+Z); the file is in the title
+        self.toolbar = ScreenToolbar(
+            add_choices(widgets), desktop or desktop_label(), self._on_mode, self.add_panel
+        )
         install_info_note_css()
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
@@ -152,7 +157,7 @@ class SettingsView(Gtk.Box):
         body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         body.pack1(self.tree, False, False)  # never narrower than its MIN_WIDTH
         body.pack2(self.stack, True, False)
-        self.pack_start(bar, False, False, 0)
+        self.pack_start(self.toolbar, False, False, 0)
         self.pack_start(self.banner, False, False, 0)
         self.pack_start(body, True, True, 0)
         self.connect("destroy", lambda _w: self.retire())  # whichever way the view goes
@@ -218,21 +223,20 @@ class SettingsView(Gtk.Box):
                 f"\n{self.session.error}",
                 Gtk.MessageType.ERROR,
             )
-        self._sync_undo_button()
+            self._sync_toolbar()  # refresh() does it for a valid file
         self._on_state()
         self._tell_unapplied()  # after the banner above, which would replace it
 
-    def use_undo_action(self, name: str) -> None:
-        """Hand the Undo button to a window action ("win.undo"): it then clicks through the
-        action and is enabled exactly when the menu's Undo is. Without this (the view alone)
-        the button undoes by itself and follows the history."""
-        self._undo_by_action = True
-        self.undo_button.disconnect(self._undo_clicked)
-        self.undo_button.set_action_name(name)
-
-    def _sync_undo_button(self) -> None:
-        if not self._undo_by_action:
-            self.undo_button.set_sensitive(bool(self.session.history))
+    def _sync_toolbar(self) -> None:
+        """The toolbar shows the screen of the page shown (a monitor page's, a panel page's
+        monitor) with its `shell` value in effect; none on the Theme page or while the file is
+        invalid."""
+        screen = screen_of(self.stack.get_visible_child_name())
+        if screen is None or self.session.config is None:
+            self.toolbar.show_screen(None)
+            return
+        title = screen if screen in self.outputs else screen + NOT_CONNECTED
+        self.toolbar.show_screen(screen, title, self.config.monitor(screen).shell)
 
     def _page_to_show(self, wanted: str | None) -> str:
         """`wanted` if it is still a page; else its fallback (a gone panel's monitor), else the
@@ -246,6 +250,7 @@ class SettingsView(Gtk.Box):
         """Show `page` (the tree's selection)."""
         if self.stack.get_child_by_name(page) is not None:
             self.stack.set_visible_child_name(page)
+            self._sync_toolbar()
 
     def _add_page(self, name: str, content: Gtk.Widget, sensitive: bool) -> None:
         content.set_sensitive(sensitive)
@@ -367,14 +372,9 @@ class SettingsView(Gtk.Box):
         banner.get_style_context().add_class(INFO_NOTE_CLASS)  # not the theme's orange or white
         banner.get_content_area().add(Gtk.Label(label=override_text(name), xalign=0, wrap=True))
         top = [self._heading(title), banner, self._preview(name)]
-        # until the toolbar and the panel pages take them over: the mode and the panel list
+        # until the panel pages take it over: the panel list
         panels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         panels.set_property("margin", 12)
-        panels.pack_start(self.section_rows(self.form.monitor, prefix), False, False, 0)
-        hints = "\n".join(f"{mode}: {hint}" for mode, hint in MODE_HINTS.items())
-        note = Gtk.Label(label=hints, xalign=0, wrap=True)
-        note.get_style_context().add_class("dim-label")
-        panels.pack_start(note, False, False, 0)
         editor = PanelEditor(
             self.form,
             name,
@@ -403,7 +403,7 @@ class SettingsView(Gtk.Box):
             for label in labels:
                 label.set_text("\n".join(warnings))
                 label.set_visible(bool(warnings))
-        self._sync_undo_button()
+        self._sync_toolbar()
         self._on_state()
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
@@ -599,6 +599,22 @@ class SettingsView(Gtk.Box):
             self._expand[monitor] = expand
         if not self.apply(edit, structural=True):
             self._expand.pop(monitor, None)
+
+    def _on_mode(self, screen: str, mode: str) -> None:
+        """A toolbar checkbox: write `shell` (an error goes to the banner); the checkboxes
+        then show what is in effect, also when the write was refused."""
+        self._on_change(("monitors", screen, "shell"), mode)
+        self._sync_toolbar()
+
+    def add_panel(self, screen: str, choice: AddChoice) -> None:
+        """The toolbar's Add: a new entry of the chosen widget and kind with a free name
+        (settings.values.new_panel_entry), shown open."""
+        count = len(self.config.monitor(screen).panels)
+
+        def edit(doc: UserDocument) -> None:
+            doc.add_panel(screen, new_panel_entry(doc.data, screen, choice.widget, choice.kind))
+
+        self._structural(screen, edit, count)
 
     def _row(self, path: tuple) -> FieldRow | None:
         return next((r for r in self.rows if r.path == path), None)

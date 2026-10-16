@@ -166,19 +166,30 @@ def test_items_follow_the_session(make):
     assert on(c, "redo") and not on(c, "revert")  # back at the start: nothing to revert
 
 
-def test_the_top_bars_undo_button_is_the_undo_action(make):
+def test_undo_and_revert_all_are_only_in_the_edit_menu(make):
+    """Plan 3: the top bar's Undo and Revert all buttons are gone (Edit menu, Ctrl+Z)."""
     c, path = make()
-    button = c.view.undo_button
-    assert button.get_action_name() == "win.undo"
-    assert button.get_sensitive() == on(c, "undo") is True  # enabled whenever Undo is
+    labels = [w.get_label() for w in walk(c.view) if isinstance(w, Gtk.Button)]
+    assert "Undo" not in labels and "Revert all" not in labels
     c.view._on_change(DEPTH, 90)
     c.view._on_change(SHELL, "both")
-    button.clicked()  # one click is one undo (not the action and a handler of its own)
+    run(c, "undo")  # one undo
     assert 'shell = "edge"' in path.read_text() and "depth = 90" in path.read_text()
-    c.actions.lookup_action("undo").set_enabled(False)
-    assert not button.get_sensitive()  # it follows the action, not the history
-    c.sync()
-    assert button.get_sensitive()
+
+
+def walk(widget):
+    yield widget
+    if isinstance(widget, Gtk.Container):
+        for child in widget.get_children():
+            yield from walk(child)
+
+
+def shown_mode(view, screen="HDMI-A-1"):
+    """The `shell` value the toolbar's checkboxes show for `screen` (its page shown)."""
+    from settings.screens import mode_of
+
+    view.show_page(f"monitor:{screen}")
+    return mode_of(view.toolbar.edge.get_active(), view.toolbar.native.get_active())
 
 
 def test_save_and_undo_stay_on_while_a_value_is_pending(make, pending):
@@ -309,7 +320,7 @@ def test_a_discard_that_meets_a_hand_edit_stays_and_says_so(make):
     assert c.can_leave() is False and path.read_text() == hand
     assert "nothing was discarded" in c.view.banner_label.get_text()
     # the rows were rebuilt from the hand edit, not left showing the old value
-    assert row(c, SHELL).editor.widget.get_active_id() == "both"
+    assert shown_mode(c.view) == "both"
 
 
 def test_a_hand_edit_that_makes_the_file_invalid_updates_the_items(make):
@@ -674,7 +685,7 @@ def test_save_as_does_not_copy_a_file_changed_by_hand_while_the_chooser_was_open
     run(c, "save-as")
     assert not copy.exists() and c.launches == [] and c.quits == []
     assert path.read_text() == hand and not c.session.changed_outside()
-    assert row(c, SHELL).editor.widget.get_active_id() == "both"  # shown from the hand edit
+    assert shown_mode(c.view) == "both"  # shown from the hand edit
     assert "changed outside" in c.view.banner_label.get_text()
 
 
