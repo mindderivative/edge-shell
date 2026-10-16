@@ -17,7 +17,6 @@ the running shell reloads it; an invalid one is shown under its row and not writ
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
 from typing import Any
 
 import gi
@@ -35,6 +34,7 @@ from settings.form import (
     TabSpec,
     add_choices,
     config_form,
+    panel_tabs,
     registry_widgets,
     theme_tabs,
 )
@@ -43,17 +43,18 @@ from settings.pages import (
     THEME,
     fallback_page,
     monitor_page,
+    panel_page,
     parse_page,
     screen_of,
     tree_entries,
 )
-from settings.panels import PanelEditor
+from settings.panels import add_step, panel_section, panel_step, panel_title
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
 from settings.screens import desktop_label
 from settings.session import ChangedOutside, SettingsSession, check_text
 from settings.toolbar import ScreenToolbar
 from settings.tree import SettingsTree
-from settings.values import field_value, layout_preview, lookup, new_panel_entry, panel_ops
+from settings.values import field_value, layout_preview, lookup, panel_ops
 from shell.config.models import ConfigError
 from shell.outputs import Output
 from shell.registry import requests_for
@@ -95,9 +96,9 @@ def install_info_note_css() -> Gtk.CssProvider:
     return _info_note_provider
 
 
-# shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
-# and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
-# the page and keeps that panel open
+# shown in a panel's tree row and page heading (panel_title), or deciding its rows (widget:
+# the kind and the Widget tab; panel: the kind's rows; corner: the edge choices): a change
+# rebuilds the pages (the panel's page stays shown)
 MAX_NAMED = 8  # the most dropped edits the banner names (then "... and N more")
 TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "height")
 
@@ -124,9 +125,9 @@ class SettingsView(Gtk.Box):
         widgets = registry_widgets()
         self.form = config_form(widgets)
         self.rows: list[FieldRow] = []
-        # monitor -> the labels showing its layout warnings (its page; later its panels' pages)
+        # monitor -> the labels showing its layout warnings (its page and its panels' pages)
         self.previews: dict[str, list[Gtk.Label]] = {}
-        self._expand: dict[str, int] = {}  # monitor -> panel entry to show open after a rebuild
+        self._select: str | None = None  # the page to show after the next rebuild (an add, ...)
         self._tab_of: dict[str, str] = {}  # page -> the title of the tab last shown on it
         self.save_failed = False  # the last flush() could not write something (shown on screen)
         # the last flush() met a hand edit: that row and the rest were not applied (warning on
@@ -144,7 +145,11 @@ class SettingsView(Gtk.Box):
 
         # Undo and Revert all are in the Edit menu (and Ctrl+Z); the file is in the title
         self.toolbar = ScreenToolbar(
-            add_choices(widgets), desktop or desktop_label(), self._on_mode, self.add_panel
+            add_choices(widgets),
+            desktop or desktop_label(),
+            self._on_mode,
+            self.add_panel,
+            lambda action: self.on_panel_action(self.stack.get_visible_child_name(), action),
         )
         install_info_note_css()
         self.banner = Gtk.InfoBar()
@@ -152,7 +157,7 @@ class SettingsView(Gtk.Box):
         self.banner.get_content_area().add(self.banner_label)
         self.banner.set_no_show_all(True)
         self.stack = Gtk.Stack()
-        self.tree = SettingsTree(self.show_page)
+        self.tree = SettingsTree(self.show_page, self.on_panel_action)
         self.tree.set_property("margin", 6)
         body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         body.pack1(self.tree, False, False)  # never narrower than its MIN_WIDTH
@@ -184,7 +189,9 @@ class SettingsView(Gtk.Box):
             self._run_queue()
             return
         self.cancel_deferred_rebuild()  # overtaken by this one
-        visible = self.stack.get_visible_child_name()
+        visible = self._select or self.stack.get_visible_child_name()
+        self._select = None
+        tree_focused = self.tree.holds_focus()  # asked before the rows are replaced
         window = self.get_toplevel()
         focus = window.get_focus() if isinstance(window, Gtk.Window) else None
         if focus is not None and focus.is_ancestor(self.stack):
@@ -207,12 +214,15 @@ class SettingsView(Gtk.Box):
         for entry in entries[1:]:
             name = parse_page(entry.page).monitor
             self._add_page(entry.page, self._monitor_page(name, entry.title), True)
+            for i, req in enumerate(requests_for(self.config, name)):
+                self._add_page(panel_page(name, i), self._panel_page(name, i, req), True)
         self.stack.show_all()
         page = self._page_to_show(visible)
         self.stack.set_visible_child_name(page)
-        # the panel rows come with the panel pages
-        self.tree.show(tuple(replace(e, children=()) for e in entries), valid)
+        self.tree.show(entries, valid)
         self.tree.select(page)
+        if tree_focused:  # the tree's rows were replaced or the selection moved: the focus
+            self.tree.row_of(page).grab_focus()  # follows to the page shown (the moved panel)
         if valid:
             self.refresh()
         else:
@@ -230,13 +240,17 @@ class SettingsView(Gtk.Box):
     def _sync_toolbar(self) -> None:
         """The toolbar shows the screen of the page shown (a monitor page's, a panel page's
         monitor) with its `shell` value in effect; none on the Theme page or while the file is
-        invalid."""
-        screen = screen_of(self.stack.get_visible_child_name())
+        invalid. On a panel page its Move up, Move down and Remove act on that panel."""
+        page = self.stack.get_visible_child_name()
+        screen = screen_of(page)
         if screen is None or self.session.config is None:
             self.toolbar.show_screen(None)
             return
         title = screen if screen in self.outputs else screen + NOT_CONNECTED
-        self.toolbar.show_screen(screen, title, self.config.monitor(screen).shell)
+        monitor = self.config.monitor(screen)
+        index = parse_page(page).index
+        panel = None if index is None else (index, len(monitor.panels))
+        self.toolbar.show_screen(screen, title, monitor.shell, panel)
 
     def _page_to_show(self, wanted: str | None) -> str:
         """`wanted` if it is still a page; else its fallback (a gone panel's monitor), else the
@@ -262,15 +276,11 @@ class SettingsView(Gtk.Box):
         top: list[Gtk.Widget],
         tabs: tuple[TabSpec, ...],
         prefix: tuple,
-        extra: tuple[tuple[str, Gtk.Widget], ...] = (),
-        override: Gtk.Widget | None = None,
     ) -> Gtk.Widget:
-        """A page: `top` (its heading, a banner) above a notebook with one tab per TabSpec
-        (then the `extra` tabs, (title, content)), each tab scrolled on its own (sideways too
-        when the window is narrow). A tab's later parts get a heading of their own (the Handle
-        tab: the handle colours, then "Handle style"). The tab last shown on `page` is shown
-        again. `override` (in `top`): the banner saying the tabs override the Theme; it is
-        hidden on the `extra` tabs, which are not."""
+        """A page: `top` (its heading, a banner) above a notebook with one tab per TabSpec,
+        each tab scrolled on its own (sideways too when the window is narrow). A tab's later
+        parts get a heading of their own (the Handle tab: the handle colours, then "Handle
+        style"). The tab last shown on `page` is shown again."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_margin_start(16)
         box.set_margin_end(16)
@@ -287,20 +297,8 @@ class SettingsView(Gtk.Box):
                     content.pack_start(self._heading(section.label), False, False, 6)
                 content.pack_start(self.section_rows(section, (*prefix, *key)), False, False, 0)
             self._add_tab(notebook, tab.title, content)
-        for title, content in extra:
-            self._add_tab(notebook, title, content)
         box.pack_start(notebook, True, True, 0)
         self._keep_tab(page, notebook)
-        if override is not None:
-            extra_titles = tuple(title for title, _content in extra)
-
-            def follow(nb: Gtk.Notebook, child: Gtk.Widget, _num) -> None:
-                override.set_visible(nb.get_tab_label_text(child) not in extra_titles)
-
-            override.set_no_show_all(True)  # shown or hidden by the tab, not by show_all
-            current = notebook.get_nth_page(notebook.get_current_page())
-            follow(notebook, current, None)
-            notebook.connect("switch-page", follow)
         return box
 
     @staticmethod
@@ -372,21 +370,15 @@ class SettingsView(Gtk.Box):
         banner.get_style_context().add_class(INFO_NOTE_CLASS)  # not the theme's orange or white
         banner.get_content_area().add(Gtk.Label(label=override_text(name), xalign=0, wrap=True))
         top = [self._heading(title), banner, self._preview(name)]
-        # until the panel pages take it over: the panel list
-        panels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        panels.set_property("margin", 12)
-        editor = PanelEditor(
-            self.form,
-            name,
-            requests_for(self.config, name),
-            self.section_rows,
-            lambda edit, expand, n=name: self._structural(n, edit, expand),
-            self._expand.pop(name, None),
-        )
-        panels.pack_start(editor, False, False, 0)
-        tabs = theme_tabs(self.form)
-        extra = (("Panels", panels),)
-        return self._tabbed(monitor_page(name), top, tabs, prefix, extra, override=banner)
+        return self._tabbed(monitor_page(name), top, theme_tabs(self.form), prefix)
+
+    def _panel_page(self, name: str, index: int, req) -> Gtk.Widget:
+        """A panel's page: its title ("1. Dock: bottom, center") and the layout warnings of
+        its monitor above the tabs Panel, Position, Handle, Interaction and, when its widget
+        has properties, Widget (settings.form.panel_tabs); every row is a key of the entry."""
+        top = [self._heading(panel_title(index, req)), self._preview(name)]
+        tabs = panel_tabs(panel_section(self.form, req), self.form.widget_props(req.widget))
+        return self._tabbed(panel_page(name, index), top, tabs, ("monitors", name, "panels", index))
 
     # ---- showing values ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -434,6 +426,7 @@ class SettingsView(Gtk.Box):
             self.session.apply(edit)
         except ChangedOutside as exc:
             self.refused_outside = True
+            self._select = None  # a page picked for the old file could be another panel now
             self._outside_warning = str(exc)
             self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
@@ -549,10 +542,7 @@ class SettingsView(Gtk.Box):
             edit = lambda d: d.unset(path)  # noqa: E731
         else:
             edit = lambda d: d.set(path, value)  # noqa: E731
-        if titled:
-            self._expand[path[1]] = path[3]  # keep that panel open
-        if not self.apply(edit, self._row(path), structural=titled):
-            self._expand.pop(path[1], None)
+        self.apply(edit, self._row(path), structural=titled)  # the shown page stays (by name)
 
     def _tell_unapplied(self) -> None:
         """Name what a drain dropped (see _drain), once the rebuild has written its banner."""
@@ -589,16 +579,28 @@ class SettingsView(Gtk.Box):
         for row in self.rows:
             row.discard()
 
-    def _structural(self, monitor: str, edit: Edit, expand: int | None) -> None:
+    def _structural(self, edit: Edit, show: str) -> None:
         """A panel added, removed or moved: row indexes change, so rebuild (never refresh
-        rows that may point at an entry that is gone). `expand`: the entry to show open."""
-        self.flush()  # pending values go to the row indexes they were typed for, before they move
+        rows that may point at an entry that is gone), then show the page `show`. A barrier:
+        the queue is applied first, to the indexes its edits were made for."""
+        self.flush()
         if self.refused_outside:
             return  # the file was re-read: these row indexes may mean other panels now
-        if expand is not None:
-            self._expand[monitor] = expand
+        self._select = show
         if not self.apply(edit, structural=True):
-            self._expand.pop(monitor, None)
+            self._select = None
+
+    def on_panel_action(self, page: str, action: str) -> None:
+        """Move up, Move down or Remove, from a tree row's buttons or the toolbar, on the panel
+        of `page` (nothing on another page)."""
+        ref = parse_page(page)
+        if ref.kind != "panel":
+            return
+        step = panel_step(
+            ref.monitor, ref.index, len(self.config.monitor(ref.monitor).panels), action
+        )
+        if step is not None:
+            self._structural(*step)
 
     def _on_mode(self, screen: str, mode: str) -> None:
         """A toolbar checkbox: write `shell` (an error goes to the banner); the checkboxes
@@ -608,13 +610,9 @@ class SettingsView(Gtk.Box):
 
     def add_panel(self, screen: str, choice: AddChoice) -> None:
         """The toolbar's Add: a new entry of the chosen widget and kind with a free name
-        (settings.values.new_panel_entry), shown open."""
+        (settings.values.new_panel_entry); its page is shown."""
         count = len(self.config.monitor(screen).panels)
-
-        def edit(doc: UserDocument) -> None:
-            doc.add_panel(screen, new_panel_entry(doc.data, screen, choice.widget, choice.kind))
-
-        self._structural(screen, edit, count)
+        self._structural(*add_step(screen, count, choice.widget, choice.kind))
 
     def _row(self, path: tuple) -> FieldRow | None:
         return next((r for r in self.rows if r.path == path), None)

@@ -103,3 +103,24 @@ def test_add_does_nothing_for_a_choice_that_is_not_enabled(toolbar):
 
 def test_the_add_button_keeps_the_focus_where_it_is(toolbar):
     assert not toolbar.add_button.get_focus_on_click()
+
+
+@pytest.mark.parametrize(
+    "panel, up, down, remove",
+    [
+        (None, False, False, False),  # a monitor page
+        ((0, 1), False, False, True),  # the only panel
+        ((0, 3), False, True, True),
+        ((1, 3), True, True, True),
+        ((2, 3), True, False, True),
+    ],
+)
+def test_the_panel_buttons_follow_the_panel_shown(panel, up, down, remove):
+    actions = []
+    t = ScreenToolbar(CHOICES, "KDE Plasma", lambda *_a: None, lambda *_a: None, actions.append)
+    t.show_screen("HDMI-A-1", "HDMI-A-1", "edge", panel)
+    sensitive = {a: b.get_sensitive() for a, b in t.panel_buttons.items()}
+    assert sensitive == {"up": up, "down": down, "remove": remove}
+    t.panel_buttons["remove"].clicked()
+    assert actions == ["remove"]  # the view checks that a panel page is shown
+    t.destroy()

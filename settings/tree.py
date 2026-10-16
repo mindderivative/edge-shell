@@ -254,6 +254,10 @@ class SettingsTree(Gtk.Box):
             return focus
         return None
 
+    def holds_focus(self) -> bool:
+        """The keyboard focus is in the list (a row or one of its buttons)."""
+        return self._list_focus() is not None
+
     def rows(self) -> list[tuple[str, str]]:
         """(page, title) of every row, parents before their children (hidden ones too)."""
         return [(r.page, r.title) for r in self._rows]
