@@ -24,6 +24,7 @@ from settings.form import (  # noqa: E402
     rgba_to_hex,
     split_length,
 )
+from settings.style import SWITCH_CLASS, install_css  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
 from shell.theme import hex_to_rgba  # noqa: E402
 
@@ -146,8 +147,13 @@ class IntEditor(_Editor):
 
 
 class BoolEditor(_Editor):
+    """A toggle: thin, with a round knob (settings.style), centred in its row (a switch
+    stretched to the row's height made the knob a tall oval)."""
+
     def __init__(self, emit: Emit):
-        self.widget = Gtk.Switch(halign=Gtk.Align.START)
+        install_css()
+        self.widget = Gtk.Switch(halign=Gtk.Align.START, valign=Gtk.Align.CENTER)
+        self.widget.get_style_context().add_class(SWITCH_CLASS)
         self.widget.connect("notify::active", lambda s, _p: emit(s.get_active()))
 
     def set(self, value: bool) -> None:

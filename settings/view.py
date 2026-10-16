@@ -23,8 +23,7 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import GLib, Gtk
 
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
@@ -53,6 +52,7 @@ from settings.panels import add_step, panel_section, panel_step, panel_title
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
 from settings.screens import DetectError, desktop_label, detect_outputs
 from settings.session import ChangedOutside, SettingsSession, check_text
+from settings.style import INFO_NOTE_CLASS, install_css
 from settings.toolbar import ScreenToolbar
 from settings.tree import SettingsTree
 from settings.values import field_value, layout_preview, lookup, panel_ops
@@ -62,41 +62,6 @@ from shell.outputs import Output
 from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
-
-# The once-only info note must not depend on the theme: GTK's own infobar colours turn the
-# text orange in a focused window and white in an unfocused one. A blue background with light
-# text, with the :backdrop (unfocused) state spelled out, reads the same either way.
-INFO_NOTE_CLASS = "info-note"
-INFO_NOTE_CSS = """
-infobar.info-note,
-infobar.info-note > revealer > box,
-infobar.info-note:backdrop,
-infobar.info-note:backdrop > revealer > box {
-    background-color: #2b5c8a;
-    background-image: none;
-}
-infobar.info-note label,
-infobar.info-note:backdrop label {
-    color: #ffffff;
-}
-"""
-_info_note_provider: Gtk.CssProvider | None = None
-
-
-def install_info_note_css() -> Gtk.CssProvider:
-    """Add the info note's CSS to the screen (USER priority), once; later calls reuse it."""
-    global _info_note_provider
-    if _info_note_provider is None:
-        provider = Gtk.CssProvider()
-        provider.load_from_data(INFO_NOTE_CSS.encode())
-        screen = Gdk.Screen.get_default()
-        if screen is not None:
-            Gtk.StyleContext.add_provider_for_screen(
-                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
-            )
-        _info_note_provider = provider
-    return _info_note_provider
-
 
 # shown in a panel's tree row and page heading (panel_title), or deciding its rows (widget:
 # the kind and the Widget tab; panel: the kind's rows; corner: the edge choices): a change
@@ -157,7 +122,7 @@ class SettingsView(Gtk.Box):
             self.add_panel,
             lambda action: self.on_panel_action(self.stack.get_visible_child_name(), action),
         )
-        install_info_note_css()
+        install_css()  # the info note's colours (settings.style)
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
         self.banner.get_content_area().add(self.banner_label)

@@ -459,3 +459,23 @@ def test_a_combo_opens_below_itself_with_every_entry():
         assert combo.get_wrap_width() == 1
         menu = combo.get_popup_accessible().get_widget()  # built by GTK, never shown here
         assert len(menu.get_children()) == len(combo.get_model())  # one item per entry
+
+
+def test_a_toggle_is_centred_in_its_row_with_a_round_knob():
+    """Phil: thinner, with a round knob. The row is about 30 px high (its Reset button); the
+    switch keeps its own height, so its content stays 2:1 and the knob a circle."""
+    from settings.style import BORDER_PX, KNOB_PX, SWITCH_CLASS, TRACK_PADDING_PX
+
+    row, _, _ = row_for(FORM.theme.section("border").field("enabled"), True)
+    row.show_all()  # widget flags only: no window exists
+    alloc = Gdk.Rectangle()
+    alloc.width = row.get_preferred_width().natural_width
+    alloc.height = row.get_preferred_height().natural_height
+    row.size_allocate(alloc)
+    switch = row.editor.widget
+    assert switch.get_style_context().has_class(SWITCH_CLASS)
+    assert switch.get_allocated_height() == switch.get_preferred_height().minimum_height
+    assert switch.get_allocated_height() < alloc.height  # centred, not stretched
+    edge = 2 * (TRACK_PADDING_PX + BORDER_PX)
+    assert switch.get_allocated_width() - edge == 2 * (switch.get_allocated_height() - edge)
+    assert switch.get_allocated_height() - edge == KNOB_PX
