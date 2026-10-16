@@ -14,7 +14,8 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk
 
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
@@ -28,6 +29,42 @@ from shell.outputs import Output
 from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
+
+# The once-only info note must not depend on the theme: GTK's own infobar colours turn the
+# text orange in a focused window and white in an unfocused one. A blue background with light
+# text, with the :backdrop (unfocused) state spelled out, reads the same either way.
+INFO_NOTE_CLASS = "info-note"
+INFO_NOTE_CSS = """
+infobar.info-note,
+infobar.info-note > revealer > box,
+infobar.info-note:backdrop,
+infobar.info-note:backdrop > revealer > box {
+    background-color: #2b5c8a;
+    background-image: none;
+}
+infobar.info-note label,
+infobar.info-note:backdrop label {
+    color: #ffffff;
+}
+"""
+_info_note_provider: Gtk.CssProvider | None = None
+
+
+def install_info_note_css() -> Gtk.CssProvider:
+    """Add the info note's CSS to the screen (USER priority), once; later calls reuse it."""
+    global _info_note_provider
+    if _info_note_provider is None:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(INFO_NOTE_CSS.encode())
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+            )
+        _info_note_provider = provider
+    return _info_note_provider
+
+
 # shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
 # and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
 # the page and keeps that panel open
@@ -76,6 +113,7 @@ class SettingsView(Gtk.Box):
         bar.pack_start(self.revert_button, False, False, 0)
         bar.pack_end(where, True, True, 0)
 
+        install_info_note_css()
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
         self.banner.get_content_area().add(self.banner_label)
@@ -249,6 +287,11 @@ class SettingsView(Gtk.Box):
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
         self.banner.set_message_type(kind)
+        context = self.banner.get_style_context()
+        if kind == Gtk.MessageType.INFO:
+            context.add_class(INFO_NOTE_CLASS)
+        else:
+            context.remove_class(INFO_NOTE_CLASS)
         self.banner_label.set_text(text)
         self.banner_label.show()
         self.banner.show()

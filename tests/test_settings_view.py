@@ -829,3 +829,35 @@ def test_a_successful_save_clears_an_old_error_banner(make):
 @pytest.mark.parametrize("text", ["A & B", "<b>x</b>", "HDMI & <DP>"])
 def test_a_heading_with_markup_characters_is_shown_as_text(text):
     assert SettingsView._heading(text).get_text() == text
+
+
+# ---- the info note keeps its blue background and light text, focused or not ----------------
+def test_the_info_note_css_has_the_class_colours_and_a_backdrop_rule():
+    from settings.view import INFO_NOTE_CLASS, INFO_NOTE_CSS
+
+    assert f".{INFO_NOTE_CLASS}" in INFO_NOTE_CSS
+    assert "#2b5c8a" in INFO_NOTE_CSS  # the background
+    assert "#ffffff" in INFO_NOTE_CSS  # the text
+    assert ":backdrop" in INFO_NOTE_CSS  # an unfocused window keeps both
+
+
+def test_the_info_note_css_is_valid_and_installed_once():
+    from settings import view as view_module
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(view_module.INFO_NOTE_CSS.encode())  # raises on a parse error
+    first = view_module.install_info_note_css()
+    assert view_module.install_info_note_css() is first  # a second call reuses it
+
+
+def test_an_info_banner_gets_the_class_and_others_do_not(make):
+    from settings.view import INFO_NOTE_CLASS
+
+    view, _ = make()
+    context = view.banner.get_style_context()
+    view.show_banner("note", Gtk.MessageType.INFO)
+    assert context.has_class(INFO_NOTE_CLASS)
+    view.show_banner("oops")
+    assert not context.has_class(INFO_NOTE_CLASS)
+    view.show_banner("careful", Gtk.MessageType.WARNING)
+    assert not context.has_class(INFO_NOTE_CLASS)
