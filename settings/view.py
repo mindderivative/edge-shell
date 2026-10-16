@@ -51,12 +51,13 @@ from settings.pages import (
 )
 from settings.panels import add_step, panel_section, panel_step, panel_title
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
-from settings.screens import desktop_label
+from settings.screens import DetectError, desktop_label, detect_outputs
 from settings.session import ChangedOutside, SettingsSession, check_text
 from settings.toolbar import ScreenToolbar
 from settings.tree import SettingsTree
 from settings.values import field_value, layout_preview, lookup, panel_ops
 from shell.config.models import ConfigError
+from shell.monitor_check import monitor_report
 from shell.outputs import Output
 from shell.registry import requests_for
 
@@ -112,9 +113,11 @@ class SettingsView(Gtk.Box):
         confirm_revert: Callable[[Any, str], bool] | None = None,
         on_state: Callable[[], None] | None = None,
         desktop: str | None = None,
+        detect: Callable[[], list[Output]] | None = None,
     ):
         """`desktop`: the native desktop checkbox's label (None: from XDG_CURRENT_DESKTOP,
-        settings.screens.desktop_label)."""
+        settings.screens.desktop_label). `detect`: Detect monitors' reader (None:
+        kscreen-doctor, settings.screens.detect_outputs; tests pass a fake)."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
         # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
@@ -123,6 +126,7 @@ class SettingsView(Gtk.Box):
         # window updates its menu items and title
         self._on_state = on_state or (lambda: None)
         self.outputs = {o.name: o for o in outputs}
+        self._detect = detect or detect_outputs
         widgets = registry_widgets()
         self.form = config_form(widgets)
         self.rows: list[FieldRow] = []
@@ -161,6 +165,7 @@ class SettingsView(Gtk.Box):
         self.stack = Gtk.Stack()
         self.tree = SettingsTree(self.show_page, self.on_panel_action)
         self.tree.set_property("margin", 6)
+        self.tree.detect_button.connect("clicked", lambda _b: self.detect_monitors())
         body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         body.pack1(self.tree, False, False)  # never narrower than its MIN_WIDTH
         body.pack2(self.stack, True, False)
@@ -578,6 +583,35 @@ class SettingsView(Gtk.Box):
             text = f"{text}\n{warning}" if text else warning
         note = "Not applied (made for the file before it changed): " + ", ".join(parts)
         self.show_banner(f"{text}\n{note}" if text else note, Gtk.MessageType.WARNING)
+
+    def detect_monitors(self) -> None:
+        """Detect monitors: ask kscreen-doctor again and list the connected monitors with the
+        ones in the config (a barrier: queued edits are applied first). The banner names the
+        connected monitors and, when the config names one that is not connected, the names to
+        use instead (shell.monitor_check, the same text as the shell's warning). A failure
+        keeps the list as it was."""
+        self.flush()
+        if self.refused_outside:
+            return
+        try:
+            outputs = self._detect()
+        except DetectError as exc:
+            self.show_banner(f"{exc}; the monitor list is unchanged", Gtk.MessageType.WARNING)
+            return
+        self.outputs = {o.name: o for o in outputs}
+        self.rebuild()
+        if self.session.config is None:
+            return  # the invalid-file banner stays
+        report = monitor_report(self.config.monitors, self.outputs)
+        found = ", ".join(self.outputs) or "none"
+        if report is None:
+            self.show_banner(f"Connected monitors: {found}.", Gtk.MessageType.INFO)
+        else:
+            self.show_banner(
+                f"Monitors in the config that are not connected ({report}): use the connected "
+                "names in the config.",
+                Gtk.MessageType.WARNING,
+            )
 
     def retire(self) -> None:
         """The view is going (File > Close, Open, New): no timer or idle rebuild may run on

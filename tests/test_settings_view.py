@@ -1721,3 +1721,85 @@ def test_a_rename_with_nothing_focused_focuses_nothing(windowed):
     view._on_change((*P0, "name"), "Bottom dock")
     drain()
     assert window.get_focus() is None
+
+
+# ---- Detect monitors --------------------------------------------------------------------------
+
+HDMI2 = Output("HDMI-A-2", 1920, 0, 2560, 1440)
+
+
+def detect_view(path, outputs, found):
+    """A view whose Detect monitors finds `found` (a list, or an exception to raise)."""
+
+    def detect():
+        if isinstance(found, Exception):
+            raise found
+        return list(found)
+
+    return SettingsView(SettingsSession(path), list(outputs), detect=detect)
+
+
+def test_detect_lists_the_connected_monitors_with_the_configured_ones(tmp_path, fake_registry):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = detect_view(path, [], [HDMI, HDMI2])
+    assert [t for _p, t in view.tree.rows()] == ["Theme", "HDMI-A-1 (not connected)", "dock"]
+    view.tree.detect_button.clicked()
+    assert [p for p, _t in view.tree.rows()] == [
+        "theme",
+        "monitor:HDMI-A-1",
+        "panel:HDMI-A-1:0",
+        "monitor:HDMI-A-2",  # connected, not in the config: listed, nothing written
+    ]
+    assert view.banner_label.get_text() == "Connected monitors: HDMI-A-1, HDMI-A-2."
+    assert path.read_text() == USER
+
+
+def test_detect_names_a_configured_monitor_that_is_not_connected(tmp_path, fake_registry):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = detect_view(path, [HDMI], [DP])
+    view.tree.detect_button.clicked()
+    assert ("monitor:HDMI-A-1", "HDMI-A-1 (not connected)") in view.tree.rows()
+    text = view.banner_label.get_text()
+    assert "config monitors: HDMI-A-1; connected: DP-2" in text
+    assert view.banner.get_message_type() == Gtk.MessageType.WARNING
+
+
+def test_a_failed_detection_keeps_the_list(tmp_path, fake_registry):
+    from settings.screens import DetectError
+
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = detect_view(path, [HDMI, DP], DetectError("kscreen-doctor failed: timed out"))
+    rows = view.tree.rows()
+    view.tree.detect_button.clicked()
+    assert view.tree.rows() == rows and set(view.outputs) == {"HDMI-A-1", "DP-2"}
+    assert "kscreen-doctor failed: timed out; the monitor list is unchanged" in (
+        view.banner_label.get_text()
+    )
+
+
+def test_detect_applies_the_queue_first_and_keeps_the_page(tmp_path, fake_registry, pending):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+    view = detect_view(path, [HDMI], [HDMI, DP])
+    seen = []
+    detect = view._detect
+    view._detect = lambda: seen.append(path.read_text()) or detect()  # the file at that moment
+    view.show_page("panel:HDMI-A-1:0")
+    row(view, DEPTH).editor.widget.set_value(120)  # inside the pause
+    view.detect_monitors()
+    assert len(seen) == 1 and "depth = 120" in seen[0]  # applied before kscreen-doctor ran
+    assert "depth = 120" in path.read_text()
+    assert shown(view) == "panel:HDMI-A-1:0"
+
+
+def test_no_monitor_at_all_says_how_to_find_one(tmp_path, fake_registry):
+    path = tmp_path / "config.toml"
+    path.write_text("# empty\n")
+    view = detect_view(path, [], [])
+    assert view.tree.rows() == [("theme", "Theme")] and view.tree.hint.get_visible()
+    assert view.toolbar.screen is None
+    view.tree.detect_button.clicked()
+    assert view.banner_label.get_text() == "Connected monitors: none."

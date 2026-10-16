@@ -149,6 +149,7 @@ class SettingsController(Gtk.Box):
         view, self.view, self.session = self.view, None, None
         if view is not None:
             view.retire()  # no queue timer or idle rebuild may run on a view that is gone
+            self.outputs = list(view.outputs.values())  # what Detect monitors found last
             self.body.remove(view)
             # destroyed when idle: an action can run inside a signal of a widget of this view
             GLib.idle_add(lambda: view.destroy() or GLib.SOURCE_REMOVE)

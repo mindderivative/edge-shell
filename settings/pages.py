@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from settings.values import monitor_names
 from shell.config.models import Config
+from shell.monitor_check import unknown_monitors
 from shell.outputs import Output
 
 THEME = "theme"
@@ -78,11 +79,13 @@ def tree_entries(config: Config | None, outputs: list[Output]) -> tuple[TreeEntr
     entries = [TreeEntry(THEME, "Theme")]
     if config is None:
         return tuple(entries)
-    for name, connected in monitor_names(config, outputs):
+    # the shell's own comparison (shell.monitor_check): a configured name not connected
+    unknown = set(unknown_monitors(config.monitors, [o.name for o in outputs]))
+    for name, _connected in monitor_names(config, outputs):
         panels = tuple(
             TreeEntry(panel_page(name, i), entry.name)
             for i, entry in enumerate(config.monitor(name).panels)
         )
-        title = name if connected else name + NOT_CONNECTED
+        title = name + NOT_CONNECTED if name in unknown else name
         entries.append(TreeEntry(monitor_page(name), title, panels))
     return tuple(entries)

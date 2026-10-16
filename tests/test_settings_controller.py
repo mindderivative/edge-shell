@@ -370,6 +370,18 @@ def test_close_shows_the_empty_page_where_only_new_open_and_exit_work(make):
     assert c.view is None
 
 
+def test_detected_monitors_stay_after_close_and_reopen(make):
+    from shell.outputs import Output
+
+    c, _ = make()
+    c.view._detect = lambda: [Output("DP-2", 0, 0, 1920, 1080)]
+    c.view.detect_monitors()
+    run(c, "close")
+    c.reopen()
+    assert ("monitor:DP-2", "DP-2") in c.view.tree.rows()
+    assert ("monitor:HDMI-A-1", "HDMI-A-1 (not connected)") in c.view.tree.rows()
+
+
 def test_closing_retires_the_view(make, pending):
     c, path = make()
     view = c.view
