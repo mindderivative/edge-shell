@@ -979,3 +979,115 @@ def test_a_retired_view_starts_nothing_later(make, clock):
     row(view, DEPTH).editor.widget.set_value(120)
     view.retire()
     assert removed == started and len(view.queue) == 0
+
+
+# ---- what a drain that meets a hand edit says, and the queue's guards --------------------------
+
+INVALID = '[monitors.HDMI-A-1]\nshell = "sideways"\n'
+
+
+def _fire(view, clock):
+    clock[2]()
+    drain()  # the rebuild the timer path defers runs when idle
+
+
+@pytest.mark.parametrize("how", ["timer", "flush", "save", "undo"])
+def test_dropped_edits_are_named_after_an_invalid_hand_edit_rebuild(make, clock, how):
+    """The rebuild of an invalid file writes its own banner: the dropped edits and the warning
+    are added after it, whichever way the queue was applied."""
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(INVALID)
+    if how == "timer":
+        _fire(view, clock)
+    else:
+        getattr(view, how)()
+        drain()
+    text = view.banner_label.get_text()
+    assert "is not valid" in text and "changed outside" in text
+    assert "Not applied" in text and "monitors.HDMI-A-1.panels[0].depth = 120" in text
+    assert path.read_text() == INVALID and len(view.queue) == 0
+
+
+def test_typed_text_is_named_when_a_timer_drain_meets_a_hand_edit(make, clock):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    row(view, FONT).editor.widget.set_text("Typed Font")
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
+    _fire(view, clock)
+    text = view.banner_label.get_text()
+    assert "theme.font (typed text)" in text and "panels[0].depth = 120" in text
+
+
+def test_typed_text_is_named_when_an_immediate_edit_meets_a_hand_edit(make):
+    view, path = make()
+    row(view, FONT).editor.widget.set_text("Typed Font")
+    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
+    view._on_change(SHELL, "both")
+    drain()
+    text = view.banner_label.get_text()
+    assert "theme.font (typed text)" in text and "changed outside" in text
+
+
+def test_a_refused_revert_names_the_edits_it_dropped(make, clock):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    row(view, FONT).editor.widget.set_text("Typed Font")
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
+    path.write_text(hand)
+    view.revert()  # refused: the hand edit is the new starting point
+    text = view.banner_label.get_text()
+    assert "changed outside" in text and "Not applied" in text
+    assert "panels[0].depth = 120" in text and "theme.font (typed text)" in text
+    assert path.read_text() == hand and len(view.queue) == 0
+
+
+def test_typed_text_is_sent_by_a_flush(make, pending):
+    """Text typed and not entered (no Enter, no focus-out) is still applied by the barrier."""
+    view, path = make()
+    spin = row(view, DEPTH).editor.widget
+    spin.set_text("130")
+    assert view.save() and "depth = 130" in path.read_text()
+    row(view, FONT).editor.widget.set_text("Typed Font")
+    view.flush()
+    assert "Typed Font" in path.read_text()
+
+
+def test_a_nested_run_of_the_queue_inside_a_flush_does_nothing(make, clock):
+    """Typed text sent by a flush calls _on_change: it must not drain the queue itself (it
+    would clear the flush's flags in the middle of it)."""
+    view, path = make()
+    view.queue.push(DEPTH, 120)
+    view._flushing = True
+    view._run_queue()
+    assert view._flushing and len(view.queue) == 1 and "depth" not in path.read_text()
+
+
+def test_a_flush_leaves_no_pause_timer(make, clock):
+    started, removed, _ = clock
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    assert view._queue_timer
+    view.flush()
+    assert not view._queue_timer and removed == started
+
+
+def test_a_destroyed_view_writes_nothing_and_leaves_no_timer(make, clock):
+    started, removed, _ = clock
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)
+    view.destroy()  # the window closed during the pause
+    assert path.read_text() == USER and len(view.queue) == 0
+    assert not view._queue_timer and removed == started
+
+
+def test_the_not_applied_list_is_capped_at_eight_entries(make):
+    from settings.queue import QueuedEdit
+
+    view, _path = make()
+    edits = [QueuedEdit(("theme", f"key{i}"), i) for i in range(11)]
+    view._tell_dropped(edits, [])
+    text = view.banner_label.get_text()
+    assert "theme.key7 = 7" in text and "theme.key8" not in text and "... and 3 more" in text
+    view._tell_dropped(edits[:8], [])
+    assert "more" not in view.banner_label.get_text().splitlines()[-1]

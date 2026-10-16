@@ -69,6 +69,7 @@ def install_info_note_css() -> Gtk.CssProvider:
 # shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
 # and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
 # the page and keeps that panel open
+MAX_NAMED = 8  # the most dropped edits the banner names (then "... and N more")
 TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "height")
 
 
@@ -101,6 +102,10 @@ class SettingsView(Gtk.Box):
         self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
         self.queue = EditQueue()  # every value edit, applied in order (settings.queue)
         self._queue_timer = 0  # the one pause timer of the queued spin edits (0: none)
+        # what a drain dropped after a hand edit: (edits, typed paths, the warning). Named on
+        # screen by the rebuild that follows, after it has written its own banner.
+        self._unapplied: tuple[list[QueuedEdit], list[tuple], str] | None = None
+        self._outside_warning = ""  # the last ChangedOutside message
 
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
@@ -129,6 +134,7 @@ class SettingsView(Gtk.Box):
         self.pack_start(bar, False, False, 0)
         self.pack_start(self.banner, False, False, 0)
         self.pack_start(body, True, True, 0)
+        self.connect("destroy", lambda _w: self.retire())  # whichever way the view goes
         self.rebuild()
 
     # ---- building ------------------------------------------------------------------------
@@ -190,6 +196,7 @@ class SettingsView(Gtk.Box):
             )
         self._sync_undo_button()
         self._on_state()
+        self._tell_unapplied()  # after the banner above, which would replace it
 
     def use_undo_action(self, name: str) -> None:
         """Hand the Undo button to a window action ("win.undo"): it then clicks through the
@@ -328,6 +335,7 @@ class SettingsView(Gtk.Box):
             self.session.apply(edit)
         except ChangedOutside as exc:
             self.refused_outside = True
+            self._outside_warning = str(exc)
             self._rebuild_soon()
             self.show_banner(str(exc), Gtk.MessageType.WARNING)
             return False
@@ -422,7 +430,8 @@ class SettingsView(Gtk.Box):
         while (item := self.queue.pop()) is not None:
             self._apply_queued(item)
             if self.refused_outside:
-                self._tell_dropped([item, *self.queue.drop()], [])
+                typed = [row.path for row in self.rows if row.unsent()]
+                self._unapplied = ([item, *self.queue.drop()], typed, self._outside_warning)
                 break
 
     def _apply_queued(self, item: QueuedEdit) -> None:
@@ -446,15 +455,30 @@ class SettingsView(Gtk.Box):
         if not self.apply(edit, self._row(path), structural=titled):
             self._expand.pop(path[1], None)
 
-    def _tell_dropped(self, dropped: list[QueuedEdit], typed: list[tuple]) -> None:
+    def _tell_unapplied(self) -> None:
+        """Name what a drain dropped (see _drain), once the rebuild has written its banner."""
+        if self._unapplied is not None:
+            (dropped, typed, warning), self._unapplied = self._unapplied, None
+            self._tell_dropped(dropped, typed, warning)
+
+    def _tell_dropped(
+        self, dropped: list[QueuedEdit], typed: list[tuple], warning: str = ""
+    ) -> None:
         """Add to the banner what was not applied because the file changed outside this
-        window (never lost silently): the queued edits and the rows with typed text."""
-        parts = [describe(dropped)] if dropped else []
+        window (never lost silently): the queued edits and the rows with typed text, at most
+        MAX_NAMED of them. `warning`: the hand-edit warning, added when the banner no longer
+        has it (the rebuild of an invalid file replaced it)."""
+        parts = [describe([edit]) for edit in dropped]
         parts += [f"{path_text(path)} (typed text)" for path in typed]
-        if parts:
-            text = self.banner_label.get_text()
-            note = "Not applied (made for the file before it changed): " + ", ".join(parts)
-            self.show_banner(f"{text}\n{note}" if text else note, Gtk.MessageType.WARNING)
+        if not parts:
+            return
+        if len(parts) > MAX_NAMED:
+            parts = [*parts[:MAX_NAMED], f"... and {len(parts) - MAX_NAMED} more"]
+        text = self.banner_label.get_text()
+        if warning and warning not in text:
+            text = f"{text}\n{warning}" if text else warning
+        note = "Not applied (made for the file before it changed): " + ", ".join(parts)
+        self.show_banner(f"{text}\n{note}" if text else note, Gtk.MessageType.WARNING)
 
     def retire(self) -> None:
         """The view is going (File > Close, Open, New): no timer or idle rebuild may run on
@@ -527,10 +551,13 @@ class SettingsView(Gtk.Box):
         # no flush: queued values are about to be reverted (dropped without a word), and
         # applying them first would re-read a hand edit and hide the "changed outside" warning
         self._cancel_queue_timer()
-        self.queue.drop()
+        typed = [row.path for row in self.rows if row.unsent()]
+        dropped = self.queue.drop()
         if self._file_action(lambda: self.session.revert() or True):
             self.hide_banner()
             self.rebuild()
+        else:
+            self._tell_dropped(dropped, typed)  # refused: nothing was reverted, say what went
 
     def flush(self, defer: bool = False) -> None:
         """The barrier before anything that must see every edit (a panel added, removed or
