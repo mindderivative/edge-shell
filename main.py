@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -45,8 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument(
         "--restore-config",
         action="store_true",
-        help="put back the config as it was before the last settings-window session changed "
-        "it (config.toml.bak; the replaced file is kept as config.toml.before-restore)",
+        help="put back the config as it was at the last File > Save in the settings window, "
+        "or before that window's first change (config.toml.bak; the replaced file is kept as "
+        "config.toml.before-restore)",
     )
     parser.add_argument(
         "--stats",
@@ -83,6 +85,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.settings:
+        # Native file dialogs (File > New, Open, Save As): GTK 3 asks the desktop portal (on
+        # Plasma: KDE's own dialog) only when told to, before GTK starts. GTK_USE_PORTAL=0 in
+        # the environment keeps GTK's own dialog.
+        os.environ.setdefault("GTK_USE_PORTAL", "1")
         # Before the ConfigStore: the window must open even when the file is invalid. It
         # imports the widgets itself, only when it is the first instance on this file.
         from settings.app import run_settings

@@ -11,7 +11,6 @@ import sys
 import time
 import traceback
 from collections import defaultdict
-from pathlib import Path
 
 import gi
 
@@ -21,6 +20,7 @@ from fabric import Application
 from fabric.core.application import FABRIC_DBUS_INTERFACE_NAME
 from gi.repository import Gdk, GLib
 
+from settings.launch import MAIN_PATH, settings_command  # noqa: F401  (shared with the window)
 from shell import plan
 from shell.canvas.stats import StatsRecorder
 from shell.config.diff import diff_configs
@@ -34,18 +34,6 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "edge-shell"
 EXERCISE_MS = 300  # --stats toggles every panel this often: a 280 ms tween plus a frame
-
-
-MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
-
-
-def settings_command(config_path: Path | None) -> list[str]:
-    """The command that opens the settings window on the shell's config file, with the
-    shell's own interpreter (the venv that has Fabric and tomlkit)."""
-    command = [sys.executable, str(MAIN_PATH), "--settings"]
-    if config_path is not None:
-        command += ["--config", str(config_path)]
-    return command
 
 
 def _already_running() -> bool:

@@ -9,8 +9,22 @@ import main as main_mod  # noqa: E402
 import settings.app as settings_app  # noqa: E402
 
 
+@pytest.fixture(autouse=True)  # autouse: set up before any monkeypatch, so checked after its undo
+def portal_env_restored():
+    """main(["--settings"]) sets GTK_USE_PORTAL for the settings process; a test must not leave
+    it in the test process."""
+    import os
+
+    before = os.environ.get("GTK_USE_PORTAL")
+    yield
+    assert os.environ.get("GTK_USE_PORTAL") == before
+
+
 @pytest.fixture
 def opened(monkeypatch):
+    # start unset (main sets it); the setenv makes monkeypatch undo whatever main then sets
+    monkeypatch.setenv("GTK_USE_PORTAL", "")
+    monkeypatch.delenv("GTK_USE_PORTAL")
     calls = []
     monkeypatch.setattr(settings_app, "run_settings", lambda path: calls.append(path) or 0)
     return calls
@@ -33,6 +47,18 @@ def test_settings_opens_even_when_the_config_is_invalid(tmp_path, opened):
     cfg.write_text("[theme\n")
     assert main_mod.main(["--settings", "--config", str(cfg)]) == 0
     assert opened == [cfg]
+
+
+def test_settings_asks_gtk_for_the_native_file_dialogs(tmp_path, opened, monkeypatch):
+    import os
+
+    cfg = str(tmp_path / "c.toml")
+    monkeypatch.setenv("GTK_USE_PORTAL", "0")  # a user's own choice wins
+    main_mod.main(["--settings", "--config", cfg])
+    assert os.environ["GTK_USE_PORTAL"] == "0"
+    monkeypatch.delenv("GTK_USE_PORTAL")
+    main_mod.main(["--settings", "--config", cfg])
+    assert os.environ["GTK_USE_PORTAL"] == "1"
 
 
 def test_restore_config_puts_the_backup_back(tmp_path, capsys):

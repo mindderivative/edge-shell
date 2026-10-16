@@ -599,19 +599,6 @@ def test_undo_after_a_refused_flush_does_nothing_more(make, pending):
     assert path.read_text() == USER and not view.session.history
 
 
-def test_close_stays_open_once_after_a_refused_flush(make, pending):
-    from types import SimpleNamespace
-
-    from settings.window import SettingsWindow
-
-    view, path = make()
-    row(view, DEPTH).editor.widget.set_value(120)
-    path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
-    win = SimpleNamespace(view=view, _close_warned=False)
-    assert SettingsWindow._on_delete(win) is True  # stays open once, the warning is on screen
-    assert SettingsWindow._on_delete(win) is False  # closing again closes anyway
-
-
 FONT = ("theme", "font")
 
 
@@ -797,3 +784,80 @@ def test_the_panel_list_buttons_do_not_take_the_focus_on_click(make):
         and (w.get_tooltip_text() in ours or w.get_label() == "Add panel")
     ]
     assert len(buttons) == 4 and not any(b.get_focus_on_click() for b in buttons)
+
+
+def test_the_view_reports_every_change_of_state_including_a_save(make):
+    view, _ = make()
+    states = []
+    view._on_state = lambda: states.append(1)
+    view._on_change(DEPTH, 90)
+    assert states  # a write refreshes
+    states.clear()
+    assert view.save() is True
+    assert states  # the saved point moved
+
+
+def test_save_after_a_refused_flush_copies_nothing_and_keeps_the_warning(make, pending):
+    view, path = make()
+    row(view, DEPTH).editor.widget.set_value(120)  # typed, inside the spin's pause
+    hand = USER.replace('shell = "edge"', 'shell = "both"')
+    path.write_text(hand)  # by hand
+    assert view.save() is False
+    assert path.read_text() == hand and not path.with_name("config.toml.bak").exists()
+    assert view.banner.get_visible() and "changed outside" in view.banner_label.get_text()
+
+
+def test_redo_after_a_refused_flush_does_nothing_more(make, pending):
+    view, path = make()
+    view._on_change(SHELL, "both")
+    view.undo()
+    row(view, DEPTH).editor.widget.set_value(120)
+    path.write_text(USER.replace('shell = "edge"', 'shell = "none"'))  # by hand
+    view.redo()
+    assert 'shell = "none"' in path.read_text() and "both" not in path.read_text()
+    assert "changed outside" in view.banner_label.get_text()
+
+
+def test_a_successful_save_clears_an_old_error_banner(make):
+    view, _ = make()
+    view.show_banner("Not saved: an old error")
+    assert view.banner.get_visible()
+    assert view.save() is True
+    assert not view.banner.get_visible()
+
+
+@pytest.mark.parametrize("text", ["A & B", "<b>x</b>", "HDMI & <DP>"])
+def test_a_heading_with_markup_characters_is_shown_as_text(text):
+    assert SettingsView._heading(text).get_text() == text
+
+
+# ---- the info note keeps its blue background and light text, focused or not ----------------
+def test_the_info_note_css_has_the_class_colours_and_a_backdrop_rule():
+    from settings.view import INFO_NOTE_CLASS, INFO_NOTE_CSS
+
+    assert f".{INFO_NOTE_CLASS}" in INFO_NOTE_CSS
+    assert "#2b5c8a" in INFO_NOTE_CSS  # the background
+    assert "#ffffff" in INFO_NOTE_CSS  # the text
+    assert ":backdrop" in INFO_NOTE_CSS  # an unfocused window keeps both
+
+
+def test_the_info_note_css_is_valid_and_installed_once():
+    from settings import view as view_module
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(view_module.INFO_NOTE_CSS.encode())  # raises on a parse error
+    first = view_module.install_info_note_css()
+    assert view_module.install_info_note_css() is first  # a second call reuses it
+
+
+def test_an_info_banner_gets_the_class_and_others_do_not(make):
+    from settings.view import INFO_NOTE_CLASS
+
+    view, _ = make()
+    context = view.banner.get_style_context()
+    view.show_banner("note", Gtk.MessageType.INFO)
+    assert context.has_class(INFO_NOTE_CLASS)
+    view.show_banner("oops")
+    assert not context.has_class(INFO_NOTE_CLASS)
+    view.show_banner("careful", Gtk.MessageType.WARNING)
+    assert not context.has_class(INFO_NOTE_CLASS)

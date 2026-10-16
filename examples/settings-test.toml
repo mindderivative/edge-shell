@@ -3,6 +3,8 @@
 #   cp examples/settings-test.toml /tmp/edge-settings.toml
 #   scripts/py main.py --config /tmp/edge-settings.toml -v              (terminal 1: the shell)
 #   scripts/py main.py --settings --config /tmp/edge-settings.toml      (terminal 2: the window)
+# The menus gate (plan 2026-10-15-settings-menus.md) uses the same file; its New, Save As and
+# Open steps write only under /tmp/edge-menus/.
 
 [theme]
 accent = "#8fd3b6"   # mint: Gate A item 3 changes it; this comment must survive

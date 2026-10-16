@@ -131,24 +131,37 @@ def test_closing_the_window_flushes_and_ctrl_z_undoes(tmp_path, fake_registry):
 
     if not Gtk.init_check()[0]:
         pytest.skip("no display")
+    from settings.fileops import Answer
     from settings.session import SettingsSession
     from settings.view import SettingsView
     from settings.window import TITLE, SettingsWindow
 
     assert TITLE == "Edge Shell settings"
     calls = []
+
+    class Cancel:  # the unsaved-changes question, answered Cancel (no dialog runs)
+        def ask_unsaved(self, _parent, _path):
+            calls.append("asked")
+            return Answer.CANCEL
+
+        def confirm_revert(self, _parent, _text):
+            return False
+
     monkey = pytest.MonkeyPatch()
     monkey.setattr(SettingsView, "flush", lambda self: calls.append("flush"))
     monkey.setattr(SettingsView, "undo", lambda self: calls.append("undo"))
     try:
         cfg = tmp_path / "c.toml"
         cfg.write_text("")
-        win = SettingsWindow(SettingsSession(cfg), [])
-        assert win.get_title() == TITLE
-        win.lookup_action("undo").activate(None)
+        session = SettingsSession(cfg)
+        session.apply(lambda d: d.set(("theme", "accent"), "#112233"))  # something to undo
+        win = SettingsWindow(session, [], dialogs=Cancel())
+        assert win.get_title() == f"*{cfg} - {TITLE}"  # the file, with unsaved changes
+        win.controller.actions.lookup_action("undo").activate(None)
         assert calls == ["undo"]
-        assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is False
-        assert calls == ["undo", "flush"]
+        # unsaved changes, answered Cancel: the window stays open
+        assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is True
+        assert calls == ["undo", "flush", "asked"]
     finally:
         monkey.undo()
         win.destroy()
@@ -216,6 +229,9 @@ def test_activation_sets_the_undo_accel_watches_the_file_and_presents_once(gtk_a
     app = gtk_app(tmp_path / "sub" / "c.toml")
     app_mod.SettingsApp.do_activate(app)
     assert app.get_accels_for_action("win.undo") == ["<Primary>z"]
+    assert app.get_accels_for_action("win.redo") == ["<Primary><Shift>z", "<Primary>y"]
+    assert app.get_accels_for_action("win.save") == ["<Primary>s"]
+    assert app.get_accels_for_action("win.copy") == []  # the focused widget's own binding
     assert app._watcher is not None
     first = app.window
     seen = []
@@ -225,6 +241,28 @@ def test_activation_sets_the_undo_accel_watches_the_file_and_presents_once(gtk_a
     app_mod.SettingsApp.do_activate(app)  # a second launch: the open window comes forward
     assert app.window is first
     assert gtk_app.presented == [first, first]
+
+
+def test_a_launch_on_a_window_with_no_config_open_shows_its_file_again(gtk_app, tmp_path):
+    app = gtk_app(tmp_path / "c.toml")
+    app_mod.SettingsApp.do_activate(app)
+    controller = app.window.controller
+    controller.close_config()  # nothing changed: no question
+    assert controller.view is None
+    app_mod.SettingsApp.do_activate(app)  # main.py --settings on the same file
+    assert controller.view is not None and controller.session.path == tmp_path / "c.toml"
+
+
+def test_a_second_launch_on_an_open_window_only_presents_it(gtk_app, tmp_path):
+    app = gtk_app(tmp_path / "c.toml")
+    app_mod.SettingsApp.do_activate(app)
+    controller = app.window.controller
+    view, session = controller.view, controller.session
+    session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    app_mod.SettingsApp.do_activate(app)
+    assert controller.view is view and controller.session is session  # not reopened
+    assert session.history and session.dirty  # undo and the unsaved changes survive
+    assert gtk_app.presented == [app.window, app.window]
 
 
 def test_an_uncreatable_config_folder_exits_cleanly_without_a_window(gtk_app, capsys):
@@ -270,3 +308,131 @@ def test_a_failed_save_keeps_the_window_open_once(monkeypatch, tmp_path, fake_re
         assert win.emit("delete-event", Gdk.Event.new(Gdk.EventType.DELETE)) is False
     finally:
         win.destroy()
+
+
+# ---- shortcuts reach the window's actions with no focused widget -------------------------------
+
+
+def _press(win, name):
+    """Ctrl+<key> through Gtk.Window.activate_key: what the toplevel does with its
+    application's accelerators when no widget handles the key first."""
+    from gi.repository import Gdk
+
+    keyval = Gdk.keyval_from_name(name)
+    ok, entries = Gdk.Keymap.get_default().get_entries_for_keyval(keyval)
+    assert ok
+    event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+    event.keyval = keyval
+    event.hardware_keycode = entries[0].keycode
+    event.group = entries[0].group
+    event.state = Gdk.ModifierType.CONTROL_MASK
+    return win.activate_key(event.key)  # the event outlives the call
+
+
+class Dialogs:
+    """The window's dialogs, answered from attributes; nothing is ever shown."""
+
+    def __init__(self, answer=None):
+        from settings.fileops import Answer
+
+        self.answer = answer or Answer.CANCEL
+        self.asked = []
+
+    def ask_unsaved(self, _parent, path):
+        self.asked.append(path)
+        return self.answer
+
+    def confirm_revert(self, _parent, _text):
+        return False
+
+
+@pytest.fixture
+def shortcut_window(tmp_path, fake_registry):
+    """A window (built, never shown) in a Gtk.Application that has the real accelerators."""
+    pytest.importorskip("tomlkit")
+    from gi.repository import Gtk
+
+    if not Gtk.init_check()[0]:
+        pytest.skip("no display")
+    from settings.menus import ACCELS
+    from settings.session import SettingsSession
+    from settings.window import SettingsWindow
+
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[theme]\naccent = "#112233"\n')
+    app = Gtk.Application(application_id="org.example.shortcuts")
+    for action, accels in ACCELS.items():
+        app.set_accels_for_action(action, accels)
+    made = []
+
+    def make(dialogs=None):
+        win = SettingsWindow(
+            SettingsSession(cfg), [], application=app, dialogs=dialogs or Dialogs()
+        )
+        made.append(win)
+        return win
+
+    make.cfg = cfg
+    yield make
+    for win in made:
+        win.destroy()
+
+
+def test_shortcuts_work_with_no_focused_widget(shortcut_window):
+    win = shortcut_window()
+    assert win.get_focus() is None
+    win.view.session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    win.view.rebuild()
+    assert _press(win, "z") is True  # Ctrl+Z
+    assert "#112233" in shortcut_window.cfg.read_text()
+    assert _press(win, "y") is True  # Ctrl+Y
+    assert "#445566" in shortcut_window.cfg.read_text()
+    assert _press(win, "s") is True  # Ctrl+S
+    assert not win.view.session.dirty
+
+
+def test_shortcuts_work_after_a_rebuild_removed_the_focused_widget(shortcut_window):
+    from gi.repository import Gtk
+
+    win = shortcut_window()
+    win.view.session.apply(lambda d: d.set(("theme", "accent"), "#445566"))
+    win.view.rebuild()
+    spin = next(
+        w for r in win.view.rows for w in [r.editor.widget] if isinstance(w, Gtk.SpinButton)
+    )
+    win.set_focus(spin)
+    assert win.get_focus() is spin
+    win.view.rebuild()  # the pages (and the focused spin) are removed
+    assert win.get_focus() is None
+    assert _press(win, "z") is True
+    assert "#112233" in shortcut_window.cfg.read_text()
+    assert _press(win, "y") is True
+    assert "#445566" in shortcut_window.cfg.read_text()
+    dialogs = Dialogs()
+    win2 = shortcut_window(dialogs)  # Ctrl+Q with unsaved changes goes through the fake
+    win2.view.session.apply(lambda d: d.set(("theme", "accent"), "#778899"))
+    assert _press(win2, "q") is True
+    assert dialogs.asked == [shortcut_window.cfg] and win2.get_realized() is False
+
+
+def test_the_window_destroys_itself_on_exit_of_a_clean_config(shortcut_window):
+    win = shortcut_window()
+    destroyed = []
+    win.connect("destroy", lambda _w: destroyed.append(1))
+    win.controller.exit()
+    assert destroyed == [1]
+
+
+def test_moving_the_focus_refreshes_cut_copy_and_paste(shortcut_window):
+    from gi.repository import Gtk
+
+    win = shortcut_window()
+    actions = win.controller.actions
+    assert not actions.lookup_action("paste").get_enabled()  # nothing focused
+    spin = next(
+        w for r in win.view.rows for w in [r.editor.widget] if isinstance(w, Gtk.SpinButton)
+    )
+    spin.grab_focus()
+    assert actions.lookup_action("paste").get_enabled()
+    win.set_focus(None)
+    assert not actions.lookup_action("paste").get_enabled()

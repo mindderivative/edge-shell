@@ -14,8 +14,10 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk
 
+from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
 from settings.fields import FieldRow
 from settings.form import MODE_HINTS, SectionSpec, config_form, registry_widgets
@@ -27,6 +29,42 @@ from shell.outputs import Output
 from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
+
+# The once-only info note must not depend on the theme: GTK's own infobar colours turn the
+# text orange in a focused window and white in an unfocused one. A blue background with light
+# text, with the :backdrop (unfocused) state spelled out, reads the same either way.
+INFO_NOTE_CLASS = "info-note"
+INFO_NOTE_CSS = """
+infobar.info-note,
+infobar.info-note > revealer > box,
+infobar.info-note:backdrop,
+infobar.info-note:backdrop > revealer > box {
+    background-color: #2b5c8a;
+    background-image: none;
+}
+infobar.info-note label,
+infobar.info-note:backdrop label {
+    color: #ffffff;
+}
+"""
+_info_note_provider: Gtk.CssProvider | None = None
+
+
+def install_info_note_css() -> Gtk.CssProvider:
+    """Add the info note's CSS to the screen (USER priority), once; later calls reuse it."""
+    global _info_note_provider
+    if _info_note_provider is None:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(INFO_NOTE_CSS.encode())
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+            )
+        _info_note_provider = provider
+    return _info_note_provider
+
+
 # shown in a panel's expander title (panel_title), or deciding its rows (widget: the kind
 # and the Widget rows; panel: the kind's rows; corner: the edge choices): a change rebuilds
 # the page and keeps that panel open
@@ -34,9 +72,20 @@ TITLE_KEYS = ("name", "widget", "panel", "edge", "align", "corner", "width", "he
 
 
 class SettingsView(Gtk.Box):
-    def __init__(self, session: SettingsSession, outputs: list[Output]):
+    def __init__(
+        self,
+        session: SettingsSession,
+        outputs: list[Output],
+        confirm_revert: Callable[[Any, str], bool] | None = None,
+        on_state: Callable[[], None] | None = None,
+    ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.session = session
+        # asks before Revert all (parent, text) -> OK?; tests pass a fake, no dialog runs
+        self._ask_revert = confirm_revert or GtkDialogs().confirm_revert
+        # called after every refresh and rebuild (each write, undo, revert or re-read): the
+        # window updates its menu items and title
+        self._on_state = on_state or (lambda: None)
         self.outputs = {o.name: o for o in outputs}
         self.form = config_form(registry_widgets())
         self.rows: list[FieldRow] = []
@@ -53,16 +102,18 @@ class SettingsView(Gtk.Box):
         bar = Gtk.Box(spacing=6, margin=6)
         self.undo_button = Gtk.Button(label="Undo")
         self.undo_button.set_tooltip_text("Undo the last change (Ctrl+Z)")
-        self.undo_button.connect("clicked", lambda _b: self.undo())
-        revert = Gtk.Button(label="Revert all")
-        revert.set_tooltip_text("Put back the file as it was when this window opened")
-        revert.connect("clicked", lambda _b: self._confirm_revert())
+        self._undo_clicked = self.undo_button.connect("clicked", lambda _b: self.undo())
+        self._undo_by_action = False
+        self.revert_button = Gtk.Button(label="Revert all")
+        self.revert_button.set_tooltip_text("Put back the file as it was when this window opened")
+        self.revert_button.connect("clicked", lambda _b: self.confirm_revert())
         where = Gtk.Label(label=str(session.path), xalign=1, selectable=True)
         where.get_style_context().add_class("dim-label")
         bar.pack_start(self.undo_button, False, False, 0)
-        bar.pack_start(revert, False, False, 0)
+        bar.pack_start(self.revert_button, False, False, 0)
         bar.pack_end(where, True, True, 0)
 
+        install_info_note_css()
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
         self.banner.get_content_area().add(self.banner_label)
@@ -84,13 +135,20 @@ class SettingsView(Gtk.Box):
         invalid (the pages are then insensitive)."""
         return self.session.config or check_text("", self.session.default_path)
 
+    def cancel_deferred_rebuild(self) -> None:
+        if self._rebuild_idle:
+            GLib.source_remove(self._rebuild_idle)
+            self._rebuild_idle = 0
+
     def rebuild(self) -> None:
         """Rebuild every page (after a panel was added, removed or moved, an undo, a revert
         or a hand edit); keeps the visible page."""
-        if self._rebuild_idle:  # a deferred rebuild is overtaken by this one
-            GLib.source_remove(self._rebuild_idle)
-            self._rebuild_idle = 0
+        self.cancel_deferred_rebuild()  # overtaken by this one
         visible = self.stack.get_visible_child_name()
+        window = self.get_toplevel()
+        focus = window.get_focus() if isinstance(window, Gtk.Window) else None
+        if focus is not None and focus.is_ancestor(self.stack):
+            window.set_focus(None)  # not left on a removed widget: shortcuts then find no group
         for row in self.rows:
             row.discard()  # pending or typed values go with the old rows, never written later
         retired = self.stack.get_children()
@@ -122,7 +180,20 @@ class SettingsView(Gtk.Box):
                 f"\n{self.session.error}",
                 Gtk.MessageType.ERROR,
             )
-        self.undo_button.set_sensitive(bool(self.session.history))
+        self._sync_undo_button()
+        self._on_state()
+
+    def use_undo_action(self, name: str) -> None:
+        """Hand the Undo button to a window action ("win.undo"): it then clicks through the
+        action and is enabled exactly when the menu's Undo is. Without this (the view alone)
+        the button undoes by itself and follows the history."""
+        self._undo_by_action = True
+        self.undo_button.disconnect(self._undo_clicked)
+        self.undo_button.set_action_name(name)
+
+    def _sync_undo_button(self) -> None:
+        if not self._undo_by_action:
+            self.undo_button.set_sensitive(bool(self.session.history))
 
     def _page(self, name: str, title: str, content: Gtk.Widget, sensitive: bool) -> None:
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -154,7 +225,7 @@ class SettingsView(Gtk.Box):
     @staticmethod
     def _heading(text: str) -> Gtk.Label:
         label = Gtk.Label(xalign=0)
-        label.set_markup(f"<b>{text}</b>")
+        label.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
         return label
 
     def _theme_page(self) -> Gtk.Widget:
@@ -211,10 +282,16 @@ class SettingsView(Gtk.Box):
             warnings = layout_preview(config, name, out.width, out.height) if out else []
             label.set_text("\n".join(warnings))
             label.set_visible(bool(warnings))
-        self.undo_button.set_sensitive(bool(self.session.history))
+        self._sync_undo_button()
+        self._on_state()
 
     def show_banner(self, text: str, kind: Gtk.MessageType = Gtk.MessageType.ERROR) -> None:
         self.banner.set_message_type(kind)
+        context = self.banner.get_style_context()
+        if kind == Gtk.MessageType.INFO:
+            context.add_class(INFO_NOTE_CLASS)
+        else:
+            context.remove_class(INFO_NOTE_CLASS)
         self.banner_label.set_text(text)
         self.banner_label.show()
         self.banner.show()
@@ -351,6 +428,28 @@ class SettingsView(Gtk.Box):
             self.hide_banner()
             self.rebuild()
 
+    def redo(self) -> None:
+        """Put back what the last Undo took away. A pending value is applied first, like for
+        Undo: it is a new change, so it ends the redo line and Redo then does nothing."""
+        self.flush()
+        if self.refused_outside:
+            return
+        if self._file_action(self.session.redo):
+            self.hide_banner()
+            self.rebuild()
+
+    def save(self) -> bool:
+        """File > Save: pending values are applied first, then the file is the saved point
+        (and config.toml.bak). True when saved; a hand edit or a failed copy is shown."""
+        self.flush()
+        if self.refused_outside:
+            return False
+        if not self._file_action(lambda: self.session.save() or True):
+            return False
+        self.hide_banner()
+        self._on_state()
+        return True
+
     def revert(self) -> None:
         # no flush: a pending value is about to be reverted, and applying it first would
         # re-read a hand edit and hide the "changed outside" warning
@@ -396,18 +495,9 @@ class SettingsView(Gtk.Box):
             )
         return text
 
-    def _confirm_revert(self) -> None:
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.OK_CANCEL,
-            text="Revert every change made in this window?",
-        )
-        dialog.format_secondary_text(self.revert_text())
-        answer = dialog.run()
-        dialog.destroy()
-        if answer == Gtk.ResponseType.OK:
+    def confirm_revert(self) -> None:
+        """Revert all, after the confirmation dialog (the button and Edit > Revert all)."""
+        if self._ask_revert(self.get_toplevel(), self.revert_text()):
             self.revert()
 
     def file_changed(self) -> None:
