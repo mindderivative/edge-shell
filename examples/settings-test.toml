@@ -5,6 +5,8 @@
 #   scripts/py main.py --settings --config /tmp/edge-settings.toml      (terminal 2: the window)
 # The menus gate (plan 2026-10-15-settings-menus.md) uses the same file; its New, Save As and
 # Open steps write only under /tmp/edge-menus/.
+# The tree gate (plan 2026-10-15-settings-tree.md) uses a copy at /tmp/edge-tree/config.toml;
+# it changes HDMI-A-1 only.
 
 [theme]
 accent = "#8fd3b6"   # mint: Gate A item 3 changes it; this comment must survive
