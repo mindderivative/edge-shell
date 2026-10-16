@@ -44,7 +44,7 @@ def _same(a: Any, b: Any) -> bool:
 
 def wheel_scrolls_the_page(widget: Gtk.Widget) -> None:
     """A mouse wheel over a combo box or spin button scrolls the page instead of changing the
-    value. Edits apply live: a stray scroll over DP-1's mode row would otherwise set it to
+    value. Edits apply live: a stray scroll over a monitor's mode row would otherwise set it to
     `edge` (an Edge Shell frame over the Plasma panel), over thickness rebuild the monitor."""
     widget.connect("scroll-event", _pass_scroll)
 

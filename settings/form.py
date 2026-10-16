@@ -227,10 +227,10 @@ def section_for(
     required: tuple[str, ...] = (),
 ) -> SectionSpec:
     """The section for the model `name` in `schema["$defs"]`. Nested models become
-    sub-sections; keys in `skip` are left out (the panel list has its own editor; a panel
-    section leaves out the other kind's keys); keys in `required` get no reset button (a
-    panel entry's panel, name and widget: the file must have them, while a theme key the
-    model requires comes from the defaults file)."""
+    sub-sections; keys in `skip` are left out (the panel list is edited in the tree and the
+    toolbar; a panel section leaves out the other kind's keys); keys in `required` get no
+    reset button (a panel entry's panel, name and widget: the file must have them, while a
+    theme key the model requires comes from the defaults file)."""
     model = schema["$defs"][name]
     fields: list[FieldSpec] = []
     sections: list[SectionSpec] = []
