@@ -112,8 +112,12 @@ class TreeRow(Gtk.ListBoxRow):
 
     def do_get_accessible(self):
         if self._accessible is None:
-            self._accessible = _RowAccessible()
+            # made with its widget (a screen reader asks the accessible for the row's state),
+            # and let go of it when the row is destroyed: a widget the accessible still names
+            # after the row is freed crashes the next query
+            self._accessible = _RowAccessible(widget=self)
             self._accessible.initialize(self.__gpointer__)
+            self.connect("destroy", lambda _row, acc=self._accessible: acc.set_widget(None))
         return self._accessible
 
     @property
@@ -307,9 +311,12 @@ class SettingsTree(Gtk.Box):
             return False  # a button of a row has its own keys; the selection stays under it
         key = event.keyval
         if key in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
-            if row.parent_page is None:
+            # the focused row when it is a panel (Ctrl+Up/Down move the focus, not the
+            # selection), else the selected one
+            target = focus if isinstance(focus, TreeRow) and focus.parent_page else row
+            if target.parent_page is None:
                 return False  # Theme and the monitors cannot be removed here
-            self._on_action(row.page, "remove")
+            self._on_action(target.page, "remove")
             return True
         if key in (Gdk.KEY_Left, Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
             if row.parent_page is not None:  # a panel: to its monitor

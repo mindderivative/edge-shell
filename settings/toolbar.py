@@ -16,7 +16,8 @@ from collections.abc import Callable
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+gi.require_version("Pango", "1.0")
+from gi.repository import GLib, Gtk, Pango
 
 from settings.fields import ChoiceEditor
 from settings.form import MODE_HINTS, AddChoice
@@ -47,8 +48,12 @@ class ScreenToolbar(Gtk.Box):
         self._quiet = False
         self.screen: str | None = None
         self.choices = {c.id: c for c in choices}
+        # two lines, so that the window can be narrow: the screen and the checkboxes above, the
+        # panel type, Add and the panel buttons below
         line = Gtk.Box(spacing=12)
+        second = Gtk.Box(spacing=8)
         self.title = Gtk.Label(xalign=0)
+        self.title.set_ellipsize(Pango.EllipsizeMode.END)  # a long name never widens the window
         self.edge = Gtk.CheckButton(label="Enable")
         self.edge.set_tooltip_text("Edge Shell's frame and panels on this screen")
         self.native = Gtk.CheckButton(label=native_label)
@@ -63,16 +68,18 @@ class ScreenToolbar(Gtk.Box):
             disabled,
         )
         self.kind.widget.set_tooltip_text("The panel type to add to this screen")
-        self.kind.set(next(c.id for c in choices if c.enabled))
+        first = next((c.id for c in choices if c.enabled), None)  # never the float entry
+        if first is not None:
+            self.kind.set(first)
         self.add_button = Gtk.Button(label="Add")
         self.add_button.set_tooltip_text("Add a panel of this type to this screen")
         self.add_button.set_focus_on_click(False)
         self.add_button.connect("clicked", lambda _b: self._add())
-        line.pack_start(self.title, False, False, 0)
+        line.pack_start(self.title, True, True, 0)
         line.pack_start(self.edge, False, False, 0)
         line.pack_start(self.native, False, False, 0)
-        line.pack_end(self.add_button, False, False, 0)
-        line.pack_end(self.kind.widget, False, False, 0)
+        second.pack_start(self.kind.widget, False, False, 0)
+        second.pack_start(self.add_button, False, False, 0)
         # the same three as the selected tree row's buttons, for the panel page shown
         self.panel_buttons: dict[str, Gtk.Button] = {}
         for action, icon, tip, name in reversed(PANEL_ACTIONS):
@@ -81,11 +88,12 @@ class ScreenToolbar(Gtk.Box):
             button.get_accessible().set_name(name)
             button.set_focus_on_click(False)
             button.connect("clicked", lambda _b, a=action: self._on_panel(a))
-            line.pack_end(button, False, False, 0)
+            second.pack_end(button, False, False, 0)
             self.panel_buttons[action] = button
         self.note = Gtk.Label(label=SHELL_NOTE, xalign=0, wrap=True)
         self.note.get_style_context().add_class("dim-label")
         self.pack_start(line, False, False, 0)
+        self.pack_start(second, False, False, 0)
         self.pack_start(self.note, False, False, 0)
         self.show_screen(None)
 
@@ -116,8 +124,10 @@ class ScreenToolbar(Gtk.Box):
         self.title.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
         hint = None if screen is None else f'shell = "{mode}": {MODE_HINTS[mode]}'
         self.title.set_tooltip_text(hint)
-        for widget in (self.edge, self.native, self.kind.widget, self.add_button):
+        for widget in (self.edge, self.native, self.kind.widget):
             widget.set_sensitive(screen is not None)
+        # nothing to add (no widget in the registry): Add stays insensitive
+        self.add_button.set_sensitive(screen is not None and self.chosen() is not None)
 
     def chosen(self) -> AddChoice | None:
         return self.choices.get(self.kind.widget.get_active_id())

@@ -10,7 +10,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GObject, Gtk  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gdk, GObject, Gtk, Pango  # noqa: E402
 
 from settings.form import (  # noqa: E402
     LENGTH_MODES,
@@ -31,6 +32,7 @@ DEBOUNCED = ("int", "length")
 UNBOUNDED = (-100000, 100000)
 FALLBACK_PX = 300  # px when switching a length to px with no px value known (never the 60 min)
 FALLBACK_PERCENT = 50.0
+SOURCE_CHARS = 28  # the width of a row's note (where its value comes from); longer is cut
 
 Emit = Callable[[Any], None]
 _UNSHOWN = object()
@@ -180,7 +182,7 @@ class ChoiceEditor(_Editor):
 
 class FontsEditor(_Editor):
     def __init__(self, emit: Emit):
-        self.widget = Gtk.Entry(width_chars=40)
+        self.widget = Gtk.Entry(width_chars=30)
         self._shown: list[str] = []
         self._emit = emit
         self.widget.connect("activate", lambda *_a: self.commit())
@@ -358,6 +360,10 @@ class FieldRow(Gtk.Box):
         name = Gtk.Label(label=spec.label, xalign=0)
         name.set_size_request(150, -1)
         self.source = Gtk.Label(xalign=0)
+        # a long hint never widens the page (its Reset button would sit off screen): the end
+        # is cut, the whole text is the tooltip
+        self.source.set_ellipsize(Pango.EllipsizeMode.END)
+        self.source.set_max_width_chars(SOURCE_CHARS)
         self.source.get_style_context().add_class("dim-label")
         self.reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.BUTTON)
         self.reset.set_tooltip_text("Remove this key from your config (use the inherited value)")
@@ -396,6 +402,7 @@ class FieldRow(Gtk.Box):
     def _show_note(self, value: FieldValue) -> None:
         note = value.source if not self.spec.hint else f"{self.spec.hint} · {value.source}"
         self.source.set_text(note)
+        self.source.set_tooltip_text(note)
         self.reset.set_sensitive(value.is_set and not self.spec.required)  # name, widget, panel
 
     def show_error(self, message: str | None) -> None:

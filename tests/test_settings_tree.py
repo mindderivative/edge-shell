@@ -394,3 +394,61 @@ def test_a_long_name_is_ellipsized_and_does_not_widen_the_tree(tree):
     label = tree.row_of("panel:HDMI-A-1:0").label
     assert label.get_ellipsize() == Pango.EllipsizeMode.END
     assert tree.get_preferred_width().minimum_width <= MIN_WIDTH + 60  # not the name's width
+
+
+def test_a_row_accessible_is_live_and_has_its_widget(tree):
+    import gi
+
+    gi.require_version("Atk", "1.0")
+    from gi.repository import Atk
+
+    row = tree.row_of("monitor:HDMI-A-1")
+    acc = row.get_accessible()
+    assert acc.get_widget() is row
+    states = acc.ref_state_set()
+    assert states.contains_state(Atk.StateType.EXPANDABLE)
+    assert states.contains_state(Atk.StateType.EXPANDED)
+    assert not states.contains_state(Atk.StateType.DEFUNCT)
+
+
+def test_a_destroyed_rows_accessible_is_defunct_and_can_be_queried():
+    """Run in a subprocess: a row freed while its accessible still names it segfaults on the
+    next query, which must fail this test and not kill the test run."""
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent(
+        """
+        import gc
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("Atk", "1.0")
+        from gi.repository import Atk, Gtk
+        assert Gtk.init_check()[0]
+        from settings.tree import TreeRow
+
+        box = Gtk.ListBox()
+        row = TreeRow("monitor:X", "X", None, lambda *a: None, lambda *a: None)
+        box.add(row)
+        acc = row.get_accessible()
+        row.destroy()
+        del row
+        for _ in range(3):
+            gc.collect()
+        assert acc.get_widget() is None
+        assert acc.ref_state_set().contains_state(Atk.StateType.DEFUNCT)
+        acc.get_parent(), acc.get_index_in_parent()
+        """
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr[-800:]
+
+
+def test_delete_acts_on_the_focused_panel_row_not_the_selected_one(tree, focused):
+    """After Ctrl+Up/Down the focus is on a row the selection is not on."""
+    click(tree, "panel:HDMI-A-1:0")  # selected
+    tree.row_of("panel:HDMI-A-1:1").grab_focus()  # focused, not selected
+    assert focused.get_focus() is tree.row_of("panel:HDMI-A-1:1")
+    key_from(focused.get_focus(), Gdk.KEY_Delete)
+    assert tree.actions == [("panel:HDMI-A-1:1", "remove")]

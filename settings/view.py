@@ -2,7 +2,8 @@
 errors and notices, and beside the tree (settings.tree: Theme, the monitors) the page the tree
 selects (panel/widget spec 7). The Theme page and each monitor page have tabs (General,
 Borders, Shadows, Handle, Layout: settings.form.theme_tabs); a monitor page's values override
-the Theme for that monitor, and it has a Panels tab with its panel list. A
+the Theme for that monitor. Each panel is a row under its monitor in the tree and has a page of
+its own (tabs Panel, Position, Handle, Interaction and Widget: settings.form.panel_tabs). A
 plain Gtk.Box, so it is tested without creating a window; settings.window puts it in the
 toplevel.
 
@@ -135,6 +136,7 @@ class SettingsView(Gtk.Box):
         self.refused_outside = False
         self._flushing = False  # while True a rebuild is only noted: flush() does it at the end
         self._rebuild_due = False
+        self._refocus: tuple | None = None  # the row of a title key just edited (see rebuild)
         self._rebuild_idle = 0  # the idle source of a deferred rebuild (0: none)
         self.queue = EditQueue()  # every value edit, applied in order (settings.queue)
         self._queue_timer = 0  # the one pause timer of the queued spin edits (0: none)
@@ -194,8 +196,13 @@ class SettingsView(Gtk.Box):
         tree_focused = self.tree.holds_focus()  # asked before the rows are replaced
         window = self.get_toplevel()
         focus = window.get_focus() if isinstance(window, Gtk.Window) else None
+        refocus, self._refocus = self._refocus, None
         if focus is not None and focus.is_ancestor(self.stack):
+            if refocus is not None:  # a title key was edited: the row keeps the focus
+                refocus = next((r.path for r in self.rows if focus.is_ancestor(r)), refocus)
             window.set_focus(None)  # not left on a removed widget: shortcuts then find no group
+        else:
+            refocus = None  # the focus was elsewhere (the tree): it stays there
         for row in self.rows:
             row.discard()  # typed text goes with the old rows (queued edits stay queued)
         retired = self.stack.get_children()
@@ -221,6 +228,8 @@ class SettingsView(Gtk.Box):
         self.stack.set_visible_child_name(page)
         self.tree.show(entries, valid)
         self.tree.select(page)
+        if refocus is not None and (row := self._row(refocus)) is not None:
+            row.editor.widget.child_focus(Gtk.DirectionType.TAB_FORWARD)
         if tree_focused:  # the tree's rows were replaced or the selection moved: the focus
             self.tree.row_of(page).grab_focus()  # follows to the page shown (the moved panel)
         if valid:
@@ -542,7 +551,8 @@ class SettingsView(Gtk.Box):
             edit = lambda d: d.unset(path)  # noqa: E731
         else:
             edit = lambda d: d.set(path, value)  # noqa: E731
-        self.apply(edit, self._row(path), structural=titled)  # the shown page stays (by name)
+        if self.apply(edit, self._row(path), structural=titled) and titled:
+            self._refocus = path  # the rebuild puts the focus back on this row (rebuild)
 
     def _tell_unapplied(self) -> None:
         """Name what a drain dropped (see _drain), once the rebuild has written its banner."""

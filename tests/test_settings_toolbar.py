@@ -6,7 +6,7 @@ gi = pytest.importorskip("gi")
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
@@ -124,3 +124,50 @@ def test_the_panel_buttons_follow_the_panel_shown(panel, up, down, remove):
     t.panel_buttons["remove"].clicked()
     assert actions == ["remove"]  # the view checks that a panel page is shown
     t.destroy()
+
+
+def test_with_no_widget_at_all_add_stays_insensitive():
+    t = ScreenToolbar(add_choices(()), "KDE Plasma", lambda *_a: None, lambda *_a: None)
+    t.show_screen("HDMI-A-1", "HDMI-A-1", "edge")  # the empty registry: only the float entry
+    assert t.chosen() is None and not t.add_button.get_sensitive()
+    assert t.kind.widget.get_sensitive()
+    t.destroy()
+
+
+def test_the_default_choice_is_an_enabled_one_even_when_float_comes_first():
+    from settings.form import AddChoice
+
+    float_first = (AddChoice(FLOAT_CHOICE, "Float", "float", None, False), *CHOICES[:1])
+    t = ScreenToolbar(float_first, "KDE Plasma", lambda *_a: None, lambda *_a: None)
+    t.show_screen("HDMI-A-1", "HDMI-A-1", "edge")
+    assert t.chosen() is not None and t.chosen().enabled and t.chosen().id == "edge:clock"
+    assert t.add_button.get_sensitive()
+    t.destroy()
+
+
+def test_a_toggle_with_no_screen_does_nothing(toolbar):
+    assert toolbar.screen is None
+    toolbar.edge.set_active(True)  # the program (or a stray event), though it is insensitive
+    toolbar.native.set_active(True)
+    assert toolbar.modes == []
+
+
+def test_the_wheel_over_the_panel_type_never_changes_it(toolbar):
+    toolbar.show_screen("HDMI-A-1", "HDMI-A-1", "edge")
+    event = Gdk.Event.new(Gdk.EventType.SCROLL)
+    event.scroll.direction = Gdk.ScrollDirection.DOWN
+    assert toolbar.kind.widget.emit("scroll-event", event) is False  # the page scrolls
+    assert toolbar.chosen().id == "edge:clock"
+
+
+def test_the_toolbar_is_on_two_lines_and_a_long_title_is_cut(toolbar):
+    from gi.repository import Pango
+
+    assert toolbar.title.get_ellipsize() == Pango.EllipsizeMode.END
+    short = toolbar.get_preferred_width().minimum_width
+    toolbar.show_screen("HDMI-A-1", "A very long screen name " * 8, "edge")
+    assert toolbar.get_preferred_width().minimum_width == short
+    line, second = toolbar.get_children()[:2]
+    assert toolbar.title.get_parent() is line and toolbar.add_button.get_parent() is second
+    assert toolbar.kind.widget.get_parent() is second
+    assert all(b.get_parent() is second for b in toolbar.panel_buttons.values())

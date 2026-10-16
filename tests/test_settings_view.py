@@ -17,11 +17,13 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
+import widgets  # noqa: E402,F401  (registers the built-in widgets, as settings/app.py does)
 from settings.form import AddChoice  # noqa: E402
 from settings.pages import panel_page  # noqa: E402
 from settings.screens import mode_of  # noqa: E402
 from settings.session import SettingsSession  # noqa: E402
 from settings.view import SettingsView  # noqa: E402
+from shell import registry  # noqa: E402
 from shell.outputs import Output  # noqa: E402
 from shell.panel_spec import CornerDefaults, PanelDefaults  # noqa: E402
 from shell.widget import Widget, WidgetProps  # noqa: E402
@@ -36,14 +38,30 @@ panel = "edge"
 name = "dock"
 widget = "dock"
 """
+REAL_WIDGETS = dict(registry._WIDGETS)  # the built-in widgets, registered by `import widgets`
 HDMI = Output("HDMI-A-1", 0, 0, 1920, 1080)
-DP = Output("DP-1", 0, 1080, 1920, 1080)
+DP = Output("DP-2", 0, 1080, 1920, 1080)
 SHELL = ("monitors", "HDMI-A-1", "shell")
 DEPTH = ("monitors", "HDMI-A-1", "panels", 0, "depth")
 
 
 @pytest.fixture
 def make(tmp_path, fake_registry):
+    path = tmp_path / "config.toml"
+    path.write_text(USER)
+
+    def _make(outputs=(HDMI, DP)):
+        return SettingsView(SettingsSession(path), list(outputs)), path
+
+    return _make
+
+
+@pytest.fixture
+def make_real(tmp_path, monkeypatch):
+    """Like `make`, with the REAL widgets registered (the tests that measure the window's size
+    must not pass because the registry has three bare widgets)."""
+    assert {"dock", "clock", "summary", "system_bar"} <= set(REAL_WIDGETS)
+    monkeypatch.setattr(registry, "_WIDGETS", dict(REAL_WIDGETS))
     path = tmp_path / "config.toml"
     path.write_text(USER)
 
@@ -103,10 +121,10 @@ def title(view, entry=0, monitor="HDMI-A-1"):
 
 def test_a_page_for_the_theme_each_monitor_and_each_panel(make):
     view, _ = make()
-    assert pages(view) == ["theme", "monitor:HDMI-A-1", "panel:HDMI-A-1:0", "monitor:DP-1"]
+    assert pages(view) == ["theme", "monitor:HDMI-A-1", "panel:HDMI-A-1:0", "monitor:DP-2"]
     accent = row(view, ("theme", "accent")).editor.widget.get_rgba()
     assert accent.to_string() == "rgb(143,211,182)"
-    assert shown_mode(view, "DP-1") == "plasma"  # not in the file: the default
+    assert shown_mode(view, "DP-2") == "plasma"  # not in the file: the default
     assert row(view, DEPTH).editor.widget.get_value() == 64  # the widget's default
 
 
@@ -196,9 +214,9 @@ def test_undo_and_revert(make):
 
 def test_the_visible_page_survives_a_rebuild(make):
     view, _ = make()
-    view.stack.set_visible_child_name("monitor:DP-1")
+    view.stack.set_visible_child_name("monitor:DP-2")
     view.rebuild()
-    assert view.stack.get_visible_child_name() == "monitor:DP-1"
+    assert view.stack.get_visible_child_name() == "monitor:DP-2"
 
 
 def test_a_hand_edit_is_reloaded_and_announced(make):
@@ -478,11 +496,11 @@ def test_a_banner_clears_after_undo(make):
 
 def test_a_rejected_structural_edit_leaves_no_page_marked_to_show(make):
     view, _ = make()
-    view.show_page("monitor:DP-1")
+    view.show_page("monitor:DP-2")
     add(view, "nope")  # rejected: no panel 1 page to go to
     assert view._select is None
     view.rebuild()
-    assert shown(view) == "monitor:DP-1"
+    assert shown(view) == "monitor:DP-2"
 
 
 def test_the_invalid_file_banner_names_the_restore_command(make):
@@ -1149,7 +1167,7 @@ def click_row(view, page):
 def test_the_tree_lists_the_theme_and_the_monitors_beside_the_pages(make):
     view, _ = make()
     assert [p for p, _t in view.tree.rows()][:2] == ["theme", "monitor:HDMI-A-1"]
-    assert ("monitor:DP-1", "DP-1") in view.tree.rows()
+    assert ("monitor:DP-2", "DP-2") in view.tree.rows()
     assert view.tree.selected() == "theme" == view.stack.get_visible_child_name()
     paned = view.tree.get_parent()
     assert isinstance(paned, Gtk.Paned) and paned.get_child2() is view.stack
@@ -1158,8 +1176,8 @@ def test_the_tree_lists_the_theme_and_the_monitors_beside_the_pages(make):
 
 def test_selecting_a_tree_row_shows_its_page(make):
     view, _ = make()
-    click_row(view, "monitor:DP-1")
-    assert view.stack.get_visible_child_name() == "monitor:DP-1"
+    click_row(view, "monitor:DP-2")
+    assert view.stack.get_visible_child_name() == "monitor:DP-2"
 
 
 def test_the_theme_page_has_its_tabs(make):
@@ -1242,7 +1260,7 @@ def test_every_key_of_the_form_is_on_its_page_exactly_once(make):
     theme_page = [*leaf_paths(form.theme, ("theme",)), *leaf_paths(form.layout, ("layout",))]
     paths = [r.path for r in view.rows if r.path[0] != "monitors"]
     assert sorted(paths) == sorted(theme_page)  # each once: no key missing, none twice
-    for name in ("HDMI-A-1", "DP-1"):
+    for name in ("HDMI-A-1", "DP-2"):
         prefix = ("monitors", name)
         expected = [
             *leaf_paths(form.theme, (*prefix, "theme")),
@@ -1273,34 +1291,62 @@ def test_the_theme_page_has_no_override_banner(make):
 def test_a_monitor_page_is_sensitive_and_the_theme_page_too(make):
     view, _ = make()
     assert view.stack.get_child_by_name("monitor:HDMI-A-1").get_sensitive()
-    assert view.stack.get_child_by_name("monitor:DP-1").get_sensitive()
+    assert view.stack.get_child_by_name("monitor:DP-2").get_sensitive()
     assert view.stack.get_child_by_name("theme").get_sensitive()
 
 
 def test_a_monitor_page_is_headed_by_its_tree_title(make):
-    view, _ = make(outputs=(HDMI,))  # DP-1 is not connected, but the config knows it
-    view.session.apply(lambda d: d.set(("monitors", "DP-1", "shell"), "edge"))
+    view, _ = make(outputs=(HDMI,))  # DP-2 is not connected, but the config knows it
+    view.session.apply(lambda d: d.set(("monitors", "DP-2", "shell"), "edge"))
     view.rebuild()
     assert "HDMI-A-1" in texts(view.stack.get_child_by_name("monitor:HDMI-A-1"))
-    assert "DP-1 (not connected)" in texts(view.stack.get_child_by_name("monitor:DP-1"))
+    assert "DP-2 (not connected)" in texts(view.stack.get_child_by_name("monitor:DP-2"))
 
 
-def test_the_window_can_be_narrow(make):
-    view, _ = make()
+def test_the_window_can_be_narrow(make_real):
+    view, _ = make_real()
     view.show_all()  # a widget flag only: no window exists to show it
-    assert view.get_preferred_width().minimum_width < 800  # 947 px after the tabs (was 757)
+    assert view.get_preferred_width().minimum_width < 800  # 781 px with the one-line toolbar
+    # a screen that is not connected has the longer title
+    view.toolbar.show_screen("HDMI-A-1", "HDMI-A-1 (not connected)", "edge")
+    assert view.get_preferred_width().minimum_width < 800
 
 
-def test_a_default_size_of_860_is_honoured(make):
-    view, _ = make()
+def test_a_default_size_of_860_is_honoured(make_real):
+    view, _ = make_real(outputs=())  # HDMI-A-1 is not connected
     window = Gtk.Window()  # never shown
     window.add(view)
     window.set_default_size(860, 680)
     view.show_all()
+    view.show_page("monitor:HDMI-A-1")
+    assert "(not connected)" in view.toolbar.title.get_text()
     assert window.get_preferred_width().minimum_width <= 860
     assert window.get_default_size() == (860, 680)
     window.remove(view)
     window.destroy()
+
+
+def test_no_tab_is_wider_than_the_space_beside_the_tree_at_860(make_real):
+    """860 px window, 200 px tree and its margins, the page margins: about 600 px are left for
+    a tab's rows. Wider and the window scrolls sideways with every Reset button off screen
+    (the Panel tab was 1116 px: its Name row's note alone was 600)."""
+    view, _ = make_real()
+    for page in ("theme", "monitor:HDMI-A-1", "panel:HDMI-A-1:0"):
+        nb = notebook(view, page)
+        assert len(nb.get_children()) >= 4
+        for scroller in nb.get_children():
+            width = scroller.get_child().get_preferred_width().minimum_width
+            assert width <= 640, (page, nb.get_tab_label_text(scroller), width)
+
+
+def test_a_rows_note_is_cut_with_its_whole_text_as_the_tooltip(make_real):
+    from gi.repository import Pango
+
+    view, _ = make_real()
+    name = row(view, (*P0, "name"))
+    note = name.source
+    assert note.get_ellipsize() == Pango.EllipsizeMode.END and note.get_max_width_chars() > 0
+    assert note.get_tooltip_text() == note.get_text() != ""
 
 
 def test_a_tab_scrolls_sideways_rather_than_widening_the_window(make):
@@ -1337,9 +1383,9 @@ def test_a_checkbox_writes_the_mode_in_one_change(make):
 
 def test_a_monitor_with_no_shell_key_shows_the_default(make):
     view, path = make()
-    assert shown_mode(view, "DP-1") == "plasma"  # in no file: plasma
-    view.toolbar.edge.set_active(True)  # writes a [monitors.DP-1] table (a test file only)
-    assert '[monitors.DP-1]\nshell = "both"' in path.read_text()
+    assert shown_mode(view, "DP-2") == "plasma"  # in no file: plasma
+    view.toolbar.edge.set_active(True)  # writes a [monitors.DP-2] table (a test file only)
+    assert '[monitors.DP-2]\nshell = "both"' in path.read_text()
 
 
 def test_a_refused_mode_change_shows_the_mode_in_the_file(make):
@@ -1414,10 +1460,10 @@ def test_the_toolbar_shows_a_mode_written_by_another_way(make):
 
 def test_the_toolbar_names_a_screen_that_is_not_connected(make):
     view, _ = make(outputs=(HDMI,))
-    view.session.apply(lambda d: d.set(("monitors", "DP-1", "shell"), "edge"))
+    view.session.apply(lambda d: d.set(("monitors", "DP-2", "shell"), "edge"))
     view.rebuild()
-    view.show_page("monitor:DP-1")
-    assert view.toolbar.title.get_text() == "DP-1 (not connected)"
+    view.show_page("monitor:DP-2")
+    assert view.toolbar.title.get_text() == "DP-2 (not connected)"
     view.show_page("monitor:HDMI-A-1")
     assert view.toolbar.title.get_text() == "HDMI-A-1"
 
@@ -1439,7 +1485,7 @@ def test_a_widget_with_properties_gets_the_widget_tab(tile_view):
     assert "Panel type" in texts(nb.get_nth_page(0))  # two kinds: the panel type row
 
 
-def test_a_titled_change_keeps_the_panels_tab(make):
+def test_a_titled_change_keeps_the_tab_of_the_panel_page(make):
     view, _ = make()
     click_row(view, "panel:HDMI-A-1:0")
     show_tab(view, "panel:HDMI-A-1:0", "Position")
@@ -1482,18 +1528,18 @@ def test_an_add_refused_by_a_hand_edit_does_not_jump_to_another_panel(make):
     """The hand edit added a panel 1 (the clock): the refused add must not show it as if it
     were the new one."""
     view, path = make()
-    click_row(view, "monitor:DP-1")
+    click_row(view, "monitor:DP-2")
     path.write_text(TWO_PANELS)  # by hand, not read yet
     add(view, "bar")
     assert "changed outside" in view.banner_label.get_text()
-    assert shown(view) == "monitor:DP-1"
+    assert shown(view) == "monitor:DP-2"
 
 
 def test_undo_of_an_add_falls_back_to_the_monitor_page(make):
     view, _ = make()
     add(view, "clock")
     view.undo()
-    assert pages(view) == ["theme", "monitor:HDMI-A-1", "panel:HDMI-A-1:0", "monitor:DP-1"]
+    assert pages(view) == ["theme", "monitor:HDMI-A-1", "panel:HDMI-A-1:0", "monitor:DP-2"]
     assert shown(view) == "monitor:HDMI-A-1" == view.tree.selected()
 
 
@@ -1568,3 +1614,110 @@ def test_a_panel_action_on_a_page_that_is_not_a_panel_does_nothing(make):
         view.on_panel_action(page, "remove")
         view.on_panel_action(page, "up")
     assert path.read_text() == before and not view.banner.get_visible()
+
+
+# ---- barriers and edges of the toolbar and the panel buttons --------------------------------
+
+
+def test_a_mode_toggle_applies_a_pending_spin_value_first(make, clock):
+    started, removed, _fire = clock
+    view, path = make()
+    click_row(view, "monitor:HDMI-A-1")
+    row(view, DEPTH).editor.widget.set_value(120)  # inside the pause: queued, timer running
+    assert started and view._queue_timer
+    view.toolbar.native.set_active(True)  # edge + native -> both
+    assert written_in_order(view) == ["depth = 120", 'shell = "both"']  # the spin came first
+    assert not view._queue_timer and len(view.queue) == 0
+    assert started[-1] in removed  # the pause timer was cancelled
+
+
+def two_kind_widget(registry_):
+    registry_.register_widget(
+        "duo",
+        title="Duo",
+        edge=PanelDefaults(edge="top", length=200, depth=50, label="duo"),
+        corner=CornerDefaults(corner="top-right", width=240, height=200, label="duo"),
+    )(type("Duo", (Widget,), {}))
+
+
+@pytest.mark.parametrize("kind", ["edge", "corner"])
+def test_add_for_a_widget_of_two_kinds_writes_the_chosen_kind(make, fake_registry, kind):
+    two_kind_widget(fake_registry)
+    view, _ = make()
+    click_row(view, "monitor:HDMI-A-1")
+    view.toolbar.kind.widget.set_active_id(f"{kind}:duo")
+    view.toolbar.add_button.clicked()
+    entry = view.session.user["monitors"]["HDMI-A-1"]["panels"][-1]
+    assert entry["widget"] == "duo" and entry["panel"] == kind
+
+
+def test_the_native_desktop_label_is_the_one_given(make, monkeypatch):
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    view, path = make()
+    assert view.toolbar.native.get_label() == "KDE Plasma"
+    named = SettingsView(SettingsSession(path), [HDMI], desktop="Hyprland")
+    assert named.toolbar.native.get_label() == "Hyprland"
+    named.destroy()
+
+
+def test_down_on_the_last_panel_and_up_on_the_first_do_nothing(make):
+    view, path = make()
+    add(view, "clock")  # two panels
+    before, history = path.read_text(), len(view.session.history)
+    act(view, 1, "down")
+    act(view, 0, "up")
+    assert path.read_text() == before and len(view.session.history) == history
+    assert not view.banner.get_visible()  # not even an error: nothing was tried
+    act(view, 5, "down")  # a page that is not there
+    assert path.read_text() == before and not view.banner.get_visible()
+
+
+def test_the_toolbar_with_no_screen_writes_nothing(make):
+    view, path = make()
+    assert view.toolbar.screen is None  # the Theme page
+    view.toolbar.edge.set_active(True)  # as a click does, though the checkbox is insensitive
+    view.toolbar.native.set_active(True)
+    assert path.read_text() == USER and not view.session.history
+
+
+def test_a_toolbar_without_widgets_cannot_add(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "_WIDGETS", {})  # nothing registered
+    path = tmp_path / "config.toml"
+    path.write_text("# empty\n")
+    view = SettingsView(SettingsSession(path), [HDMI])
+    assert view.toolbar.chosen() is None
+    view.show_page("theme")
+    assert not view.toolbar.add_button.get_sensitive()
+    view.destroy()
+
+
+def test_a_rename_leaves_the_focus_on_the_name_row(windowed):
+    view, window, _ = windowed
+    click_row(view, "panel:HDMI-A-1:0")
+    entry = row(view, (*P0, "name")).editor.widget
+    entry.grab_focus()
+    assert window.get_focus() is entry
+    entry.set_text("Bottom dock")
+    entry.emit("activate")  # Enter: applied, the pages are rebuilt when the loop is idle
+    drain()
+    new = row(view, (*P0, "name")).editor.widget
+    assert new is not entry and new.get_text() == "Bottom dock"
+    assert window.get_focus() is new
+
+
+def test_a_rename_does_not_pull_the_focus_out_of_the_tree(windowed):
+    view, window, _ = windowed
+    click_row(view, "panel:HDMI-A-1:0")
+    view.tree.row_of("panel:HDMI-A-1:0").grab_focus()
+    view._on_change((*P0, "name"), "Bottom dock")
+    drain()
+    assert window.get_focus() is view.tree.row_of("panel:HDMI-A-1:0")
+
+
+def test_a_rename_with_nothing_focused_focuses_nothing(windowed):
+    view, window, _ = windowed
+    click_row(view, "panel:HDMI-A-1:0")
+    assert window.get_focus() is None
+    view._on_change((*P0, "name"), "Bottom dock")
+    drain()
+    assert window.get_focus() is None
