@@ -448,3 +448,14 @@ def test_a_text_row_sends_when_the_entry_loses_focus():
     entry.set_text("Dock 3")
     assert entry.emit("focus-out-event", Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)) is False
     assert changes == [(("theme", "x"), "Dock 3")]
+
+
+def test_a_combo_opens_below_itself_with_every_entry():
+    """Phil: a dropdown opened one entry high with a scrollbar. wrap_width 1 takes GTK's
+    popup path that anchors the menu below the combo (settings.fields.opens_below)."""
+    shape, _, _ = row_for(FORM.theme.section("handle_style").field("shape"), "auto")
+    length, _, _ = row_for(FORM.edge_panel.field("length"), 300)
+    for combo in (shape.editor.widget, length.editor.mode):
+        assert combo.get_wrap_width() == 1
+        menu = combo.get_popup_accessible().get_widget()  # built by GTK, never shown here
+        assert len(menu.get_children()) == len(combo.get_model())  # one item per entry

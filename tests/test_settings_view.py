@@ -1833,3 +1833,11 @@ def test_a_failed_detection_keeps_the_invalid_file_explanation(tmp_path, fake_re
     assert after.startswith(before) and "kscreen-doctor failed: timed out" in after
     view.tree.detect_button.clicked()  # again: not added twice
     assert view.banner_label.get_text() == after
+
+
+def test_every_combo_of_the_window_opens_below_itself(make_real):
+    """The toolbar's panel type list, every enum and widget row and the length mode."""
+    view, _ = make_real()
+    combos = [w for w in walk(view) if isinstance(w, Gtk.ComboBox)]
+    assert len(combos) >= 10 and view.toolbar.kind.widget in combos
+    assert [c for c in combos if c.get_wrap_width() != 1] == []

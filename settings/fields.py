@@ -54,6 +54,20 @@ def _pass_scroll(widget: Gtk.Widget, _event: Gdk.Event) -> bool:
     return False  # not handled: the event goes on to the page's ScrolledWindow
 
 
+def opens_below(combo: Gtk.ComboBox) -> None:
+    """The combo's list opens below it at the size of its entries (Phil: it opened one entry
+    high with a scrollbar and grew on a mouse-over or a wheel turn). GTK 3.24 pops a combo's
+    menu up in one of two ways (gtkcombobox.c, gtk_combo_box_menu_popup). With wrap_width 0
+    it lays the menu over the combo with the ACTIVE entry on it: a negative rect_anchor_dy,
+    anchor hints slide and resize (no flip), and a scroll offset set once the menu is up. On
+    Wayland the compositor then constrains that popup, and GtkMenu shows scroll arrows until a
+    motion or wheel event makes it measure again. With wrap_width > 0 GTK anchors the menu
+    below the combo (above when there is no room: flip, slide and resize) with no offset. One
+    column keeps the list a plain list. The size request is not the cause: popup-fixed-width
+    and a menu item's min-height act on widths and row heights, not on this placement."""
+    combo.set_wrap_width(1)
+
+
 class _Editor:
     """The value widget of a row: `widget`, `set(value)` (never emits), `emit` on user edits."""
 
@@ -160,6 +174,7 @@ class ChoiceEditor(_Editor):
         if disabled:
             (cell,) = self.widget.get_cells()
             self.widget.set_cell_data_func(cell, self._grey_out)
+        opens_below(self.widget)
         wheel_scrolls_the_page(self.widget)
         self.widget.connect("changed", self._on_changed, emit)
 
@@ -243,6 +258,7 @@ class LengthEditor(_Editor):
         strict_spin(self.number)
         self.widget.pack_start(self.mode, False, False, 0)
         self.widget.pack_start(self.number, False, False, 0)
+        opens_below(self.mode)
         wheel_scrolls_the_page(self.mode)
         wheel_scrolls_the_page(self.number)
         self.fallback_px = FALLBACK_PX
