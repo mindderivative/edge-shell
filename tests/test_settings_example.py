@@ -38,7 +38,7 @@ def test_the_real_widgets_make_a_form_and_the_clock_has_its_widget_rows():
     clock = form.widget_props("clock")
     assert [(f.key, f.kind) for f in clock.fields] == [
         ("format", "text"),
-        ("font", "text"),
+        ("font", "font"),
         ("font_size", "int"),
     ]
     assert (clock.field("font_size").minimum, clock.field("font_size").maximum) == (6, 96)

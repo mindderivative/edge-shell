@@ -1322,6 +1322,44 @@ def test_no_tab_is_wider_than_the_space_beside_the_tree_at_860(make_real):
             assert width <= 640, (page, nb.get_tab_label_text(scroller), width)
 
 
+def test_the_clock_and_corner_pages_fit_beside_the_tree_too(make_real, monkeypatch):
+    """The new inputs (sliders, the font pickers, the theme's font list) inside the 640 px of
+    a tab, on the pages that have them all: the Theme page, a clock panel (its Widget tab: a
+    font picker and a font size slider) and a corner panel."""
+    from settings import fontpicker
+    from settings.fields import FontEditor
+
+    long_name = "A Very Long Installed Font Family Name Indeed Bold Condensed"
+    monkeypatch.setattr(fontpicker, "installed_families", lambda: (long_name,))
+    view, path = make_real()
+    add(view, "clock")
+    add(view, "summary", "corner")
+    view.session.apply(lambda d: d.set(("theme", "font"), [long_name, "monospace"]))
+    view.rebuild()
+    clock = row(view, ("monitors", "HDMI-A-1", "panels", 1, "font"))
+    assert isinstance(clock.editor, FontEditor)
+    for page in ("theme", "panel:HDMI-A-1:1", "panel:HDMI-A-1:2"):
+        nb = notebook(view, page)
+        for scroller in nb.get_children():
+            width = scroller.get_child().get_preferred_width().minimum_width
+            assert width <= 640, (page, nb.get_tab_label_text(scroller), width)
+
+
+def test_the_mouse_wheel_edits_no_input_of_the_window(make_real):
+    """Every slider, spin button and combo of every page (and the toolbar) passes the wheel
+    to the page: a turn over any of them changes nothing and writes nothing."""
+    view, path = make_real()
+    add(view, "clock")
+    before = path.read_text()
+    inputs = [w for w in walk(view) if isinstance(w, (Gtk.Range, Gtk.SpinButton, Gtk.ComboBox))]
+    assert sum(isinstance(w, Gtk.Scale) for w in inputs) >= 20  # theme, monitor, clock pages
+    for widget in inputs:
+        event = Gdk.Event.new(Gdk.EventType.SCROLL)
+        event.scroll.direction = Gdk.ScrollDirection.UP
+        assert widget.emit("scroll-event", event) is False, widget
+    assert len(view.queue) == 0 and path.read_text() == before
+
+
 def test_a_rows_note_is_cut_with_its_whole_text_as_the_tooltip(make_real):
     from gi.repository import Pango
 

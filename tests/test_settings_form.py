@@ -484,3 +484,14 @@ def test_the_slider_rule_needs_both_bounds_and_a_short_range():
     assert not uses_slider(FieldSpec("a", "A", "int", minimum=0))
     assert not uses_slider(FieldSpec("a", "A", "int", maximum=9))
     assert not uses_slider(FieldSpec("a", "A", "length", minimum=60, maximum=100))
+
+
+def test_a_widget_font_property_is_a_font_row_and_other_strings_stay_text():
+    class Props(WidgetProps):  # not ClockProps: widgets.clock imports gi, which CI does not have
+        font: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+        format: str = "HH:mm"
+
+    section = props_section(Props)
+    assert section.field("font").kind == "font"
+    assert section.field("format").kind == "text"
+    assert config_form(WIDGETS).theme.field("font").kind == "fonts"  # the theme's list

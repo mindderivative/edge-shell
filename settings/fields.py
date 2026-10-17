@@ -40,6 +40,8 @@ SLIDER_WIDTH = 160  # px; with its spin button a slider row stays inside a tab's
 
 Emit = Callable[[Any], None]
 _UNSHOWN = object()
+UNSET = object()  # an editor's "remove this key": the row resets it (the inherited value)
+THEME_FONT = "Theme font"  # a widget font row's inherited value
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -357,6 +359,21 @@ class FontListEditor(_Editor):
         self._send([*self.fonts, next_font(self.fonts, fontpicker.system_family())])
 
 
+class FontEditor(_Editor):
+    """A widget's font (one family; unset: the theme's font): a searchable picker whose first
+    row is "Theme font"; picking it sends UNSET (the row resets the key: nothing is
+    written)."""
+
+    def __init__(self, emit: Emit):
+        self.picker = FontPicker(
+            lambda value: emit(UNSET if value is None else value), inherit_label=THEME_FONT
+        )
+        self.widget = self.picker.button
+
+    def set(self, value: str | None) -> None:
+        self.picker.set(value)
+
+
 class TextEditor(_Editor):
     """A line of text (a panel's name, a widget's text property): sent on Enter or when the
     entry loses focus."""
@@ -473,6 +490,8 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
         return ChoiceEditor(spec.choices, emit, spec.labels, spec.disabled)
     if spec.kind == "fonts":
         return FontListEditor(emit)
+    if spec.kind == "font":
+        return FontEditor(emit)
     if spec.kind == "text":
         return TextEditor(emit, spec.max_length)
     if spec.kind == "length":
@@ -506,6 +525,7 @@ class FieldRow(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.spec, self.path = spec, path
         self._on_change = on_change
+        self._on_reset = on_reset
         self._on_queue = on_queue
         self._is_pending = is_pending or (lambda _path: False)
         self._updating = False
@@ -523,7 +543,7 @@ class FieldRow(Gtk.Box):
         self.source.get_style_context().add_class("dim-label")
         self.reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.BUTTON)
         self.reset.set_tooltip_text("Remove this key from your config (use the inherited value)")
-        self.reset.connect("clicked", lambda *_a: on_reset(path))
+        self.reset.connect("clicked", lambda *_a: self._on_reset(path))
         line.pack_start(name, False, False, 0)
         line.pack_start(self.editor.outer, False, False, 0)
         line.pack_start(self.source, True, True, 0)
@@ -577,6 +597,10 @@ class FieldRow(Gtk.Box):
 
     def _changed(self, value: Any) -> None:
         if self._updating or self._discarding:
+            return
+        if value is UNSET:  # the editor's inherited row (a widget font's "Theme font")
+            self._shown = None
+            self._on_reset(self.path)
             return
         if self.spec.kind in DEBOUNCED and self._on_queue is not None:
             self._on_queue(self.path, value, self._shown)  # the queue un-queues a change back

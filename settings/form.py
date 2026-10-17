@@ -28,7 +28,7 @@ from shell.config.models import (
 )
 
 FieldKind = Literal[
-    "color", "int", "bool", "enum", "fonts", "length", "widget", "deprecated", "text"
+    "color", "int", "bool", "enum", "fonts", "font", "length", "widget", "deprecated", "text"
 ]
 
 # Keys holding a #rrggbb / #rrggbbaa colour. The models check them with a field validator,
@@ -225,6 +225,8 @@ def _field(
         return FieldSpec(kind="int", minimum=low, maximum=high, **common)
     if not text and key == "font" and first.get("type") == "array":
         return FieldSpec(kind="fonts", **common)
+    if text and key == "font" and first.get("type") == "string":
+        return FieldSpec(kind="font", **common)  # a widget's font: one family, unset = theme
     if first.get("type") == "string" and (text or key == "name"):
         return FieldSpec(kind="text", max_length=first.get("maxLength"), **common)
     raise ValueError(f"no form field for {key!r}: {prop}")

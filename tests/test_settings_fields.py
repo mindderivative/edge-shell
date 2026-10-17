@@ -639,3 +639,31 @@ def test_an_unset_optional_slider_shows_its_minimum_and_sends_nothing():
     assert row.editor.scale.get_value() == 6 and not row.unsent()
     row.flush()
     assert changes == []
+
+
+def test_a_widget_font_row_picks_a_family_or_resets_to_the_theme_font(fonts):
+    spec = FieldSpec("font", "Font", "font")
+    changes, resets = [], []
+    row = fields.FieldRow(spec, ("p", "font"), lambda p, v: changes.append((p, v)), resets.append)
+    row.show_value(FieldValue(None, False, "widget default"))
+    picker = row.editor.picker
+    assert picker.label.get_text() == fields.THEME_FONT  # unset: the theme's font
+    picker.fill()
+    assert picker.visible_labels()[:2] == [fields.THEME_FONT, "Noto Sans (system font)"]
+    picker.search.set_text("fira")
+    picker.search.emit("activate")
+    assert changes == [(("p", "font"), "Fira Mono")] and resets == []
+    picker.fill()
+    picker.list.emit("row-activated", picker.list.get_row_at_index(0))  # "Theme font"
+    assert resets == [("p", "font")] and len(changes) == 1  # reset: nothing written
+    assert not row.unsent()
+
+
+def test_a_widget_font_that_is_not_installed_is_shown_and_kept(fonts):
+    row, changes, resets = row_for(FieldSpec("font", "Font", "font"), "Gone Font", is_set=True)
+    picker = row.editor.picker
+    picker.fill()
+    assert picker.label.get_text() == "Gone Font"
+    assert picker.visible_labels()[1] == "Gone Font (not installed)"
+    row.flush()
+    assert changes == resets == []
