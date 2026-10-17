@@ -124,6 +124,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell._measure_id = shell._relayout_id = 0
     shell._fade = None
     shell._raises_pending = shell._ready_id = 0
+    shell._detached = False
     return shell
 
 

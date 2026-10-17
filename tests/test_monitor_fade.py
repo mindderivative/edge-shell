@@ -320,3 +320,116 @@ def test_a_build_that_fails_after_the_canvas_leaves_no_fade_behind(build, loop, 
     assert canvases[0].opacity == [0.0] and canvases[0].destroyed  # never left invisible
     assert loop.timers == {} and loop.idles == {}  # the ready timeout went with it
     assert not canvases[0].ticker._callbacks
+
+
+# ---- fade-out (Task 4) ----------------------------------------------------------------
+
+
+def test_fade_out_fades_every_window_then_closes_and_calls_back_once(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    canvas, panel, strips = shell.canvas, shell.panels[0], list(shell.strips)
+    done = []
+    shell.fade_out(50, done.append)
+    assert all(s.destroyed for s in strips) and shell.strips == []  # the zones go at once
+    assert panel.inputs[-1] is False and not canvas.destroyed  # clicks go through it now
+    shell.frames(4)
+    out = canvas.opacity[-4:]
+    assert out == pytest.approx(list(reversed(THIRDS)), abs=1e-3)  # from 1 down to 0
+    assert panel.opacity[-4:] == out  # the same frames for every window
+    assert canvas.destroyed and panel.destroyed and done == [shell]
+    assert shell.fade_state == "done" and not canvas.ticker._callbacks
+    shell.frames(3)
+    assert done == [shell]
+
+
+def test_fade_out_with_zero_ms_closes_at_once_as_before(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    panel, seen = shell.panels[0], len(shell.canvas.opacity)
+    done = []
+    shell.fade_out(0, done.append)
+    assert panel.destroyed and shell.canvas.destroyed and done == [shell]
+    assert len(shell.canvas.opacity) == seen and panel.inputs == [False, True]
+
+
+def test_a_shell_that_was_never_visible_is_closed_at_once(build, loop):
+    shell = build(edge(DOCK))  # still waiting for its fade-in
+    done = []
+    shell.fade_out(50, done.append)
+    assert shell.canvas.destroyed and done == [shell] and shell.faded == []
+    assert loop.idles == {} and loop.delays() == [500, 2000]  # only no-op re-raises left
+
+
+def test_fade_out_mid_fade_in_goes_down_from_where_it_is(build, loop):
+    shell = build(edge(DOCK))
+    loop.run_idles()
+    loop.fire(500)
+    shell.frames(2)  # the start, then 1/3
+    now = shell.canvas.opacity[-1]
+    shell.fade_out(50, lambda _s: None)
+    shell.frames(6)
+    after = shell.canvas.opacity[shell.canvas.opacity.index(now) + 1 :]
+    assert max(after) <= now + 1e-9 and after[-1] == 0.0  # never a jump up
+    assert shell.canvas.destroyed
+
+
+def test_a_second_fade_out_is_ignored(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    first, second = [], []
+    shell.fade_out(50, first.append)
+    shell.fade_out(50, second.append)
+    shell.frames(5)
+    assert first == [shell] and second == []
+
+
+def test_a_shell_built_without_a_fade_still_fades_out_when_asked(build, loop):
+    """fade_ms went from 0 to 50 between the monitor's start and its turn-off."""
+    shell = build(edge(DOCK), fade_ms=0)
+    loop.fire(500)
+    done = []
+    shell.fade_out(50, done.append)
+    shell.frames(4)
+    # from the opacity it has (1: never set before) down to 0; the start is not set twice
+    assert shell.canvas.opacity == pytest.approx(list(reversed(THIRDS)), abs=1e-3)
+    assert shell.canvas.destroyed and done == [shell]
+
+
+def test_a_detached_shell_no_longer_re_raises_re_lays_out_or_measures(build, loop):
+    shell = build(edge({**DOCK, "length": "content"}))
+    monitor, panel = shell.monitor, shell.panels[0]
+    shell.detach()
+    assert loop.idles == {}  # the measurement and the ready check are dropped
+    assert monitor.handlers == {}  # the geometry is no longer watched
+    loop.fire(500)
+    loop.fire(2000)
+    assert panel.raised == 0 and not panel.destroyed  # never re-mapped: a re-map blinks
+    assert shell._fade.state == "waiting"  # never shown by the late re-raise either
+    shell.detach()  # once only
+    shell.close()
+    assert panel.destroyed
+
+
+def test_a_failing_fade_out_callback_is_logged_and_the_shell_is_closed(build, loop, caplog):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+
+    def boom(_shell):
+        raise RuntimeError("callback failed")
+
+    shell.fade_out(50, boom)
+    shell.frames(5)
+    assert shell.canvas.destroyed and "the fade-out callback of HDMI-A-1 failed" in caplog.text
+
+
+def test_a_panel_added_before_the_detach_is_not_re_raised_by_its_pending_timers(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    config = shell.config_for(monitors=edge(DOCK, CLOCK))
+    shell.apply(config, [Change("panel-add", "HDMI-A-1", 1)])
+    added = shell.panels[1]
+    shell.detach()
+    loop.fire(500)
+    loop.fire(2000)
+    assert added.raised == 0  # a re-map of a leaving window blinks

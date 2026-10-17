@@ -7,9 +7,14 @@ from collections.abc import Iterable, Mapping
 from shell.config.models import Config
 
 
+def has_windows(config: Config, name: str) -> bool:
+    """True when the monitor's mode builds Edge Shell windows (edge or both)."""
+    return config.monitor(name).shell in ("edge", "both")
+
+
 def desired_shells(config: Config, connected: Iterable[str]) -> list[str]:
     """Connected monitors whose mode builds Edge Shell windows. Unconnected names are ignored."""
-    return sorted(n for n in connected if config.monitor(n).shell in ("edge", "both"))
+    return sorted(n for n in connected if has_windows(config, n))
 
 
 def reconcile(

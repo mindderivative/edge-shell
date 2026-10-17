@@ -178,6 +178,7 @@ class MonitorShell:
         self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
         self._raises_pending = 0  # first re-raises still to run: the monitor is not ready
         self._ready_id = 0  # pending idle readiness check
+        self._detached = False  # leaving (detach): no longer follows the config or monitor
         try:
             self._build(config)
         except BaseException:
@@ -354,7 +355,7 @@ class MonitorShell:
     # ---- monitor geometry -----------------------------------------------------------------
     def _on_geometry(self, *_args) -> None:
         """The monitor's resolution (or position) changed: re-layout once it settles."""
-        if self._closed:
+        if self._closed or self._detached:
             return
         if self._relayout_id:
             GLib.source_remove(self._relayout_id)
@@ -452,7 +453,7 @@ class MonitorShell:
     def _raise_panels(self, first: bool = False) -> bool:
         """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS). The
         `first` one is waited for by the fade-in: a re-map is a visible blink."""
-        if not self._closed:
+        if not self._closed and not self._detached:  # a leaving shell is never re-mapped
             for panel in self.live_panels():
                 panel.raise_to_top()
         if first:
@@ -461,7 +462,7 @@ class MonitorShell:
 
     def _raise_one(self, panel: EdgePanel) -> bool:
         # The panel may have been rebuilt or removed during the delay: only raise live ones.
-        if panel in self.panels:
+        if panel in self.panels and not self._detached:
             panel.raise_to_top()
         self._raised()
         return False
@@ -479,7 +480,9 @@ class MonitorShell:
     def _check_ready(self) -> None:
         """Fade in once nothing that re-maps or resizes a window is pending (Fade.ready only
         acts while waiting; its own timeout fades in anyway)."""
-        if self._closed or self._fade is None or self._raises_pending or self._measure_id:
+        if self._closed or self._detached or self._fade is None:
+            return
+        if self._raises_pending or self._measure_id:
             return
         self._fade.ready()
 
@@ -492,6 +495,64 @@ class MonitorShell:
             except Exception:  # one failing panel must not leave the others without input
                 log.exception("could not enable the input of a panel on %s", self.name)
         self._on_fade_in(self)
+
+    @property
+    def fade_state(self) -> str:
+        """The fade's state (shell.fade.State); "done" once closed."""
+        if self._closed:
+            return "done"
+        return "shown" if self._fade is None else self._fade.state
+
+    @property
+    def fading_out(self) -> bool:
+        """True once fade_out has started (or the shell is closed)."""
+        return self.fade_state in ("fading-out", "done")
+
+    def detach(self) -> None:
+        """Stop following the config and the monitor: the shell is leaving (fade_out, or a
+        rebuild replaces it). Pending measurements, re-layouts and readiness checks are
+        dropped, re-raises do nothing (a re-map would blink), the monitor's geometry is no
+        longer watched, and the zone strips are destroyed now, so the edges are reserved by
+        the successor's strips alone (never twice). Everything else stays on screen, as it
+        is, until fade_out or close. Once only."""
+        if self._detached or self._closed:
+            return
+        self._detached = True
+        self._cancel_sources()
+        self._disconnect_monitor()
+        for strip in self.strips:
+            self._destroy(strip)
+        self.strips = []
+
+    def fade_out(self, duration_ms: int, on_done: Callable[[MonitorShell], None]) -> None:
+        """Fade every window out over `duration_ms` from the opacity it has, then close and
+        call on_done(self). From now on the shell is detached and its panels take no input
+        (clicks reach the successor or the desktop). With 0 ms, or when nothing was visible
+        yet (still waiting to fade in), it is closed at once, as close() does. A second call
+        while fading out is ignored (the first on_done runs)."""
+        if self._closed or duration_ms <= 0 or self.fade_state == "waiting":
+            self.close()
+            self._call_done(on_done)
+            return
+        if self.fading_out:
+            return
+        self.detach()
+        for panel in self.live_panels():
+            panel.set_input_enabled(False)
+        self._fade.fade_out(duration_ms, lambda: self._faded_out(on_done))
+
+    def _faded_out(self, on_done: Callable[[MonitorShell], None]) -> None:
+        try:
+            self.close()
+        except Exception:  # in a frame-clock tick: never raise into GTK
+            log.exception("closing %s after its fade-out failed", self.name)
+        self._call_done(on_done)
+
+    def _call_done(self, on_done: Callable[[MonitorShell], None]) -> None:
+        try:
+            on_done(self)
+        except Exception:
+            log.exception("the fade-out callback of %s failed", self.name)
 
     def _set_opacity(self, value: float) -> None:
         """One frame of the fade: every window of the monitor, in the same tick."""
@@ -553,20 +614,26 @@ class MonitorShell:
             self._remeasure.update(range(len(self.panels)))  # fonts may have changed
         self._sync_panels(config, theme, startup=False)
 
-    def close(self) -> None:
-        self._closed = True
-        if self._fade is not None:
-            self._fade.cancel()  # before the canvas (its frame clock) is destroyed
+    def _cancel_sources(self) -> None:
         for source in (self._measure_id, self._relayout_id, self._ready_id):
             if source:
                 GLib.source_remove(source)
         self._measure_id = self._relayout_id = self._ready_id = 0
+
+    def _disconnect_monitor(self) -> None:
         for handler in self._monitor_handlers:
             try:
                 self.monitor.disconnect(handler)
             except Exception:  # the monitor may be gone already (unplugged)
                 log.debug("could not disconnect from %s", self.name, exc_info=True)
         self._monitor_handlers.clear()
+
+    def close(self) -> None:
+        self._closed = True
+        if self._fade is not None:
+            self._fade.cancel()  # before the canvas (its frame clock) is destroyed
+        self._cancel_sources()
+        self._disconnect_monitor()
         for window in self.windows:
             self._release(window)
         self.windows.clear()

@@ -14,6 +14,7 @@ class FakeShell:
     opened: list = []
     closed: list = []
     applied: list = []
+    faded: list = []  # (name, ms) of every fade_out call
     fail_apply: set = set()
     layout_warnings: list = []
     build_failures: list = []
@@ -30,18 +31,55 @@ class FakeShell:
         on_layout=None,
         on_error=None,
         on_settings=None,
+        fade_ms=0,
+        on_fade_in=None,
     ):
         self.name = name
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
         self.on_settings = on_settings
+        self.fade_ms = fade_ms
+        self.on_fade_in = on_fade_in
+        self.fade_state = "waiting" if fade_ms > 0 else "shown"  # as MonitorShell
+        self.on_done = None
+        self.detached = False
         if name in FakeShell.fail_open:
             raise RuntimeError("cannot build")
         FakeShell.opened.append(name)
 
     def close(self):
         FakeShell.closed.append(self.name)
+        self.fade_state = "done"
+
+    @property
+    def fading_out(self):
+        return self.fade_state in ("fading-out", "done")
+
+    def detach(self):
+        self.detached = True
+
+    def fade_out(self, ms, on_done):
+        """MonitorShell.fade_out: closed at once with 0 ms or while still invisible."""
+        FakeShell.faded.append((self.name, ms))
+        if ms <= 0 or self.fade_state in ("waiting", "done"):
+            self.close()
+            on_done(self)
+            return
+        self.detached = True
+        self.fade_state = "fading-out"
+        self.on_done = on_done
+
+    def fade_in(self):
+        """Test helper: the real shell became ready and starts its fade-in."""
+        self.fade_state = "shown"
+        if self.on_fade_in is not None:
+            self.on_fade_in(self)
+
+    def faded_out(self):
+        """Test helper: the real shell's fade-out reached 0 and it closed itself."""
+        self.close()
+        self.on_done(self)
 
     def apply(self, config, changes):
         if self.name in FakeShell.fail_apply:
@@ -56,6 +94,7 @@ def _reset_fake_shell(monkeypatch):
         ("opened", []),
         ("closed", []),
         ("applied", []),
+        ("faded", []),
         ("fail_apply", set()),
         ("fail_open", set()),
         ("layout_warnings", []),
@@ -378,6 +417,7 @@ def test_the_fabric_dbus_client_is_off(env, monkeypatch):
     monkeypatch.setattr(app, "start_watching", lambda: None)
     monkeypatch.setattr(app, "watch_displays", lambda: None)
     monkeypatch.setattr(app_mod.signal, "signal", lambda *_a: None)
+    monkeypatch.setattr(app, "_watch_quit_signals", lambda: None)
     assert app.run() == 0
     ((args, kwargs),) = made
     assert args[0] == app_mod.APP_NAME and kwargs == {"open_client": False}
@@ -1067,3 +1107,205 @@ def test_a_plasma_mode_monitor_that_is_not_connected_is_still_reported(
     mapping["HDMI-A-1"] = object()
     app.sync_monitors()
     assert notes and "config monitors: DP-1" in notes[0][1]
+
+
+# ---- the fade (spec 21) ---------------------------------------------------------------
+
+
+class QuitRecorder:
+    def __init__(self):
+        self.quits = 0
+
+    def quit(self):
+        self.quits += 1
+
+
+@pytest.fixture
+def timers(monkeypatch):
+    """GLib.timeout_add / source_remove of shell.app, recorded: {id: (ms, fn)}."""
+    pending: dict = {}
+    ids = iter(range(100, 1000))
+
+    def add(ms, fn, *args):
+        timer = next(ids)
+        pending[timer] = (ms, fn)
+        return timer
+
+    monkeypatch.setattr(app_mod.GLib, "timeout_add", add)
+    monkeypatch.setattr(app_mod.GLib, "source_remove", lambda t: pending.pop(t))
+    return pending
+
+
+def test_shells_open_with_their_monitors_fade_and_none_while_measuring(env, make_config):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.store.config = make_config(monitors={"HDMI-A-1": {"shell": "edge"}})
+    app.sync_monitors()
+    assert app.shells["HDMI-A-1"].fade_ms == 50  # the default
+    app.store.config = make_config(
+        monitors={"HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 300}}}
+    )
+    mapping["HDMI-A-1"] = object()  # replugged: reopened with the monitor's own fade
+    app.sync_monitors()
+    assert app.shells["HDMI-A-1"].fade_ms == 300
+    stats = app_mod.EdgeShellApp(app.store, stats_seconds=2)  # --stats: never a fade
+    stats.sync_monitors()
+    assert stats.shells["HDMI-A-1"].fade_ms == 0
+
+
+def test_disabling_a_monitor_fades_it_out_and_closes_it_when_done(renv):
+    app, store, errors, _, make_config = renv
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and FakeShell.closed == []
+    assert app.shells == {} and app._leaving == {"HDMI-A-1": shell}
+    shell.faded_out()
+    assert FakeShell.closed == ["HDMI-A-1"] and app._leaving == {} and errors == []
+
+
+def test_the_fade_out_uses_the_fade_of_the_config_that_turns_it_off(renv):
+    app, store, _, _, make_config = renv
+    app.shells["HDMI-A-1"].fade_in()
+    store.pending = make_config(
+        monitors={"HDMI-A-1": {"shell": "plasma", "theme": {"fade_ms": 300}}}
+    )
+    app.reload()
+    assert FakeShell.faded == [("HDMI-A-1", 300)]
+
+
+def test_with_fade_0_a_disabled_monitor_closes_at_once_as_before(renv):
+    app, store, _, _, make_config = renv
+    app.shells["HDMI-A-1"].fade_in()
+    store.pending = make_config(theme={"fade_ms": 0}, monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert FakeShell.faded == [("HDMI-A-1", 0)] and FakeShell.closed == ["HDMI-A-1"]
+    assert app.shells == {} and app._leaving == {}
+
+
+def test_an_unplugged_or_replaced_monitor_is_closed_at_once_without_a_fade(env):
+    app, mapping = env
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    app.shells["HDMI-A-1"].fade_in()
+    mapping["HDMI-A-1"] = object()  # a new Gdk monitor: the old one is gone
+    app.sync_monitors()
+    assert FakeShell.faded == [] and FakeShell.closed == ["HDMI-A-1"]
+    del mapping["HDMI-A-1"]
+    mapping["DP-1"] = object()  # unplugged (DP-1 keeps the mapping non-empty)
+    app.sync_monitors()
+    assert FakeShell.faded == [] and FakeShell.closed == ["HDMI-A-1", "HDMI-A-1"]
+
+
+def test_run_takes_sigint_and_sigterm_through_glib(env, monkeypatch):
+    app, _ = env
+    added = []
+    monkeypatch.setattr(app_mod, "unix_signal_add", lambda *a: added.append(a))
+    app._watch_quit_signals()
+    high, signals = app_mod.GLib.PRIORITY_HIGH, app_mod.signal
+    sigint, sigterm = signals.SIGINT, signals.SIGTERM
+    assert added == [
+        (high, sigint, app._on_quit_signal, sigint),
+        (high, sigterm, app._on_quit_signal, sigterm),
+    ]
+
+
+def test_a_quit_signal_fades_every_shell_out_then_quits(renv, timers):
+    app, _, _, _, _ = renv
+    app.app = QuitRecorder()
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    assert app._on_quit_signal(app_mod.signal.SIGINT) is True  # the handler stays
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and app.app.quits == 0
+    assert [ms for ms, _ in timers.values()] == [50 + app_mod.QUIT_MARGIN_MS]
+    shell.faded_out()
+    assert app.app.quits == 1 and timers == {}  # the bound is dropped
+    assert app._exit_code == 130
+
+
+def test_the_quit_waits_at_most_the_fade_plus_the_margin(renv, timers):
+    app, _, _, _, _ = renv
+    app.app = QuitRecorder()
+    app.shells["HDMI-A-1"].fade_in()
+    app._on_quit_signal(app_mod.signal.SIGTERM)
+    ((_, fn),) = timers.values()
+    assert fn() is False  # the fade never finished (no frames): quit anyway
+    assert app.app.quits == 1 and app._exit_code == 143
+
+
+def test_a_second_quit_signal_quits_at_once(renv, timers):
+    app, _, _, _, _ = renv
+    app.app = QuitRecorder()
+    app.shells["HDMI-A-1"].fade_in()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert app.app.quits == 1 and timers == {}
+
+
+def test_without_any_fade_a_quit_signal_quits_at_once(renv, timers):
+    app, store, _, _, make_config = renv
+    store.config = make_config(theme={"fade_ms": 0}, monitors={"HDMI-A-1": mon()})
+    app.app = QuitRecorder()
+    app.shells["HDMI-A-1"].fade_in()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert FakeShell.closed == ["HDMI-A-1"] and app.app.quits == 1 and timers == {}
+
+
+def test_a_monitor_without_a_fade_never_cuts_the_others_fade_short(env, make_config, timers):
+    """HDMI-A-1 has fade 0 and closes inside the quit loop: the quit must still wait for
+    HDMI-A-2's fade (it is not even started yet when HDMI-A-1 is gone)."""
+    app, mapping = env
+    app.store.config = make_config(
+        monitors={
+            "HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 0}},
+            "HDMI-A-2": {"shell": "edge"},
+        }
+    )
+    mapping.update({"HDMI-A-1": object(), "HDMI-A-2": object()})
+    app.sync_monitors()
+    for shell in app.shells.values():
+        shell.fade_in()
+    second = app.shells["HDMI-A-2"]
+    app.app = QuitRecorder()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert FakeShell.faded == [("HDMI-A-1", 0), ("HDMI-A-2", 50)] and app.app.quits == 0
+    second.faded_out()
+    assert app.app.quits == 1
+
+
+def test_reloads_and_hot_plug_syncs_are_ignored_while_quitting(renv, timers):
+    app, store, _, mapping, make_config = renv
+    app.app = QuitRecorder()
+    app.shells["HDMI-A-1"].fade_in()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()
+    app._sync_timers = [7]
+    app._sync_once(7)
+    assert FakeShell.opened == [] and app.shells == {}  # nothing reopened
+
+
+def test_a_monitor_turned_off_twice_closes_its_older_leaving_shell_at_once(renv):
+    app, store, _, _, make_config = renv
+    first = app.shells["HDMI-A-1"]
+    first.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert app._leaving == {"HDMI-A-1": first} and first.fade_state == "fading-out"
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()  # on again
+    second = app.shells["HDMI-A-1"]
+    second.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()  # off again while the first is still fading
+    assert first.fade_state == "done" and app._leaving == {"HDMI-A-1": second}
+
+
+def test_a_rebuild_that_keeps_the_windows_closes_the_old_shell_at_once(renv):
+    app, store, _, _, make_config = renv
+    app.shells["HDMI-A-1"].fade_in()
+    store.pending = make_config(theme={"thickness": 9}, monitors={"HDMI-A-1": mon()})
+    app.reload()  # a structural change: rebuilt from the new config
+    assert FakeShell.faded == [] and FakeShell.closed == ["HDMI-A-1"] and app._leaving == {}
+    assert "HDMI-A-1" in app.shells
