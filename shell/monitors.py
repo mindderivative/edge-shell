@@ -487,7 +487,10 @@ class MonitorShell:
         """The fade-in starts: the panels take input from now on (what is seen is clicked)."""
         self._input_live = True
         for panel in self.live_panels():
-            panel.set_input_enabled(True)
+            try:
+                panel.set_input_enabled(True)
+            except Exception:  # one failing panel must not leave the others without input
+                log.exception("could not enable the input of a panel on %s", self.name)
         self._on_fade_in(self)
 
     def _set_opacity(self, value: float) -> None:

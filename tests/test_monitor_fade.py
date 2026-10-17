@@ -289,6 +289,20 @@ def test_one_window_failing_its_opacity_does_not_stop_the_others(build, loop):
     assert shell._fade.state == "shown"
 
 
+def test_one_panel_failing_its_input_does_not_leave_the_others_without_input(build, loop, caplog):
+    shell = build(edge(DOCK, CLOCK))
+
+    def gone(_enabled):
+        raise RuntimeError("panel destroyed")
+
+    shell.panels[0].set_input_enabled = gone
+    loop.run_idles()
+    loop.fire(500)
+    shell.frames(4)
+    assert shell.panels[1].inputs[-1] is True  # still restored
+    assert len(shell.faded) == 1 and "input" in caplog.text  # on_fade_in still ran
+
+
 def test_a_build_that_fails_after_the_canvas_leaves_no_fade_behind(build, loop, monkeypatch):
     def bad_strip(*_args, **_kwargs):
         raise RuntimeError("strip failed")
