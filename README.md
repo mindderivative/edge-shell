@@ -415,8 +415,8 @@ file.
   - **Toggles** (border and shadow Enabled, a panel's click, hover and drag) are thin
     switches: a 38 x 22 px track with a round 16 px knob, centred in the row (CSS class
     `edge-switch`, `settings/style.py`).
-  - **Dropdowns** (handle shape, a panel's edge, align and state, the length mode, the panel
-    type list in the toolbar) open below their row (above it when there is no room) with
+  - **Dropdowns** (handle shape, a panel's edge, align and state, the Widget and Corner
+    lists, the length mode, the panel type list in the toolbar) open below their row (above it when there is no room) with
     every entry shown at once; the active entry is highlighted, not laid over the box. Before,
     they opened one row high with a scrollbar on KWin/Wayland and grew on a mouse-over.
   - **Fonts.** A font is a button that opens a list inside the window: a search field above
@@ -426,15 +426,14 @@ file.
     font)", read from the desktop's font setting), then `monospace`, `sans-serif`, `serif`,
     then every installed family A-Z. The desktop's `Sans`, `Sans-Serif` and `System-ui` show
     as `sans-serif`. A font in your file that is not installed is listed as "NAME (not
-    installed)", selected, and kept. A hand-edited empty name shows as "(empty)" (the shell
-    refuses an empty name in the theme's font list). The font list is read once per window
-    process.
+    installed)", selected, and kept. The font list is read once per window process.
   - The Theme page's **Font** is a list of fonts, an ordered fallback list (the first
     installed one is used): one font button per family, with Move up, Move down and Remove,
     and **Add font** below, which adds the desktop's font (if it is listed already, then
     `monospace`, `sans-serif`, `serif`). The list keeps at least one font (its Remove is greyed
-    out at one). After a Move, Remove or Add font the keyboard focus goes to the same font's
-    button (the new font's picker after Add font). The buttons are named "Move font 2 up",
+    out at one). After a Move the keyboard focus stays on the moved font's button; after a Remove
+    it goes to the font that took the removed one's place (else the last line, else Add font);
+    after Add font it goes to the new line's picker. The buttons are named "Move font 2 up",
     "Move font 2 down", "Remove font 2 from the list". The shell does not follow the KDE font
     by itself: the theme's default font list is unchanged (Hack Nerd Font Mono, JetBrains
     Mono, monospace); the desktop font is offered, and added by Add font, not used unasked.
