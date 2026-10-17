@@ -26,6 +26,7 @@ except (ValueError, ImportError):  # no PangoCairo typelib: the list holds no in
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from settings.fonts import (  # noqa: E402
+    EMPTY_LABEL,
     Entry,
     first_match,
     font_families,
@@ -81,6 +82,9 @@ class FontPicker:
         self.inherit_label = inherit_label
         self.value: str | None = None
         self.entries: tuple[Entry, ...] = ()
+        self._scroll_handler = 0  # the list's size-allocate handler while a scroll waits for it
+        self._scroll_idle = 0  # the pending idle source of that scroll
+        self._destroyed = False
         self._built: tuple[str | None, tuple[Entry, ...]] | None = None
         self.label = Gtk.Label(xalign=0)
         self.label.set_ellipsize(Pango.EllipsizeMode.END)
@@ -111,6 +115,7 @@ class FontPicker:
         self.popover.add(box)
         self.button.set_popover(self.popover)
         self.button.connect("toggled", self._toggled)
+        self.button.connect("destroy", lambda _b: self._destroyed_now())
         self.search.connect("changed", lambda _e: self.list.invalidate_filter())
         self.search.connect("activate", self._pick_first)
         self.list.connect(
@@ -118,9 +123,14 @@ class FontPicker:
         )
 
     def set(self, value: str | None) -> None:
-        """Show `value` (None: the inherited row's label)."""
+        """Show `value` (None: the inherited row's label; "": a hand-edited empty name, shown
+        as "(empty)" and kept)."""
         self.value = value
         text = value if value is not None else (self.inherit_label or "")
+        if value == "":
+            self.label.set_text(EMPTY_LABEL)
+            self.button.set_tooltip_text(f"{EMPTY_LABEL}: the font name in your file is empty")
+            return
         self.label.set_text(text)
         self.button.set_tooltip_text(text or None)
 
@@ -147,7 +157,7 @@ class FontPicker:
         shown = next((i for i, e in enumerate(self.entries) if self._is_shown(e[0])), None)
         if shown is not None:
             self.list.select_row(self.list.get_row_at_index(shown))
-            GLib.idle_add(self._scroll_to_selected)  # once the list has its size
+            self._scroll_when_allocated()
         self.search.grab_focus()
 
     def _is_shown(self, value: str | None) -> bool:
@@ -158,8 +168,45 @@ class FontPicker:
             return value is self.value
         return value.casefold() == self.value.casefold()
 
+    def _scroll_when_allocated(self) -> None:
+        """Scroll to the selected row once the list has its size. On Wayland the popover gets
+        its first allocation after the button's toggled signal, so a bare idle callback can run
+        before it (the list stayed at the top on a first opening): wait for the list's own
+        size-allocate, scroll once, and stop listening. An open (allocated) list scrolls at
+        once."""
+        self._cancel_scroll()
+        if self.list.get_mapped():
+            self._scroll_idle = GLib.idle_add(self._scroll_to_selected)
+        else:
+            self._scroll_handler = self.list.connect("size-allocate", self._allocated)
+
+    def _allocated(self, _list: Gtk.ListBox, _allocation) -> None:
+        if self._scroll_handler:
+            self.list.disconnect(self._scroll_handler)  # once: later allocations do not scroll
+            self._scroll_handler = 0
+        # after this allocation pass: the viewport has its adjustment values by then
+        self._scroll_idle = GLib.idle_add(self._scroll_to_selected)
+
+    def _destroyed_now(self) -> None:
+        self._destroyed = True
+        self._cancel_scroll()
+
+    def _cancel_scroll(self) -> None:
+        """Forget a scroll that has not happened (the list was opened again, or the button is
+        destroyed: nothing may run on freed widgets)."""
+        if self._scroll_handler:
+            if self.list.handler_is_connected(self._scroll_handler):
+                self.list.disconnect(self._scroll_handler)
+            self._scroll_handler = 0
+        if self._scroll_idle:
+            GLib.source_remove(self._scroll_idle)
+            self._scroll_idle = 0
+
     def _scroll_to_selected(self) -> bool:
         """Put the selected row in the middle of the list's view; False: run once."""
+        self._scroll_idle = 0
+        if self._destroyed:
+            return False
         row = self.list.get_selected_row()
         if row is not None:
             area = row.get_allocation()

@@ -37,7 +37,7 @@ def scope_class(monitor: str) -> str:
 
 
 def _font_stack(fonts: list[str]) -> str:
-    return ", ".join(f if f in _GENERIC_FONTS else f'"{f}"' for f in fonts)
+    return ", ".join(f if f.casefold() in _GENERIC_FONTS else f'"{f}"' for f in fonts)
 
 
 def label_font_css(font: str | None, size: int | None, fallback: Sequence[str] = ()) -> str:

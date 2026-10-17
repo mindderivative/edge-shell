@@ -146,6 +146,8 @@ class Theme(_Strict):
     @classmethod
     def _font_names(cls, value: list[str]) -> list[str]:
         for name in value:
+            if not name.strip():
+                raise ValueError("font names must not be empty")
             check_font_name(name)
         return value
 

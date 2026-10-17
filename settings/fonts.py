@@ -20,7 +20,16 @@ GENERIC_FAMILIES = ("monospace", "sans-serif", "serif")  # shell.theme writes th
 _ALIASES = frozenset(
     {"monospace", "sans", "sans-serif", "serif", "system-ui", "cursive", "fantasy", "emoji"}
 )
-_ALIAS_GENERIC = {"sans": "sans-serif", "monospace": "monospace", "serif": "serif"}
+# the desktop font's aliases and what the picker lists them as (system-ui is the desktop's
+# own sans font)
+_ALIAS_GENERIC = {
+    "sans": "sans-serif",
+    "sans-serif": "sans-serif",
+    "system-ui": "sans-serif",
+    "monospace": "monospace",
+    "serif": "serif",
+}
+EMPTY_LABEL = "(empty)"  # a hand-edited "" in the theme's font list
 SYSTEM_SUFFIX = " (system font)"
 MISSING_SUFFIX = " (not installed)"
 
@@ -75,7 +84,9 @@ def picker_entries(
     if inherit_label is not None:
         entries.append((None, inherit_label))
     known = {f.casefold() for f in (*families, *GENERIC_FAMILIES, system)}
-    if current is not None and current.casefold() not in known:
+    if current == "":
+        entries.append((current, EMPTY_LABEL))  # kept as written, never dropped
+    elif current is not None and current.casefold() not in known:
         entries.append((current, current + MISSING_SUFFIX))
     if system:
         entries.append((system, system + SYSTEM_SUFFIX))

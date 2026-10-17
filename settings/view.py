@@ -695,8 +695,8 @@ class SettingsView(Gtk.Box):
 
     def flush(self, defer: bool = False) -> None:
         """The barrier before anything that must see every edit (a panel added, removed or
-        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a font
-        list or a name without Enter, a number without Enter) into the queue, then the whole
+        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a spin
+        value or a name without Enter) into the queue, then the whole
         queue is applied in order (a spin edit inside its pause included). A rebuild an edit
         asks for waits until the end (once). Not for Revert all or a hand edit: they drop the
         queue. `save_failed` says whether an edit could not be written (the error is on

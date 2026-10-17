@@ -277,6 +277,11 @@ FONT_LINE_BUTTONS = (  # action, icon, tooltip
     ("down", "go-down-symbolic", "Move this font down: it is tried later"),
     ("remove", "list-remove-symbolic", "Remove this font from the list"),
 )
+FONT_LINE_NAMES = {  # the accessible name of a line's button, by its 1-based position
+    "up": "Move font {} up",
+    "down": "Move font {} down",
+    "remove": "Remove font {} from the list",
+}
 
 
 class FontListEditor(_Editor):
@@ -311,7 +316,6 @@ class FontListEditor(_Editor):
         for action, icon, tip in FONT_LINE_BUTTONS:
             button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
             button.set_tooltip_text(tip)
-            button.get_accessible().set_name(tip.split(":")[0])
             button.connect("clicked", lambda _b, a=action: self._act(index, a))
             buttons[action] = button
         line = _FontLine(picker, buttons)
@@ -326,6 +330,8 @@ class FontListEditor(_Editor):
             line.box.set_visible(i < count)
             if i < count:
                 line.picker.set(self.fonts[i])
+                for action, button in line.buttons.items():
+                    button.get_accessible().set_name(FONT_LINE_NAMES[action].format(i + 1))
                 line.buttons["up"].set_sensitive(i > 0)
                 line.buttons["down"].set_sensitive(i < count - 1)
                 line.buttons["remove"].set_sensitive(count > 1)
@@ -346,17 +352,34 @@ class FontListEditor(_Editor):
         fonts = list(self.fonts)
         if action == "remove" and len(fonts) > 1:
             del fonts[index]
+            target = min(index, len(fonts) - 1)  # the font that took its place, or the last
         elif action in ("up", "down"):
             other = index - 1 if action == "up" else index + 1
             if not 0 <= other < len(fonts):
                 return
             fonts[index], fonts[other] = fonts[other], fonts[index]
+            target = other  # the same font, on its new line
         else:
             return
         self._send(fonts)
+        self._focus(target, action)
+
+    def _focus(self, index: int, action: str) -> None:
+        """Keyboard focus follows what the user moved: the same button of the same font on
+        its new line (the other move button when this one is dead at the end of the list),
+        else the Add font button. Without it focus stays on a button at the old position,
+        which now belongs to another font."""
+        buttons = self.lines[index].buttons
+        order = {"up": ("up", "down"), "down": ("down", "up"), "remove": ("remove",)}[action]
+        for name in order:
+            if buttons[name].get_sensitive():
+                buttons[name].grab_focus()
+                return
+        self.add_button.grab_focus()
 
     def _add(self) -> None:
         self._send([*self.fonts, next_font(self.fonts, fontpicker.system_family())])
+        self.lines[len(self.fonts) - 1].picker.button.grab_focus()
 
 
 class FontEditor(_Editor):
@@ -533,15 +556,18 @@ class FieldRow(Gtk.Box):
         self._shown: Any = _UNSHOWN  # the value last shown or written: a no-op is not written
         self.editor = make_editor(spec, self._changed)
         line = Gtk.Box(spacing=8)
-        name = Gtk.Label(label=spec.label, xalign=0)
+        # label, note and reset stay one entry high beside a tall editor (a font list); packed
+        # with the default fill they stretched to the editor's height
+        name = Gtk.Label(label=spec.label, xalign=0, valign=Gtk.Align.START)
         name.set_size_request(150, -1)
-        self.source = Gtk.Label(xalign=0)
+        self.source = Gtk.Label(xalign=0, valign=Gtk.Align.START)
         # a long hint never widens the page (its Reset button would sit off screen): the end
         # is cut, the whole text is the tooltip
         self.source.set_ellipsize(Pango.EllipsizeMode.END)
         self.source.set_max_width_chars(SOURCE_CHARS)
         self.source.get_style_context().add_class("dim-label")
         self.reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.BUTTON)
+        self.reset.set_valign(Gtk.Align.START)
         self.reset.set_tooltip_text("Remove this key from your config (use the inherited value)")
         self.reset.connect("clicked", lambda *_a: self._on_reset(path))
         line.pack_start(name, False, False, 0)

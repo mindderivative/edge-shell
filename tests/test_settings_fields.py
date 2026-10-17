@@ -667,3 +667,126 @@ def test_a_widget_font_that_is_not_installed_is_shown_and_kept(fonts):
     assert picker.visible_labels()[1] == "Gone Font (not installed)"
     row.flush()
     assert changes == resets == []
+
+
+def allocated(widget, width=None):
+    """Lay an unshown widget out at its preferred size (no window is mapped)."""
+    widget.show_all()
+    minimum, natural = widget.get_preferred_width()
+    width = max(minimum, width or natural)
+    height = widget.get_preferred_height_for_width(width).natural_height
+    rect = Gdk.Rectangle()
+    rect.x, rect.y, rect.width, rect.height = 0, 0, width, height
+    widget.size_allocate(rect)
+    return width, height
+
+
+@pytest.mark.parametrize("count", [3, 50])
+def test_the_font_rows_reset_button_label_and_note_stay_one_entry_high(fonts, count):
+    """A row's reset button was packed with valign FILL: beside a font list it stretched to the
+    list's whole height (30 x 136 px for 3 fonts, 30 x 1781 for 50)."""
+    row, _c, _r = row_for(FORM.theme.field("font"), [f"Font {i}" for i in range(count)])
+    allocated(row)
+    editor_height = row.editor.outer.get_allocated_height()
+    assert editor_height > 100 * count / 4  # the list itself is tall ...
+    assert row.reset.get_allocated_height() <= 40  # ... its row's button is not
+    assert row.source.get_allocated_height() <= 40
+    assert row.reset.get_valign() == row.source.get_valign() == Gtk.Align.START
+    label = next(c for c in row.get_children()[0].get_children() if isinstance(c, Gtk.Label))
+    assert label.get_valign() == Gtk.Align.START
+
+
+def test_every_row_keeps_its_labels_and_reset_at_the_top():
+    row, _c, _r = row_for(FORM.theme.field("thickness"), 10)
+    assert row.reset.get_valign() == row.source.get_valign() == Gtk.Align.START
+
+
+def line_names(editor):
+    return [
+        [line.buttons[a].get_accessible().get_name() for a in ("up", "down", "remove")]
+        for line in editor.lines
+        if line.box.get_visible()
+    ]
+
+
+def test_the_font_line_buttons_have_names_of_their_own_that_follow_the_list(fonts):
+    row, _c, _r = row_for(FORM.theme.field("font"), ["A", "B", "C"])
+    assert line_names(row.editor) == [
+        ["Move font 1 up", "Move font 1 down", "Remove font 1 from the list"],
+        ["Move font 2 up", "Move font 2 down", "Remove font 2 from the list"],
+        ["Move font 3 up", "Move font 3 down", "Remove font 3 from the list"],
+    ]
+    row.editor.lines[2].buttons["remove"].clicked()
+    row.editor.add_button.clicked()
+    row.editor.add_button.clicked()
+    names = line_names(row.editor)
+    assert [n[0] for n in names] == [f"Move font {i} up" for i in range(1, 5)]
+    assert len({n for line in names for n in line}) == 12  # all distinct
+    row.show_value(FieldValue(["X"], True, "your config"))  # a re-read: one line
+    assert line_names(row.editor) == [
+        ["Move font 1 up", "Move font 1 down", "Remove font 1 from the list"]
+    ]
+
+
+@pytest.fixture
+def focused_list(fonts):
+    """A font list of 3 in an unshown window, realized so that focus can move."""
+    row, changes, _ = row_for(FORM.theme.field("font"), ["A", "B", "C"])
+    window = Gtk.Window()
+    window.add(row)
+    row.show_all()
+    window.realize()
+    yield row.editor, window, changes
+    window.destroy()
+
+
+def test_focus_follows_a_font_that_is_moved(focused_list):
+    editor, window, _changes = focused_list
+    editor.lines[1].buttons["down"].grab_focus()
+    editor.lines[1].buttons["down"].clicked()  # B moves to the end, where Move down is dead
+    assert window.get_focus() is editor.lines[2].buttons["up"]  # Move down is insensitive there
+    editor.lines[2].buttons["up"].clicked()  # and up again: B is the middle line, same button
+    assert window.get_focus() is editor.lines[1].buttons["up"]
+    editor.lines[1].buttons["up"].clicked()  # B first: Move up is insensitive, Move down is kept
+    assert window.get_focus() is editor.lines[0].buttons["down"]
+
+
+def test_focus_after_a_remove_goes_to_the_last_or_the_next_line(focused_list):
+    editor, window, _changes = focused_list
+    editor.lines[2].buttons["remove"].grab_focus()
+    editor.lines[2].buttons["remove"].clicked()  # the last line: the previous one's button
+    assert window.get_focus() is editor.lines[1].buttons["remove"]
+    editor.add_button.clicked()
+    editor.lines[0].buttons["remove"].clicked()  # the first: the font that took its place
+    assert editor.fonts == ["B", "Noto Sans"]
+    assert window.get_focus() is editor.lines[0].buttons["remove"]
+    editor.lines[0].buttons["remove"].clicked()  # one font left: its Remove is dead,
+    assert editor.fonts == ["Noto Sans"]  # focus goes to Add font
+    assert window.get_focus() is editor.add_button
+
+
+def test_focus_after_add_font_goes_to_the_new_lines_picker(focused_list):
+    editor, window, _changes = focused_list
+    editor.add_button.grab_focus()
+    editor.add_button.clicked()
+    assert len(editor.fonts) == 4
+    assert window.get_focus() is editor.lines[3].picker.button
+
+
+def test_removed_lines_stay_hidden_when_the_page_is_shown_again(fonts):
+    row, _c, _r = row_for(FORM.theme.field("font"), ["A", "B", "C"])
+    row.show_all()
+    editor = row.editor
+    editor.lines[2].buttons["remove"].clicked()
+    assert not editor.lines[2].box.get_visible()
+    row.show_all()  # what a page's show_all does after a rebuild
+    assert not editor.lines[2].box.get_visible() and editor.lines[0].box.get_visible()
+    assert editor.lines[2].box.get_no_show_all()
+
+
+def test_a_widget_font_rows_inherited_label_is_the_theme_font_constant():
+    assert fields.THEME_FONT == "Theme font"  # the text the window shows, once, literally
+    picker = fields.FontEditor(lambda _v: None).picker
+    assert picker.inherit_label == fields.THEME_FONT
+    picker.set(None)
+    assert picker.label.get_text() == "Theme font"

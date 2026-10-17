@@ -101,6 +101,14 @@ def test_font_names_with_control_characters_rejected(make_config, bad):
     assert "control character" in str(exc.value)
 
 
+@pytest.mark.parametrize("bad", ["", " ", "\u00a0 "])
+def test_empty_font_names_in_the_theme_list_are_refused(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"font": ["Hack", bad]})
+    assert exc.value.errors()[0]["loc"] == ("theme", "font")
+    assert "must not be empty" in str(exc.value)
+
+
 def test_font_override_with_bad_name_fails_at_load(make_config):
     with pytest.raises(ValidationError, match="monitors.HDMI-A-1.theme"):
         make_config(monitors={"HDMI-A-1": {"theme": {"font": ["a;b"]}}})

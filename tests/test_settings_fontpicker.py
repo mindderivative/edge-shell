@@ -132,22 +132,99 @@ def test_two_opens_never_hold_duplicate_rows():
     assert len(p.list.get_children()) == len(p.entries) == len(set(rows(p)))
 
 
-def test_opening_scrolls_to_the_selected_row(monkeypatch):
-    p, _ = picker("Noto Sans")
+def scrolling_picker(monkeypatch, value="Noto Sans", row_y=800, upper=2000, page=360):
+    """A picker whose idle callbacks are collected, with a list of `upper` px in a view of
+    `page` px and a selected row at `row_y` (30 px high)."""
+    p, _ = picker(value)
     scheduled = []
-    monkeypatch.setattr(fontpicker.GLib, "idle_add", lambda f, *a: scheduled.append(f))
-    p.fill()
-    assert len(scheduled) == 1
+    monkeypatch.setattr(
+        fontpicker.GLib, "idle_add", lambda f, *a: scheduled.append(f) or len(scheduled)
+    )
+    monkeypatch.setattr(fontpicker.GLib, "source_remove", lambda _id: True)
 
     class Row:
         @staticmethod
         def get_allocation():
-            return type("A", (), {"y": 800, "height": 30})()
+            return type("A", (), {"y": row_y, "height": 30})()
 
-    p.scroller.get_vadjustment().configure(0, 0, 2000, 10, 100, 360)
+    p.scroller.get_vadjustment().configure(0, 0, upper, 10, 100, page)
     monkeypatch.setattr(p.list, "get_selected_row", lambda: Row())
+    return p, scheduled
+
+
+def allocate_list(p):
+    p.list.emit("size-allocate", p.list.get_allocation())
+
+
+def test_the_scroll_waits_for_the_lists_first_allocation_and_happens_once(monkeypatch):
+    p, scheduled = scrolling_picker(monkeypatch)
+    p.fill()
+    assert scheduled == []  # the popover has no size yet (Wayland): nothing before it
+    assert p.scroller.get_vadjustment().get_value() == 0
+    allocate_list(p)
+    assert len(scheduled) == 1
     scheduled[0]()
     assert p.scroller.get_vadjustment().get_value() == 800 + 15 - 180  # centred on the row
+    allocate_list(p)  # later allocations (the search narrows the list) do not scroll again
+    assert len(scheduled) == 1
+
+
+def test_each_opening_scrolls_once_again(monkeypatch):
+    p, scheduled = scrolling_picker(monkeypatch)
+    p.fill()
+    allocate_list(p)
+    p.fill()  # opened again before the first allocation arrived: still one scroll pending
+    allocate_list(p)
+    allocate_list(p)
+    assert len(scheduled) == 2
+
+
+def test_an_open_list_scrolls_at_once(monkeypatch):
+    p, scheduled = scrolling_picker(monkeypatch)
+    monkeypatch.setattr(p.list, "get_mapped", lambda: True)  # already allocated
+    p.fill()
+    assert len(scheduled) == 1
+
+
+def test_the_scroll_stays_inside_the_list(monkeypatch):
+    p, scheduled = scrolling_picker(monkeypatch, row_y=10)  # near the top: no negative value
+    p.fill()
+    allocate_list(p)
+    scheduled[0]()
+    assert p.scroller.get_vadjustment().get_value() == 0
+    q, scheduled = scrolling_picker(monkeypatch, row_y=1960)  # near the end: upper - page
+    q.fill()
+    allocate_list(q)
+    scheduled[0]()
+    assert q.scroller.get_vadjustment().get_value() == 2000 - 360
+
+
+def test_nothing_runs_after_the_button_is_destroyed(monkeypatch):
+    p, scheduled = scrolling_picker(monkeypatch)
+    removed = []
+    monkeypatch.setattr(fontpicker.GLib, "source_remove", lambda i: removed.append(i))
+    p.fill()
+    allocate_list(p)  # an idle is pending
+    p.button.destroy()
+    assert removed  # the pending idle is cancelled ...
+    scheduled[0]()  # ... and if it ran anyway it does nothing (and does not raise)
+    assert p.scroller.get_vadjustment().get_value() == 0
+    q, scheduled = scrolling_picker(monkeypatch)
+    q.fill()  # waiting for the allocation
+    handler = q._scroll_handler
+    assert handler and q.list.handler_is_connected(handler)
+    q.button.destroy()
+    assert not q.list.handler_is_connected(handler)
+
+
+def test_a_hand_edited_empty_font_name_is_shown_and_kept():
+    p, picks = picker("")
+    assert p.label.get_text() == "(empty)" and p.value == ""
+    assert p.button.get_tooltip_text() and "empty" in p.button.get_tooltip_text()
+    p.fill()
+    assert p.visible_labels()[0] == "(empty)"
+    assert p.list.get_selected_row().get_index() == 0
+    assert picks == [] and p.value == ""  # opening and closing keeps the value
 
 
 def test_a_pick_closes_the_list_and_opening_focuses_the_search():

@@ -1,5 +1,7 @@
 """settings.fonts: the font pickers' lists (pure: no GTK, no installed fonts)."""
 
+import pytest
+
 from settings.fonts import (
     GENERIC_FAMILIES,
     first_match,
@@ -7,6 +9,7 @@ from settings.fonts import (
     matches,
     next_font,
     picker_entries,
+    system_font,
 )
 
 
@@ -113,3 +116,28 @@ def test_typing_searches_the_family_name_not_the_suffix():
     assert matches("Hack Nerd Font", "font")
     entries = picker_entries(("Hack Nerd Font",), "Noto Sans", None)
     assert first_match(entries, "font") == ("Hack Nerd Font", "Hack Nerd Font")
+
+
+@pytest.mark.parametrize(
+    ("desktop", "expected"),
+    [
+        ("Sans-Serif", "sans-serif"),
+        ("sans-serif", "sans-serif"),
+        ("System-ui", "sans-serif"),
+        ("system-ui", "sans-serif"),
+        ("Sans", "sans-serif"),
+        ("MONOSPACE", "monospace"),
+        ("Serif", "serif"),
+        ("Noto Sans", "Noto Sans"),
+    ],
+)
+def test_the_desktop_font_generics_become_the_generic_rows(desktop, expected):
+    assert system_font(desktop) == expected
+    entries = picker_entries(("Noto Sans",), desktop, None)
+    assert entries[0] == (expected, expected + " (system font)")
+    assert [v for v, _l in entries].count(expected) == 1  # replaces its generic row
+
+
+def test_an_empty_current_value_is_listed_as_empty():
+    entries = picker_entries(("Noto Sans",), "", "")
+    assert entries[0] == ("", "(empty)")
