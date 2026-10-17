@@ -363,7 +363,7 @@ class SettingsView(Gtk.Box):
     def refresh(self) -> None:
         """Show the session's current values in every row (no rebuild: focus is kept). A row
         holding an edit that is not applied yet keeps it (`keep_pending`): another row's apply
-        must neither drop a pending spin value nor reset a typed font list, nor clear a row's
+        must neither drop a pending spin value nor reset typed text, nor clear a row's
         "Not saved" error (apply() clears the error of the row whose edit went through)."""
         config, user = self.config, self.session.user
         for row in self.rows:

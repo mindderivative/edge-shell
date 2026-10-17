@@ -95,3 +95,13 @@ def matches(label: str, text: str) -> bool:
 def first_match(entries: Sequence[Entry], text: str) -> Entry | None:
     """The row Enter picks: the first one shown for `text`."""
     return next((e for e in entries if matches(e[1], text)), None)
+
+
+def next_font(fonts: Sequence[str], system: str) -> str:
+    """The family "Add font" appends: the desktop's font, else the first generic family the
+    list does not hold yet (a fallback list names each family once)."""
+    have = {f.casefold() for f in fonts}
+    for name in (system, *GENERIC_FAMILIES):
+        if name and name.casefold() not in have:
+            return name
+    return system or GENERIC_FAMILIES[0]

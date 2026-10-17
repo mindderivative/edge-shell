@@ -13,14 +13,15 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GObject, Gtk, Pango  # noqa: E402
 
+from settings import fontpicker  # noqa: E402
+from settings.fontpicker import FontPicker  # noqa: E402
+from settings.fonts import next_font  # noqa: E402
 from settings.form import (  # noqa: E402
     LENGTH_MODES,
     LENGTH_PERCENT,
     LENGTH_PX,
     FieldSpec,
-    format_fonts,
     join_length,
-    parse_fonts,
     rgba_to_hex,
     split_length,
     uses_slider,
@@ -254,31 +255,111 @@ class ChoiceEditor(_Editor):
             self.widget.set_active(-1)  # not a choice: show none, never the previous one
 
 
-class FontsEditor(_Editor):
+class _FontLine:
+    """One family of a font list: its picker and its Move up, Move down and Remove."""
+
+    def __init__(self, picker: FontPicker, buttons: dict[str, Gtk.Button]):
+        self.picker = picker
+        self.buttons = buttons
+        self.box = Gtk.Box(spacing=4)
+        self.box.pack_start(picker.button, False, False, 0)
+        for button in buttons.values():
+            self.box.pack_start(button, False, False, 0)
+        for child in self.box.get_children():
+            child.show_all()
+        self.box.set_no_show_all(True)  # shown by FontListEditor only while it is in use
+
+
+FONT_LINE_BUTTONS = (  # action, icon, tooltip
+    ("up", "go-up-symbolic", "Move this font up: it is tried earlier"),
+    ("down", "go-down-symbolic", "Move this font down: it is tried later"),
+    ("remove", "list-remove-symbolic", "Remove this font from the list"),
+)
+
+
+class FontListEditor(_Editor):
+    """The theme's font list, an ordered fallback list (the first installed family is used):
+    one searchable picker per family (settings.fontpicker), each with Move up, Move down and
+    Remove, and Add font below. Every change sends the whole list at once (a list of names,
+    never joined into one string: a family name may hold a comma); there is no typed text
+    (dirty() is False). The list keeps one family (the config needs one): its Remove is
+    insensitive. Add font appends the desktop's font (Phil: the default is the system font),
+    else a generic family the list does not hold. Lines are hidden, never destroyed, when the
+    list gets shorter: a line's own Remove click must not free the button it runs in."""
+
     def __init__(self, emit: Emit):
-        self.widget = Gtk.Entry(width_chars=30)
-        self._shown: list[str] = []
         self._emit = emit
-        self.widget.connect("activate", lambda *_a: self.commit())
-        self.widget.connect("focus-out-event", lambda *_a: self.commit() or False)
-
-    def dirty(self) -> bool:
-        return parse_fonts(self.widget.get_text()) != self._shown
-
-    def commit(self) -> None:
-        fonts = parse_fonts(self.widget.get_text())
-        if fonts != self._shown:
-            self._shown = fonts
-            self._emit(fonts)
+        self.fonts: list[str] = []
+        self.lines: list[_FontLine] = []  # the first len(fonts) are shown
+        self.list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.add_button = Gtk.Button(label="Add font", halign=Gtk.Align.START)
+        self.add_button.set_tooltip_text("Add a font at the end of the list")
+        self.add_button.connect("clicked", lambda _b: self._add())
+        self.widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.widget.pack_start(self.list_box, False, False, 0)
+        self.widget.pack_start(self.add_button, False, False, 0)
 
     def set(self, value: list[str]) -> None:
-        self._shown = list(value)
-        self.widget.set_text(format_fonts(value))
+        self.fonts = list(value)
+        self._sync()
+
+    def _line(self, index: int) -> _FontLine:
+        picker = FontPicker(lambda value: self._replace(index, value))
+        buttons = {}
+        for action, icon, tip in FONT_LINE_BUTTONS:
+            button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+            button.set_tooltip_text(tip)
+            button.get_accessible().set_name(tip.split(":")[0])
+            button.connect("clicked", lambda _b, a=action: self._act(index, a))
+            buttons[action] = button
+        line = _FontLine(picker, buttons)
+        self.list_box.pack_start(line.box, False, False, 0)
+        return line
+
+    def _sync(self) -> None:
+        while len(self.lines) < len(self.fonts):
+            self.lines.append(self._line(len(self.lines)))
+        count = len(self.fonts)
+        for i, line in enumerate(self.lines):
+            line.box.set_visible(i < count)
+            if i < count:
+                line.picker.set(self.fonts[i])
+                line.buttons["up"].set_sensitive(i > 0)
+                line.buttons["down"].set_sensitive(i < count - 1)
+                line.buttons["remove"].set_sensitive(count > 1)
+
+    def _send(self, fonts: list[str]) -> None:
+        self.fonts = fonts
+        self._sync()
+        self._emit(list(fonts))
+
+    def _replace(self, index: int, value: str | None) -> None:
+        if value is None or index >= len(self.fonts) or self.fonts[index] == value:
+            return
+        fonts = list(self.fonts)
+        fonts[index] = value
+        self._send(fonts)
+
+    def _act(self, index: int, action: str) -> None:
+        fonts = list(self.fonts)
+        if action == "remove" and len(fonts) > 1:
+            del fonts[index]
+        elif action in ("up", "down"):
+            other = index - 1 if action == "up" else index + 1
+            if not 0 <= other < len(fonts):
+                return
+            fonts[index], fonts[other] = fonts[other], fonts[index]
+        else:
+            return
+        self._send(fonts)
+
+    def _add(self) -> None:
+        self._send([*self.fonts, next_font(self.fonts, fontpicker.system_family())])
 
 
 class TextEditor(_Editor):
     """A line of text (a panel's name, a widget's text property): sent on Enter or when the
-    entry loses focus, like the font list."""
+    entry loses focus."""
 
     def __init__(self, emit: Emit, max_length: int | None = None):
         self.widget = Gtk.Entry(width_chars=30)
@@ -391,7 +472,7 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
     if spec.kind in ("enum", "widget"):
         return ChoiceEditor(spec.choices, emit, spec.labels, spec.disabled)
     if spec.kind == "fonts":
-        return FontsEditor(emit)
+        return FontListEditor(emit)
     if spec.kind == "text":
         return TextEditor(emit, spec.max_length)
     if spec.kind == "length":
@@ -408,8 +489,8 @@ class FieldRow(Gtk.Box):
     button is pressed. A spin button's edits (DEBOUNCED kinds) go to `on_queue(path, value,
     base)` instead, `base` being the value the row showed (the view's EditQueue applies them
     after the pause: settings.queue); without `on_queue` they go to on_change at once. The row
-    holds no timer and no pending value of its own: only text typed and not yet sent (a font
-    list, a name, a number without Enter), which flush() sends. `is_pending(path)` says whether
+    holds no timer and no pending value of its own: only text typed and not yet sent (a name,
+    a number without Enter), which flush() sends. `is_pending(path)` says whether
     the view still has an edit of this row queued (a refresh then keeps the editor as it is).
     Values shown with show_value never call back."""
 
@@ -485,9 +566,9 @@ class FieldRow(Gtk.Box):
         self.error.set_visible(bool(message))
 
     def flush(self) -> None:
-        """Send text typed and not sent yet (a font list or a name without Enter, a number
-        without Enter): the view applies it with the queue (the window is closing, the pages
-        are about to be rebuilt)."""
+        """Send text typed and not sent yet (a name or a number without Enter): the view
+        applies it with the queue (the window is closing, the pages are about to be
+        rebuilt)."""
         self.editor.commit()
 
     def unsent(self) -> bool:

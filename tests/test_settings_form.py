@@ -14,9 +14,7 @@ from settings.form import (
     WidgetChoice,
     add_choices,
     config_form,
-    format_fonts,
     join_length,
-    parse_fonts,
     props_section,
     rgba_to_hex,
     section_for,
@@ -298,16 +296,6 @@ def test_join_length_rounds_px_and_ignores_the_number_for_fill():
         join_length("inches", 3.0)
     with pytest.raises(ValueError):
         split_length("wide")
-
-
-def test_fonts_round_trip():
-    assert parse_fonts(" Hack Nerd Font Mono , JetBrains Mono,, monospace ") == [
-        "Hack Nerd Font Mono",
-        "JetBrains Mono",
-        "monospace",
-    ]
-    assert format_fonts(["A", "b c"]) == "A, b c"
-    assert parse_fonts("  ") == []
 
 
 # ---- panel type and widget properties (panel/widget spec 3.7) -------------------------

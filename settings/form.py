@@ -497,12 +497,3 @@ def join_length(mode: str, number: float | None) -> int | str:
         text = f"{number:.1f}".rstrip("0").rstrip(".")
         return f"{text}%"
     raise ValueError(f"unknown length mode {mode!r}")
-
-
-def parse_fonts(text: str) -> list[str]:
-    """'Hack Nerd Font Mono, monospace' -> ['Hack Nerd Font Mono', 'monospace']."""
-    return [name.strip() for name in text.split(",") if name.strip()]
-
-
-def format_fonts(fonts: list[str]) -> str:
-    return ", ".join(fonts)

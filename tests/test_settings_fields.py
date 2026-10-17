@@ -90,15 +90,89 @@ def test_bool_enum_and_widget_rows():
     assert [c[1] for c in changes + changes2 + changes3] == [True, "chevron", "clock"]
 
 
-def test_fonts_row_commits_on_enter_only_when_changed():
+@pytest.fixture
+def fonts(monkeypatch):
+    """A fixed font list and desktop font: never the machine's (settings.fontpicker)."""
+    from settings import fontpicker
+
+    monkeypatch.setattr(fontpicker, "installed_families", lambda: ("Fira Mono", "Noto Sans"))
+    monkeypatch.setattr(fontpicker, "system_family", lambda: "Noto Sans")
+
+
+def shown_fonts(editor):
+    return [line.picker.label.get_text() for line in editor.lines if line.box.get_visible()]
+
+
+def test_the_font_list_is_one_picker_per_family(fonts):
     row, changes, _ = row_for(FORM.theme.field("font"), ["Hack Nerd Font Mono", "monospace"])
-    entry = row.editor.widget
-    assert entry.get_text() == "Hack Nerd Font Mono, monospace"
-    entry.emit("activate")
-    assert changes == []
-    entry.set_text("JetBrains Mono, monospace")
-    entry.emit("activate")
-    assert changes == [(("theme", "x"), ["JetBrains Mono", "monospace"])]
+    editor = row.editor
+    assert isinstance(editor, fields.FontListEditor)
+    assert shown_fonts(editor) == ["Hack Nerd Font Mono", "monospace"]
+    first, second = editor.lines
+    assert not first.buttons["up"].get_sensitive() and first.buttons["down"].get_sensitive()
+    assert second.buttons["up"].get_sensitive() and not second.buttons["down"].get_sensitive()
+    assert not row.unsent() and changes == []  # nothing typed, nothing sent by showing
+
+
+def test_picking_a_family_sends_the_whole_list(fonts):
+    row, changes, _ = row_for(FORM.theme.field("font"), ["Hack Nerd Font Mono", "monospace"])
+    picker = row.editor.lines[1].picker
+    picker.fill()
+    picker.search.set_text("fira")
+    picker.search.emit("activate")
+    assert changes == [(("theme", "x"), ["Hack Nerd Font Mono", "Fira Mono"])]
+    assert shown_fonts(row.editor) == ["Hack Nerd Font Mono", "Fira Mono"]
+
+
+def test_moving_removing_and_adding_fonts(fonts):
+    row, changes, _ = row_for(FORM.theme.field("font"), ["A", "B", "C"])
+    editor = row.editor
+    editor.lines[2].buttons["up"].clicked()
+    editor.lines[0].buttons["remove"].clicked()
+    editor.add_button.clicked()  # the desktop's font
+    editor.add_button.clicked()  # it is listed: the first generic family not listed
+    assert [v for _p, v in changes] == [
+        ["A", "C", "B"],
+        ["C", "B"],
+        ["C", "B", "Noto Sans"],
+        ["C", "B", "Noto Sans", "monospace"],
+    ]
+    assert shown_fonts(editor) == ["C", "B", "Noto Sans", "monospace"]
+
+
+def test_a_pick_that_changes_nothing_sends_nothing(fonts):
+    sent = []
+    editor = fields.FontListEditor(sent.append)
+    editor.set(["A", "B"])
+    editor.lines[0].picker._on_pick("A")  # the family already there
+    editor.lines[0].picker._on_pick(None)  # no inherited row in a list: nothing to pick
+    assert sent == []
+    editor.lines[1].picker._on_pick("A")  # a duplicate is the user's choice: it is sent
+    assert sent == [["A", "A"]]
+
+
+def test_a_family_name_with_a_comma_is_never_split_or_joined(fonts):
+    row, changes, _ = row_for(FORM.theme.field("font"), ["Odd, Name", "monospace"])
+    assert shown_fonts(row.editor) == ["Odd, Name", "monospace"]
+    row.editor.lines[1].buttons["up"].clicked()
+    row.editor.add_button.clicked()
+    assert [v for _p, v in changes] == [
+        ["monospace", "Odd, Name"],
+        ["monospace", "Odd, Name", "Noto Sans"],
+    ]
+    assert all(isinstance(v, list) for _p, v in changes)
+
+
+def test_the_last_font_cannot_be_removed_and_a_shorter_list_hides_lines(fonts):
+    row, changes, _ = row_for(FORM.theme.field("font"), ["A", "B"])
+    editor = row.editor
+    editor.lines[1].buttons["remove"].clicked()  # the line's own button: hidden, not destroyed
+    assert shown_fonts(editor) == ["A"] and len(editor.lines) == 2
+    assert not editor.lines[0].buttons["remove"].get_sensitive()
+    editor.lines[0].buttons["remove"].clicked()  # insensitive in the window; never sent anyway
+    assert [v for _p, v in changes] == [["A"]]
+    row.show_value(FieldValue(["X", "Y", "Z"], True, "your config"))  # a re-read: lines grow
+    assert shown_fonts(editor) == ["X", "Y", "Z"] and len(editor.lines) == 3
 
 
 def test_length_row_modes():
@@ -156,17 +230,17 @@ def test_flush_sends_typed_text_only():
     queued = []
     spin, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
     spin.editor.widget.set_text("14")  # typed, Enter not pressed
-    fonts, changes2, _ = row_for(FORM.theme.field("font"), ["A"])
-    fonts.editor.widget.set_text("B, monospace")
-    assert spin.unsent() and fonts.unsent()
+    name, changes2, _ = row_for(FORM.edge_panel.field("name"), "Dock")
+    name.editor.widget.set_text("Bottom dock")
+    assert spin.unsent() and name.unsent()
     spin.flush()
-    fonts.flush()
+    name.flush()
     assert queued == [(("theme", "x"), 14, 10)] and changes == []
-    assert changes2 == [(("theme", "x"), ["B", "monospace"])]
+    assert changes2 == [(("theme", "x"), "Bottom dock")]
     spin.flush()
-    fonts.flush()
+    name.flush()
     assert len(queued) == 1 and len(changes2) == 1  # nothing typed any more
-    assert not spin.unsent() and not fonts.unsent()
+    assert not spin.unsent() and not name.unsent()
 
 
 def test_choices_show_their_labels():
@@ -278,16 +352,16 @@ def test_closing_applies_every_row_even_when_each_apply_refreshes_all():
             row.show_value(FieldValue(result.get(row.path[1], row.shown), True, "x"), True)
 
     thick = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), on_change, id)
-    font = fields.FieldRow(FORM.theme.field("font"), ("theme", "f"), on_change, id)
-    rows[:] = [thick, font]
-    thick.shown, font.shown = 10, ["A"]
+    name = fields.FieldRow(FORM.edge_panel.field("name"), ("theme", "n"), on_change, id)
+    rows[:] = [thick, name]
+    thick.shown, name.shown = 10, "Dock"
     for row in rows:
         row.show_value(FieldValue(row.shown, False, "default"))
     thick.editor.widget.set_value(20)
-    font.editor.widget.set_text("B, C")
+    name.editor.widget.set_text("Bottom dock")
     for row in rows:  # SettingsView.flush
         row.flush()
-    assert result == {"t": 20, "f": ["B", "C"]}
+    assert result == {"t": 20, "n": "Bottom dock"}
 
 
 def test_a_toggle_within_the_pause_does_not_drop_a_queued_spin():

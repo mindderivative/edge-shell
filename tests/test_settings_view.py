@@ -642,20 +642,20 @@ def test_undo_after_a_refused_flush_does_nothing_more(make, pending):
     assert path.read_text() == USER and not view.session.history
 
 
-FONT = ("theme", "font")
+NAME = ("monitors", "HDMI-A-1", "panels", 0, "name")
 
 
-def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
+def test_typed_text_never_reaches_the_file_through_a_hand_edit_rebuild(make):
     """The rebuild unparents the focused entry and GTK sends focus-out: the retired row's
-    commit must not write the typed fonts onto the re-read file."""
+    commit must not write the typed name onto the re-read file."""
     view, path = make()
-    old = row(view, FONT)
-    old.editor.widget.set_text("Typed Font")
+    old = row(view, NAME)
+    old.editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     old.editor.commit()  # the focus-out of the retired entry
     old.flush()
-    assert "Typed Font" not in path.read_text() and not view.session.history
+    assert "Typed Name" not in path.read_text() and not view.session.history
 
 
 TILE_USER = """\
@@ -972,10 +972,10 @@ def test_a_hand_edit_met_while_applying_names_every_dropped_edit(make, clock):
 
 def test_typed_text_dropped_by_a_hand_edit_is_named(make):
     view, path = make()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
-    assert "theme.font (typed text)" in view.banner_label.get_text()
+    assert "monitors.HDMI-A-1.panels[0].name (typed text)" in view.banner_label.get_text()
 
 
 def test_the_deferred_rebuild_applies_what_was_queued_meanwhile_once(make, clock):
@@ -1036,33 +1036,33 @@ def test_dropped_edits_are_named_after_an_invalid_hand_edit_rebuild(make, clock,
 def test_typed_text_is_named_when_a_timer_drain_meets_a_hand_edit(make, clock):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     _fire(view, clock)
     text = view.banner_label.get_text()
-    assert "theme.font (typed text)" in text and "panels[0].depth = 120" in text
+    assert "panels[0].name (typed text)" in text and "panels[0].depth = 120" in text
 
 
 def test_typed_text_is_named_when_an_immediate_edit_meets_a_hand_edit(make):
     view, path = make()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view._on_change(SHELL, "both")
     drain()
     text = view.banner_label.get_text()
-    assert "theme.font (typed text)" in text and "changed outside" in text
+    assert "panels[0].name (typed text)" in text and "changed outside" in text
 
 
 def test_a_refused_revert_names_the_edits_it_dropped(make, clock):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     hand = USER.replace('shell = "edge"', 'shell = "both"')
     path.write_text(hand)
     view.revert()  # refused: the hand edit is the new starting point
     text = view.banner_label.get_text()
     assert "changed outside" in text and "Not applied" in text
-    assert "panels[0].depth = 120" in text and "theme.font (typed text)" in text
+    assert "panels[0].depth = 120" in text and "panels[0].name (typed text)" in text
     assert path.read_text() == hand and len(view.queue) == 0
 
 
@@ -1072,9 +1072,9 @@ def test_typed_text_is_sent_by_a_flush(make, pending):
     spin = row(view, DEPTH).editor.widget
     spin.set_text("130")
     assert view.save() and "depth = 130" in path.read_text()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     view.flush()
-    assert "Typed Font" in path.read_text()
+    assert 'name = "Typed Name"' in path.read_text()
 
 
 def test_a_nested_run_of_the_queue_inside_a_flush_does_nothing(make, clock):

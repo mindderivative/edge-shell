@@ -5,6 +5,7 @@ from settings.fonts import (
     first_match,
     font_families,
     matches,
+    next_font,
     picker_entries,
 )
 
@@ -63,6 +64,14 @@ def test_enter_picks_the_first_row_shown():
     assert first_match(entries, "mono") == ("monospace", "monospace")
     assert first_match(entries, "") == (None, "Theme font")
     assert first_match(entries, "zzz") is None
+
+
+def test_add_font_appends_the_system_font_else_a_generic_family_not_listed_yet():
+    assert next_font(["Hack Nerd Font Mono"], "Noto Sans") == "Noto Sans"
+    assert next_font(["noto sans"], "Noto Sans") == "monospace"
+    assert next_font(["Noto Sans", "monospace", "sans-serif"], "Noto Sans") == "serif"
+    assert next_font(["A"], "") == "monospace"  # no desktop font known
+    assert next_font(["Noto Sans", *GENERIC_FAMILIES], "Noto Sans") == "Noto Sans"
 
 
 def labels(entries):
