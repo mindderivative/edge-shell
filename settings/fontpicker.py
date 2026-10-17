@@ -26,7 +26,6 @@ except (ValueError, ImportError):  # no PangoCairo typelib: the list holds no in
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from settings.fonts import (  # noqa: E402
-    EMPTY_LABEL,
     Entry,
     first_match,
     font_families,
@@ -123,14 +122,9 @@ class FontPicker:
         )
 
     def set(self, value: str | None) -> None:
-        """Show `value` (None: the inherited row's label; "": a hand-edited empty name, shown
-        as "(empty)" and kept)."""
+        """Show `value` (None: the inherited row's label)."""
         self.value = value
         text = value if value is not None else (self.inherit_label or "")
-        if value == "":
-            self.label.set_text(EMPTY_LABEL)
-            self.button.set_tooltip_text(f"{EMPTY_LABEL}: the font name in your file is empty")
-            return
         self.label.set_text(text)
         self.button.set_tooltip_text(text or None)
 

@@ -136,8 +136,3 @@ def test_the_desktop_font_generics_become_the_generic_rows(desktop, expected):
     entries = picker_entries(("Noto Sans",), desktop, None)
     assert entries[0] == (expected, expected + " (system font)")
     assert [v for v, _l in entries].count(expected) == 1  # replaces its generic row
-
-
-def test_an_empty_current_value_is_listed_as_empty():
-    entries = picker_entries(("Noto Sans",), "", "")
-    assert entries[0] == ("", "(empty)")

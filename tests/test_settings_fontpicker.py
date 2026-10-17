@@ -217,16 +217,6 @@ def test_nothing_runs_after_the_button_is_destroyed(monkeypatch):
     assert not q.list.handler_is_connected(handler)
 
 
-def test_a_hand_edited_empty_font_name_is_shown_and_kept():
-    p, picks = picker("")
-    assert p.label.get_text() == "(empty)" and p.value == ""
-    assert p.button.get_tooltip_text() and "empty" in p.button.get_tooltip_text()
-    p.fill()
-    assert p.visible_labels()[0] == "(empty)"
-    assert p.list.get_selected_row().get_index() == 0
-    assert picks == [] and p.value == ""  # opening and closing keeps the value
-
-
 def test_a_pick_closes_the_list_and_opening_focuses_the_search():
     p, picks = picker("Fira Mono")
     closed, focused = [], []

@@ -78,6 +78,9 @@ class _Editor:
     """The value widget of a row: `widget`, `set(value)` (never emits), `emit` on user edits."""
 
     widget: Gtk.Widget
+    # a tall editor's vertical size group holding its first line: the row's label, note and
+    # reset join it (FieldRow); None for a one-line editor
+    first_line: Gtk.SizeGroup | None = None
 
     @property
     def outer(self) -> Gtk.Widget:
@@ -298,6 +301,7 @@ class FontListEditor(_Editor):
         self._emit = emit
         self.fonts: list[str] = []
         self.lines: list[_FontLine] = []  # the first len(fonts) are shown
+        self.first_line = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.VERTICAL)
         self.list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.add_button = Gtk.Button(label="Add font", halign=Gtk.Align.START)
         self.add_button.set_tooltip_text("Add a font at the end of the list")
@@ -320,6 +324,8 @@ class FontListEditor(_Editor):
             buttons[action] = button
         line = _FontLine(picker, buttons)
         self.list_box.pack_start(line.box, False, False, 0)
+        if index == 0:
+            self.first_line.add_widget(line.box)
         return line
 
     def _sync(self) -> None:
@@ -556,18 +562,24 @@ class FieldRow(Gtk.Box):
         self._shown: Any = _UNSHOWN  # the value last shown or written: a no-op is not written
         self.editor = make_editor(spec, self._changed)
         line = Gtk.Box(spacing=8)
-        # label, note and reset stay one entry high beside a tall editor (a font list); packed
-        # with the default fill they stretched to the editor's height
-        name = Gtk.Label(label=spec.label, xalign=0, valign=Gtk.Align.START)
+        # label, note and reset are centred beside a one-line editor. Beside a tall one (the
+        # font list) they would stretch or float to its middle: there they start at the top and
+        # share a height with the first picker's line (editor.first_line), so they stay one
+        # entry high and level with the first picker
+        align = Gtk.Align.START if self.editor.first_line is not None else Gtk.Align.CENTER
+        name = Gtk.Label(label=spec.label, xalign=0, valign=align)
         name.set_size_request(150, -1)
-        self.source = Gtk.Label(xalign=0, valign=Gtk.Align.START)
+        self.source = Gtk.Label(xalign=0, valign=align)
         # a long hint never widens the page (its Reset button would sit off screen): the end
         # is cut, the whole text is the tooltip
         self.source.set_ellipsize(Pango.EllipsizeMode.END)
         self.source.set_max_width_chars(SOURCE_CHARS)
         self.source.get_style_context().add_class("dim-label")
         self.reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic", Gtk.IconSize.BUTTON)
-        self.reset.set_valign(Gtk.Align.START)
+        self.reset.set_valign(align)
+        if self.editor.first_line is not None:
+            for widget in (name, self.source, self.reset):
+                self.editor.first_line.add_widget(widget)
         self.reset.set_tooltip_text("Remove this key from your config (use the inherited value)")
         self.reset.connect("clicked", lambda *_a: self._on_reset(path))
         line.pack_start(name, False, False, 0)

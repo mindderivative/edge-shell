@@ -29,7 +29,6 @@ _ALIAS_GENERIC = {
     "monospace": "monospace",
     "serif": "serif",
 }
-EMPTY_LABEL = "(empty)"  # a hand-edited "" in the theme's font list
 SYSTEM_SUFFIX = " (system font)"
 MISSING_SUFFIX = " (not installed)"
 
@@ -84,9 +83,7 @@ def picker_entries(
     if inherit_label is not None:
         entries.append((None, inherit_label))
     known = {f.casefold() for f in (*families, *GENERIC_FAMILIES, system)}
-    if current == "":
-        entries.append((current, EMPTY_LABEL))  # kept as written, never dropped
-    elif current is not None and current.casefold() not in known:
+    if current is not None and current.casefold() not in known:
         entries.append((current, current + MISSING_SUFFIX))
     if system:
         entries.append((system, system + SYSTEM_SUFFIX))

@@ -681,24 +681,59 @@ def allocated(widget, width=None):
     return width, height
 
 
+def centre(widget):
+    return widget.get_allocation().y + widget.get_allocation().height / 2
+
+
+def row_label(row):
+    return next(c for c in row.get_children()[0].get_children() if isinstance(c, Gtk.Label))
+
+
 @pytest.mark.parametrize("count", [3, 50])
 def test_the_font_rows_reset_button_label_and_note_stay_one_entry_high(fonts, count):
     """A row's reset button was packed with valign FILL: beside a font list it stretched to the
-    list's whole height (30 x 136 px for 3 fonts, 30 x 1781 for 50)."""
+    list's whole height (30 x 136 px for 3 fonts, 30 x 1781 for 50). Label and reset are level
+    with the FIRST picker."""
     row, _c, _r = row_for(FORM.theme.field("font"), [f"Font {i}" for i in range(count)])
     allocated(row)
     editor_height = row.editor.outer.get_allocated_height()
     assert editor_height > 100 * count / 4  # the list itself is tall ...
     assert row.reset.get_allocated_height() <= 40  # ... its row's button is not
     assert row.source.get_allocated_height() <= 40
-    assert row.reset.get_valign() == row.source.get_valign() == Gtk.Align.START
-    label = next(c for c in row.get_children()[0].get_children() if isinstance(c, Gtk.Label))
-    assert label.get_valign() == Gtk.Align.START
+    first = centre(row.editor.lines[0].box)
+    assert abs(centre(row_label(row)) - first) <= 2
+    assert abs(centre(row.reset) - first) <= 2
 
 
-def test_every_row_keeps_its_labels_and_reset_at_the_top():
-    row, _c, _r = row_for(FORM.theme.field("thickness"), 10)
-    assert row.reset.get_valign() == row.source.get_valign() == Gtk.Align.START
+ALIGNED = [
+    ("theme", "accent", "#8fd3b6", lambda e: e.widget),
+    ("theme.section.handle_style", "shape", "bar", lambda e: e.widget),
+    ("edge_panel", "min_length", 100, lambda e: e.widget),
+    ("theme", "thickness", 10, lambda e: e.widget),  # slider row: the spin button
+    ("theme.section.border", "enabled", True, lambda e: e.widget),
+    ("edge_panel", "name", "Dock", lambda e: e.widget),
+    ("edge_panel", "length", "50%", lambda e: e.mode),
+]
+
+
+def aligned_spec(where, key):
+    node = FORM.theme if where.startswith("theme") else FORM.edge_panel
+    if "." in where:
+        node = node.section(where.split(".")[-1])
+    return node.field(key)
+
+
+@pytest.mark.parametrize("where, key, value, control", ALIGNED)
+def test_every_rows_label_is_level_with_its_control(where, key, value, control):
+    row, _c, _r = row_for(aligned_spec(where, key), value)
+    allocated(row)
+    assert abs(centre(row_label(row)) - centre(control(row.editor))) <= 2
+
+
+def test_the_font_picker_row_label_is_level_with_its_control(fonts):
+    row, _c, _r = row_for(FieldSpec("font", "Font", "font"), None)
+    allocated(row)
+    assert abs(centre(row_label(row)) - centre(row.editor.widget)) <= 2
 
 
 def line_names(editor):
