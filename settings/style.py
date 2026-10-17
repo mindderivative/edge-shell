@@ -60,7 +60,22 @@ switch.{SWITCH_CLASS} slider {{
 }}
 """
 
-STYLESHEET = INFO_NOTE_CSS + SWITCH_CSS
+# The tree's row buttons (Move up, Move down, Remove): the theme's button is 30 px square at
+# the least (Breeze), so a smaller icon alone changes nothing; 27 px (25 inside a 1 px
+# border) is about 10% smaller.
+ROW_BUTTON_CLASS = "tree-row-button"
+ROW_BUTTON_PX = 27
+ROW_BUTTON_CSS = f"""
+button.{ROW_BUTTON_CLASS} {{
+    min-width: {ROW_BUTTON_PX - 2}px;
+    min-height: {ROW_BUTTON_PX - 2}px;
+    padding: 0;
+    border-width: 1px;
+    margin: 0;
+}}
+"""
+
+STYLESHEET = INFO_NOTE_CSS + SWITCH_CSS + ROW_BUTTON_CSS
 _provider: Any = None  # the installed Gtk.CssProvider (None: not installed yet)
 
 

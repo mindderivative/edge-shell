@@ -41,7 +41,8 @@ def test_every_rule_is_scoped_by_one_of_our_classes():
     assert len(found) >= 6
     for selector in found:
         first = selector.split()[0]
-        assert f".{style.INFO_NOTE_CLASS}" in first or f".{style.SWITCH_CLASS}" in first, selector
+        ours = (style.INFO_NOTE_CLASS, style.SWITCH_CLASS, style.ROW_BUTTON_CLASS)
+        assert any(f".{c}" in first for c in ours), selector
 
 
 def test_the_info_note_css_has_the_class_colours_and_a_backdrop_rule():
@@ -98,6 +99,7 @@ def test_the_exact_selectors_of_the_stylesheet():
         "infobar.info-note:backdrop label",
         f"switch.{sw}",
         f"switch.{sw} slider",
+        f"button.{style.ROW_BUTTON_CLASS}",
     ]
 
 
@@ -111,3 +113,9 @@ def test_the_stylesheet_is_added_at_user_priority(gtk, monkeypatch):
     monkeypatch.setattr(style, "_provider", None)
     style.install_css()
     assert calls == [gtk.STYLE_PROVIDER_PRIORITY_USER]
+
+
+def test_the_row_button_rule_is_27_px_with_its_border_inside():
+    r = rule(style.STYLESHEET, f"button.{style.ROW_BUTTON_CLASS}")
+    assert style.ROW_BUTTON_PX == 27
+    assert r["min-width"] == r["min-height"] == "25px" and r["border-width"] == "1px"

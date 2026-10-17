@@ -30,6 +30,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Atk, Gdk, GLib, Gtk, Pango
 
 from settings.pages import TreeEntry
+from settings.style import ROW_BUTTON_CLASS, install_css
 
 MIN_WIDTH = 200
 NO_MONITORS = "No monitor found. Connect one and press Detect monitors."
@@ -40,6 +41,7 @@ PANEL_ACTIONS = (
     ("down", "go-down-symbolic", "Move this panel down", "Move down"),
     ("remove", "list-remove-symbolic", "Remove this panel", "Remove panel"),
 )
+ROW_BUTTON_ICON_PX = 14  # the stock menu icon is 16; the button is 27 px (settings.style)
 _OPEN, _CLOSED = "pan-down-symbolic", "pan-end-symbolic"
 
 
@@ -92,8 +94,13 @@ class TreeRow(Gtk.ListBoxRow):
         box.pack_start(self.label, True, True, 0)
         self.buttons: dict[str, Gtk.Button] = {}
         if parent is not None:
-            for action, icon, tip, name in PANEL_ACTIONS:
+            install_css()  # the smaller buttons (settings.style)
+            # packed from the end, so the last is the leftmost: Up, Down, Remove left to right
+            # (a layout from the right in an RTL language mirrors them together)
+            for action, icon, tip, name in reversed(PANEL_ACTIONS):
                 button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.MENU)
+                button.get_image().set_pixel_size(ROW_BUTTON_ICON_PX)
+                button.get_style_context().add_class(ROW_BUTTON_CLASS)
                 button.set_relief(Gtk.ReliefStyle.NONE)
                 button.set_tooltip_text(tip)
                 button.get_accessible().set_name(name)
@@ -103,6 +110,8 @@ class TreeRow(Gtk.ListBoxRow):
                 button.connect("clicked", lambda _b, a=action: on_action(self.page, a))
                 box.pack_end(button, False, False, 0)
                 self.buttons[action] = button
+        # in the order of PANEL_ACTIONS, whatever order they were packed in
+        self.buttons = {a: self.buttons[a] for a, *_ in PANEL_ACTIONS if a in self.buttons}
         self.add(box)
         self.show_all()
         for button in self.buttons.values():

@@ -612,12 +612,129 @@ def test_a_slider_sends_whole_numbers_and_takes_its_keys():
     assert changes[-1][1] == 2
 
 
-def test_a_slider_pages_by_a_tenth_of_its_range():
+def _key(scale, keyval):
+    event = Gdk.Event.new(Gdk.EventType.KEY_PRESS)
+    event.keyval = keyval
+    scale.emit("key-press-event", event)
+    return event  # held by the caller while the handler runs
+
+
+def test_a_slider_pages_by_a_tenth_of_its_range_and_page_up_raises_the_value():
     spec = FieldSpec("font_size", "Font size", "int", minimum=6, maximum=96)
     row, changes, _ = row_for(spec, 6)
     assert row.editor.adjustment.get_page_increment() == 9
-    row.editor.scale.emit("move-slider", Gtk.ScrollType.PAGE_FORWARD)  # Page Down / Up
-    assert changes[-1][1] == 15
+    _key(row.editor.scale, Gdk.KEY_Page_Up)
+    assert changes[-1][1] == 15  # Page Up: up by a page
+    _key(row.editor.scale, Gdk.KEY_Page_Up)
+    assert changes[-1][1] == 24
+    _key(row.editor.scale, Gdk.KEY_Page_Down)
+    assert changes[-1][1] == 15  # Page Down: down by a page
+    _key(row.editor.scale, Gdk.KEY_KP_Page_Up)
+    assert changes[-1][1] == 24
+    for _ in range(20):
+        _key(row.editor.scale, Gdk.KEY_Page_Up)
+    assert changes[-1][1] == 96  # clamped
+    for _ in range(20):
+        _key(row.editor.scale, Gdk.KEY_Page_Down)
+    assert changes[-1][1] == 6
+
+
+def _mouse(scale, kind, button=1):
+    event = Gdk.Event.new(kind)
+    event.button.button = button
+    scale.emit(
+        "button-press-event" if kind == Gdk.EventType.BUTTON_PRESS else "button-release-event",
+        event,
+    )
+    return event
+
+
+def _queue_row():
+    from settings.queue import EditQueue
+
+    queue = EditQueue()
+    row = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), id, id, queue.push)
+    row.show_value(FieldValue(10, False, "default"))
+    return row, queue
+
+
+def test_a_slider_drag_queues_nothing_until_the_button_is_released():
+    row, queue = _queue_row()
+    scale, spin = row.editor.scale, row.editor.widget
+    held = _mouse(scale, Gdk.EventType.BUTTON_PRESS)
+    for value in (12, 20, 31):
+        scale.set_value(value)  # the pointer moves; a slow mouse pauses on the way
+        assert len(queue) == 0
+        assert spin.get_value() == value  # the number follows the drag live
+    assert row.unsent()  # the drag is not applied yet
+    released = _mouse(scale, Gdk.EventType.BUTTON_RELEASE)
+    assert [(e.path, e.value) for e in queue] == [(("theme", "t"), 31)]
+    assert not row.unsent()
+    assert held and released
+
+
+def test_a_slider_drag_that_ends_where_it_began_writes_nothing():
+    row, queue = _queue_row()
+    held = _mouse(row.editor.scale, Gdk.EventType.BUTTON_PRESS)
+    row.editor.scale.set_value(40)
+    row.editor.scale.set_value(10)
+    released = _mouse(row.editor.scale, Gdk.EventType.BUTTON_RELEASE)
+    assert len(queue) == 0 and held and released
+
+
+def test_a_click_on_the_trough_writes_on_release():
+    row, queue = _queue_row()
+    held = _mouse(row.editor.scale, Gdk.EventType.BUTTON_PRESS)
+    row.editor.scale.set_value(50)  # the press moved the slider to the click
+    assert len(queue) == 0
+    released = _mouse(row.editor.scale, Gdk.EventType.BUTTON_RELEASE)
+    assert [e.value for e in queue] == [50] and held and released
+
+
+def test_a_broken_grab_or_lost_focus_ends_the_slider_drag():
+    for signal, make in (
+        ("grab-broken-event", lambda: Gdk.Event.new(Gdk.EventType.GRAB_BROKEN)),
+        ("focus-out-event", lambda: Gdk.Event.new(Gdk.EventType.FOCUS_CHANGE)),
+    ):
+        row, queue = _queue_row()
+        held = _mouse(row.editor.scale, Gdk.EventType.BUTTON_PRESS)
+        row.editor.scale.set_value(25)
+        assert len(queue) == 0
+        event = make()
+        row.editor.scale.emit(signal, event)
+        assert [e.value for e in queue] == [25], signal
+        row.editor.scale.set_value(26)  # no longer dragging: the pause behaviour
+        assert [e.value for e in queue] == [26], signal
+        assert held and event
+
+
+def test_a_flush_during_a_slider_drag_applies_the_current_value():
+    row, queue = _queue_row()
+    held = _mouse(row.editor.scale, Gdk.EventType.BUTTON_PRESS)
+    row.editor.scale.set_value(33)
+    assert row.unsent()
+    row.flush()  # Undo, Save or a structural edit
+    assert [e.value for e in queue] == [33] and not row.unsent() and held
+    row.editor.scale.set_value(34)  # the drag went on after the flush: still released later
+    _mouse(row.editor.scale, Gdk.EventType.BUTTON_RELEASE)
+    assert [e.value for e in queue] == [34]
+
+
+def test_a_refresh_during_a_slider_drag_keeps_the_dragged_value():
+    row, queue = _queue_row()
+    held = _mouse(row.editor.scale, Gdk.EventType.BUTTON_PRESS)
+    row.editor.scale.set_value(33)
+    row.show_value(FieldValue(10, False, "default"), keep_pending=True)
+    assert row.editor.scale.get_value() == 33 and held
+
+
+def test_slider_keys_and_the_spin_buttons_keep_the_pause_behaviour():
+    row, queue = _queue_row()
+    _key(row.editor.scale, Gdk.KEY_Right)
+    row.editor.scale.emit("move-slider", Gtk.ScrollType.STEP_FORWARD)
+    assert [e.value for e in queue] == [11]
+    row.editor.widget.spin(Gtk.SpinType.STEP_FORWARD, 1)  # a spin arrow
+    assert [e.value for e in queue] == [12]
 
 
 def test_a_wide_or_open_range_keeps_its_spin_button():
@@ -825,3 +942,11 @@ def test_a_widget_font_rows_inherited_label_is_the_theme_font_constant():
     assert picker.inherit_label == fields.THEME_FONT
     picker.set(None)
     assert picker.label.get_text() == "Theme font"
+
+
+def test_a_font_line_reads_move_up_move_down_remove():
+    assert [a for a, _i, _t in fields.FONT_LINE_BUTTONS] == ["up", "down", "remove"]
+    row, _, _ = row_for(FORM.theme.field("font"), ["A", "B"])
+    line = row.editor._line(0)
+    kids = line.box.get_children()
+    assert kids[1:] == [line.buttons[a] for a in ("up", "down", "remove")]  # packed from the start

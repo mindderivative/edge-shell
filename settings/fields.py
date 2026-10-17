@@ -163,10 +163,13 @@ class SliderEditor(_Editor):
     """A bounded whole number (settings.form.uses_slider): a slider and, beside it, a spin
     button for exact typing; both move one Gtk.Adjustment, so they always show the same
     value and every change is sent once. `widget` is the spin button (typed text, flush and
-    the focus after a rebuild work as for a plain number row); `scale` the slider. Dragging
-    sends each whole number on the way: the view's queue keeps the last one per row and
-    applies it after the pause (settings.queue). The keys of a focused slider work (arrows,
-    Page Up/Down, Home, End); the mouse wheel never edits it (wheel_scrolls_the_page). An
+    the focus after a rebuild work as for a plain number row); `scale` the slider. While the
+    mouse button is down on the slider nothing is sent (the spin button shows the number
+    live); the final whole number is sent once when the button is released (or the grab is
+    broken, the focus lost, or the row is flushed). The keys of a focused slider work and
+    send as they go (arrows, Home, End; Page Up raises by a page, Page Down lowers); the
+    queue keeps the last value per row (settings.queue). The mouse wheel never edits it
+    (wheel_scrolls_the_page). An
     unset optional value (a widget's font size) shows the minimum, as a spin row does."""
 
     def __init__(self, spec: FieldSpec, emit: Emit):
@@ -189,17 +192,59 @@ class SliderEditor(_Editor):
         self._box.pack_start(self.widget, False, False, 0)
         for widget in (self.scale, self.widget):
             wheel_scrolls_the_page(widget)
-        self.adjustment.connect("value-changed", lambda a: emit(int(round(a.get_value()))))
+        self._emit = emit
+        self._dragging = False  # the mouse button is down on the slider
+        self.adjustment.connect("value-changed", self._on_value)
+        self.scale.connect("button-press-event", self._press)
+        for signal in ("button-release-event", "grab-broken-event", "focus-out-event"):
+            self.scale.connect(signal, self._release)
+        self.scale.connect("key-press-event", self._key)
+
+    def _value(self) -> int:
+        return int(round(self.adjustment.get_value()))
+
+    def _on_value(self, _adjustment) -> None:
+        if not self._dragging:
+            self._emit(self._value())
+
+    def _press(self, _scale, _event) -> bool:
+        self._dragging = True
+        return False  # the slider still moves
+
+    def _release(self, _scale, _event) -> bool:
+        self._end_drag()
+        return False
+
+    def _end_drag(self) -> None:
+        if self._dragging:
+            self._dragging = False
+            self._emit(self._value())
+
+    def _key(self, _scale, event) -> bool:
+        """Page Up raises the value by a page, Page Down lowers it (GTK's own bindings for a
+        horizontal slider are the other way round)."""
+        sign = {
+            Gdk.KEY_Page_Up: 1,
+            Gdk.KEY_KP_Page_Up: 1,
+            Gdk.KEY_Page_Down: -1,
+            Gdk.KEY_KP_Page_Down: -1,
+        }.get(event.keyval)
+        if sign is None:
+            return False
+        a = self.adjustment
+        a.set_value(a.get_value() + sign * a.get_page_increment())
+        return True
 
     @property
     def outer(self) -> Gtk.Widget:
         return self._box
 
     def commit(self) -> None:
+        self._end_drag()  # a flush during a drag applies the value it has now
         commit_spin(self.widget)
 
     def dirty(self) -> bool:
-        return _spin_dirty(self.widget)
+        return self._dragging or _spin_dirty(self.widget)
 
     def set(self, value: int | None) -> None:
         self.adjustment.set_value(self.adjustment.get_lower() if value is None else value)
