@@ -452,6 +452,20 @@ def test_a_panel_added_before_the_detach_is_not_re_raised_by_its_pending_timers(
     assert added.raised == 0  # a re-map of a leaving window blinks
 
 
+def test_finish_fade_completes_only_a_fade_in(build, loop):
+    shell = build(edge(DOCK))
+    shell.finish_fade()  # waiting: nothing to complete (it may never be shown)
+    assert shell.fade_state == "waiting" and shell.canvas.opacity == [0.0]
+    loop.run_idles()
+    loop.fire(500)
+    shell.frames(2)
+    shell.finish_fade()
+    assert shell.fade_state == "shown" and all(w.opacity[-1] == 1.0 for w in shell.windows)
+    assert not shell.canvas.ticker._callbacks
+    shell.finish_fade()  # shown: nothing
+    assert shell.fade_state == "shown"
+
+
 # ---- crossfade, end to end with the real app (Task 5) -----------------------------------
 
 

@@ -508,6 +508,12 @@ class MonitorShell:
         """True once fade_out has started (or the shell is closed)."""
         return self.fade_state in ("fading-out", "done")
 
+    def finish_fade(self) -> None:
+        """Complete a fade-in in progress now (fully shown). A shell replaced in the middle of
+        its fade-in (a second reload) is held at full opacity: fades never stack."""
+        if not self._closed and self._fade is not None and self._fade.state == "fading-in":
+            self._fade.finish()
+
     def detach(self) -> None:
         """Stop following the config and the monitor: the shell is leaving (fade_out, or a
         rebuild replaces it). Pending measurements, re-layouts and readiness checks are

@@ -15,6 +15,7 @@ class FakeShell:
     closed: list = []
     applied: list = []
     faded: list = []  # (name, ms) of every fade_out call
+    finished: list = []  # every shell finish_fade was called on
     fail_apply: set = set()
     layout_warnings: list = []
     build_failures: list = []
@@ -59,6 +60,11 @@ class FakeShell:
     def detach(self):
         self.detached = True
 
+    def finish_fade(self):
+        FakeShell.finished.append(self)
+        if self.fade_state == "fading-in":
+            self.fade_state = "shown"
+
     def fade_out(self, ms, on_done):
         """MonitorShell.fade_out: closed at once with 0 ms or while still invisible."""
         FakeShell.faded.append((self.name, ms))
@@ -95,6 +101,7 @@ def _reset_fake_shell(monkeypatch):
         ("closed", []),
         ("applied", []),
         ("faded", []),
+        ("finished", []),
         ("fail_apply", set()),
         ("fail_open", set()),
         ("layout_warnings", []),
@@ -1522,3 +1529,108 @@ def test_a_failed_apply_and_failed_rebuild_release_the_held_shell(renv):
     assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
     old.faded_out()
     assert app._leaving == {}
+
+
+# ---- a reload or a hot-plug during a fade (spec 21) -----------------------------------
+
+
+def held_rebuild(renv):
+    """The old shell shown, then a rebuild: (old held, new still waiting)."""
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    return old, app.shells["HDMI-A-1"]
+
+
+def test_a_second_rebuild_mid_crossfade_never_stacks_fades(renv):
+    app, store, _, _, make_config = renv
+    first, second = held_rebuild(renv)
+    second.fade_in()  # crossfade: the first one fades out
+    assert first.fading_out
+    store.pending = thicker(make_config, radius=16)
+    app.reload()
+    third = app.shells["HDMI-A-1"]
+    assert FakeShell.closed == ["HDMI-A-1"]  # the first one (half faded) goes at once
+    assert FakeShell.finished == [first, second] and second.detached  # held, fully shown
+    assert app._leaving == {"HDMI-A-1": second} and not second.fading_out
+    third.fade_in()
+    assert FakeShell.faded == [("HDMI-A-1", 50), ("HDMI-A-1", 50)] and second.fading_out
+
+
+def test_a_rebuild_while_the_new_shell_is_still_invisible_keeps_the_held_one(renv):
+    app, store, _, _, make_config = renv
+    first, second = held_rebuild(renv)  # the second has not faded in yet
+    store.pending = thicker(make_config, radius=16)
+    app.reload()
+    third = app.shells["HDMI-A-1"]
+    assert FakeShell.closed == ["HDMI-A-1"] and second.fade_state == "done"  # never seen
+    assert app._leaving == {"HDMI-A-1": first} and not first.fading_out  # still on screen
+    third.fade_in()
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and first.fading_out
+
+
+def test_a_rebuild_before_the_first_fade_in_just_replaces_the_invisible_shell(renv):
+    app, store, _, _, make_config = renv
+    store.pending = thicker(make_config)  # the shell from startup has not faded in yet
+    app.reload()
+    assert FakeShell.closed == ["HDMI-A-1"] and FakeShell.opened == ["HDMI-A-1"]
+    assert app._leaving == {} and FakeShell.faded == []
+
+
+def test_turning_a_monitor_off_while_its_new_shell_waits_fades_the_held_one(renv):
+    app, store, _, _, make_config = renv
+    first, second = held_rebuild(renv)
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert second.fade_state == "done" and FakeShell.closed == ["HDMI-A-1"]  # never seen
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and first.fading_out  # the visible one fades
+    first.faded_out()
+    assert app.shells == {} and app._leaving == {}
+
+
+def test_unplugging_a_monitor_mid_fade_closes_its_leaving_shell_at_once(renv):
+    app, store, _, mapping, make_config = renv
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert app._leaving == {"HDMI-A-1": shell} and FakeShell.closed == []
+    del mapping["HDMI-A-1"]
+    mapping["DP-1"] = object()
+    app.sync_monitors()
+    assert FakeShell.closed == ["HDMI-A-1"] and app._leaving == {}  # no fade on a dead output
+
+
+def test_a_replaced_monitor_drops_the_held_shell_and_the_new_one_opens(renv):
+    app, store, _, mapping, make_config = renv
+    first, second = held_rebuild(renv)
+    second.fade_in()
+    mapping["HDMI-A-1"] = object()  # replugged: a new Gdk monitor
+    app.sync_monitors()
+    assert FakeShell.closed == ["HDMI-A-1", "HDMI-A-1"]  # both old shells, at once
+    assert app._leaving == {} and FakeShell.opened[-1] == "HDMI-A-1"
+
+
+def test_a_quit_while_a_shell_is_held_releases_it_and_never_hangs(renv, timers):
+    app, _, _, _, _ = renv
+    old, new = held_rebuild(renv)  # the new shell has never been visible
+    app.app = QuitRecorder()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert new.fade_state == "done" and old.fading_out  # the new one closed, the held one fades
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and app.app.quits == 0
+    old.faded_out()
+    assert app._leaving == {} and app.shells == {} and app.app.quits == 1 and timers == {}
+
+
+def test_a_quit_mid_crossfade_closes_the_old_one_and_fades_the_new_one(renv, timers):
+    app, _, _, _, _ = renv
+    old, new = held_rebuild(renv)
+    app.app = QuitRecorder()
+    new.fade_in()  # crossfading: the old one is fading out
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert old.fade_state == "done" and new.fading_out  # nothing left behind
+    assert app._leaving == {"HDMI-A-1": new} and app.app.quits == 0
+    new.faded_out()
+    assert app._leaving == {} and app.app.quits == 1 and timers == {}

@@ -110,6 +110,9 @@ class EdgeShellApp:
             self._check_monitor_names(connected)
         except Exception:  # a warning must never break startup or a reload
             log.exception("checking the monitor names failed")
+        for name, shell in list(self._leaving.items()):
+            if connected.get(name) is not shell.monitor:  # unplugged or replaced: no fade on it
+                self._retire(name)
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -164,7 +167,12 @@ class EdgeShellApp:
             return
         self._forget_reports(name)
         shell = self.shells.pop(name)
+        if shell.fade_state == "waiting":
+            # never visible: closed now; a shell it was replacing stays held for the next one
+            shell.close()
+            return
         self._retire(name)  # at most one leaving shell per monitor: an older one goes now
+        shell.finish_fade()  # mid fade-in: held fully shown, never two fades at once
         shell.detach()
         self._leaving[name] = shell
 
@@ -184,6 +192,12 @@ class EdgeShellApp:
                 shell.fade_out(self._fade_ms(name), self._gone)
 
     def _fade_away(self, name: str, shell: MonitorShell) -> None:
+        if shell.fade_state == "waiting":
+            # never visible: closed now, and the shell it was replacing (held, on screen)
+            # fades out instead of disappearing
+            shell.close()
+            self._release_held()
+            return
         self._retire(name)  # at most one leaving shell per monitor: an older one goes now
         self._leaving[name] = shell
         shell.fade_out(self._fade_ms(name), self._gone)
