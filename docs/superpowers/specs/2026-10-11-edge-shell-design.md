@@ -584,8 +584,10 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
    then destroys its windows; the shell is detached (no re-layout, measurement or re-raise)
    and its strips (the reserved zone) stay until the fade-out ends (`detach(keep_strips=True)`;
    they close with the shell's windows), so a maximized window grows when the frame is gone.
-   An unplugged or replaced monitor, and a shell that never became visible, are closed at
-   once.
+   The monitor's scoped theme CSS stays loaded while its shell fades (`css()` covers the
+   shells in `shells` and in `_leaving`; it is refreshed when the last leaving shell of a
+   monitor goes), so the panels keep their border radius, handle look and fonts. An unplugged
+   or replaced monitor, and a shell that never became visible, are closed at once.
 8. **Crossfade on a full rebuild** (theme `thickness`, `radius`, `peek`, `hover_zone`,
    `duration_ms`): the old shell stays on screen, detached and fully shown, until the new
    shell starts its fade-in; then new 0 -> 1 and old 1 -> 0 over `fade_ms`, and the old one is
@@ -610,25 +612,30 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
 12. **Bookkeeping.** Every window stays registered with Fabric's `Application` until the shell
     that owns it closes, so a crossfade has two sets of windows; the zone strips are the
     exception, because two sets would stack their exclusive zones. Changed after Phil's gate
-    (findings 3 and 4): they are built `RESERVE_DELAY_MS` (50 ms) after the fade-in starts when
-    the shell has no predecessor (an enable, a startup, a hot-plug; `reserve_now` False), so
-    the frame appears first and the maximized window resizes a beat later (they used to be
-    built with the shell, about 0.5 s early); a shell replacing a held one builds them at once
-    (the held old shell destroyed its own at `detach()`, so the zone is continuous and nothing
-    bounces); with `fade_ms` 0 they are built with the shell as before. On a disable
-    (`fade_out`) they are kept until the fade-out ends and closed with the other windows (they
-    used to be destroyed at the start, so a maximized window grew while the frame was still
-    partly opaque and its square corners showed through the frame's rounded inner corners).
-    Only a rebuild's `detach()` destroys them at once. The successor builds them at once only when
-    its predecessor is held (detached, strips already destroyed, not fading out;
-    `EdgeShellApp._reserves_now`). A held shell that loses its successor (turned off while the
-    successor waited, a quit, a failed rebuild) gets its strips back (`reserve_again`, called by
-    `_release_held`) before it fades out, so the zone is kept until the end. Known, accepted
-    limits: the error-path rebuilds (`_relayout_failed`, a failed in-place apply) open their
-    shell without a held predecessor, so they reserve late (a maximized window grows, then
-    shrinks about 0.55 s later); a late strip that fails to build is logged, not retried. A shell enabled again while the previous one is still fading
-    out, and keeping its strips, builds its own late like any fresh enable, so two sets never
-    stack their zones for long.
+    and re-check (findings 3 and 4; then the rebuild shrink and 50 ms too early): with a fade
+    EVERY shell (an enable, a startup, a hot-plug, a rebuild's successor) builds its strips
+    `RESERVE_DELAY_MS` (100 ms) after its own fade-in starts (`reserve_now` False), so the
+    frame appears first and the maximized window resizes a beat later; with `fade_ms` 0 they
+    are built with the shell as before (the old shell is closed at once). A held shell
+    (`_leave_shell`) keeps its strips (`detach(keep_strips=True)`), so the window does not
+    shrink or grow while the successor waits for its ready check; when the successor has
+    built its set (`on_reserved` -> `EdgeShellApp._reserved`) the app drops the leaving
+    shell's strips in the same call (`drop_strips`, new set first, then the old; no frame is
+    drawn between, though the compositor may still apply the two surface changes a moment
+    apart: to be judged live). A held shell whose successor never appears (turned off while it
+    waited, a quit, a failed rebuild) fades out with the strips it kept. On a disable
+    (`fade_out`) the strips are kept until the fade-out ends and closed with the other windows
+    (they used to be destroyed at the start, so a maximized window grew while the frame was
+    still partly opaque and its square corners showed through the frame's rounded inner
+    corners). A second rebuild, or a disable, in the 100 ms before the first successor's
+    strips are due builds them first (`reserve_pending_now`, from `_hand_over`) when an older
+    leaving shell is about to be closed, so the zone passes on without a gap. A shell enabled
+    again while the previous one is still fading out reserves late like any enable; the old
+    strips go when the new ones exist. Known, accepted limits: the error-path rebuilds
+    (`_relayout_failed`, a failed in-place apply) open their shell with no held predecessor,
+    so a maximized window grows and then shrinks about 0.1 s after the new frame appears; a
+    late strip that fails to build is logged, not retried; a shell opened with `fade_ms` 0
+    while an older one still fades out keeps both sets until the old fade ends.
 13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
     full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
     a frame may be dropped with effects on) plus GTK's group for each; blending a translucent
@@ -646,19 +653,31 @@ and close paths of `MonitorShell` on fake windows and a fake frame clock
 enable, the fade itself, the crossfade, the quit.
 
 Known limits: the monitor appears about 0.5 s after it is turned on; maximized windows resize
-50 ms after the frame starts to appear on an enable and when the frame is gone on a disable;
+100 ms after the frame starts to appear (an enable or a rebuild) and when the frame is gone on a
+disable;
 the crossfade's mid-way dim. (The 2 s fallback re-raise was expected to flicker once after the
 fade; the gate saw none.) Open question 6 (the early shrink) is answered by decision 12.
 
-**Results (Phil, live on HDMI-A-1, DP-1 untouched, 2026-10-17): the gate (plan Task 7, items 1-12)
-items 1, 2 and 5-12 passed; items 3 and 4 passed with findings.** No blink, no flicker on the fallback re-raise, the crossfade passed,
-the quit statuses were 130 and 143. Finding 3: on a disable (Enable unticked) at Fade 300 the
-frame's rounded inner corners reverted instantly to 90 degrees (not on an enable nor on a
-rebuild): the strips were destroyed at the start of the fade-out, a maximized window grew while
-the frame was still partly opaque and its square corners showed through. Finding 4: on an
-enable the strips came with the build, so a maximized window shrank about 0.5 s before the
-frame faded in; Phil wants the frame to appear and the window to resize 50 ms later. Fixed
-in f61d49a (decision 12: the strips are kept until a fade-out ends and built 50 ms after a
-fade-in starts), 4e8c947 (a shell opened while the previous one fades out reserves late) and
-8515e3b (a held shell whose successor is gone keeps its zone until it has faded out). Phil's
-re-check of items 3 and 4 is pending.
+**Results (Phil, live on HDMI-A-1, DP-1 untouched, 2026-10-17): the gate (plan Task 7, items
+1-12): items 1, 2 and 5-12 passed; items 3 and 4 passed with findings.** No blink, no flicker on
+the fallback re-raise, the crossfade passed, the quit statuses were 130 and 143. Finding 3: on a
+disable (Enable unticked) at Fade 300 the frame's rounded inner corners reverted instantly to 90
+degrees (not on an enable nor on a rebuild): the strips were destroyed at the start of the
+fade-out, a maximized window grew while the frame was still partly opaque and its square corners
+showed through. Finding 4: on an enable the strips came with the build, so a maximized window
+shrank about 0.5 s before the frame faded in; Phil wanted the window to resize 50 ms after the
+frame starts to appear. Fixed in f61d49a (the strips are kept until a fade-out ends and built
+after a fade-in starts), 4e8c947 (a shell opened while the previous one fades out reserves
+late) and 8515e3b (a held shell whose successor is gone keeps its zone).
+
+**First re-check (Phil, HDMI-A-1, HEAD 1bafeae):** items 4-7 pass. Findings: (1) a disable still
+showed 90-degree corners and a default handle look: `EdgeShellApp.css()` covered only `shells`, so
+the monitor's scoped CSS was dropped while its shell still faded out in `_leaving` (a rebuild
+keeps the monitor in `shells`, so it was not affected); fixed in a4452f7 (`css()` covers the
+leaving shells too and is refreshed when the last one goes). (2) The enable shrink at 50 ms was
+"much better but still too much": `RESERVE_DELAY_MS` is 100. (3) A rebuild crossfade (thickness 10
+to 64, maximized window): the window shrank before the new frame faded in, because the successor
+of a held shell reserved at once while its frame appeared only after the ready wait; fixed in
+4627cc8 (decision 12: every fading shell reserves late, the held one keeps its strips until the
+successor has its own). Items 3 and 4 and the rebuild are to be re-checked by Phil after these
+commits.

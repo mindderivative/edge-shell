@@ -608,23 +608,27 @@ that need `gi` or Fabric skip themselves there.
   second after it is turned on or started, not at once: the fade waits for the panels' first
   re-raise (which re-maps them and would blink) and, if something is stuck, starts after a
   1000 ms ready timeout anyway. The maximized windows take the new frame size when the zone
-  strips are built: 50 ms after the fade-in starts on an enable (the frame appears first), and
-  they grow back when a disable's fade-out has ended and the strips are destroyed (the frame is
-  gone by then, so the window's square corners never show through it); a rebuild keeps the
-  zone continuous (the successor builds its strips at once, the held old shell destroys its own
-  at the swap, so a maximized window does not bounce); a monitor turned on again while the
-  previous frame is still fading out builds its strips late like any enable (the two sets may
-  overlap for up to the rest of that fade, not longer); a held old shell whose successor never
-  appears (turned off meanwhile, a quit, a failed rebuild) gets its strips back before it
-  fades out. That resize is the compositor's and is
-  not faded. The fallback re-raise
-  2 s after the start may still re-map the panels once after the fade (the live gate saw no
-  flicker from it). The fade gate (Phil, HDMI-A-1): items 1, 2 and 5-12 passed (no blink, no flicker on the
-  fallback re-raise, the crossfade, the quit statuses 130 and 143); items 3 and 4 passed with
-  findings (the frame's
-  rounded inner corners snapping square at the start of a disable, and the window shrinking
-  about 0.5 s before the frame appeared on an enable), fixed as above (commits f61d49a, 4e8c947 and 8515e3b); Phil's re-check of items 3 and 4 is
-  pending. During a crossfade the old shell's text and fonts take the new theme's CSS at
+  strips are built, which is 100 ms after the frame starts to appear (on an enable and on
+  a rebuild's new shell alike: the frame appears first); on a disable the strips stay until
+  the fade-out has ended, so the window grows when the frame is gone and its square corners
+  never show through the fading frame. During a rebuild the held old shell keeps its strips
+  until the new shell has built its own (they are swapped in one call, so the zone is
+  continuous and the window does not bounce); a held shell whose successor never appears
+  (turned off meanwhile, a quit, a failed rebuild) fades out with its strips. A monitor turned
+  on again while the previous frame is still fading out reserves like any enable, and the old
+  strips go when the new ones exist. Known: after a failed in-place apply or re-layout the
+  replacement shell reserves late too, so a maximized window grows and then shrinks about
+  0.1 s after that frame appears. That resize is the compositor's and is not faded. The
+  fallback re-raise 2 s after the start may still re-map the panels once after the fade (the
+  live gate saw no flicker from it). A disabled monitor keeps its theme CSS (border radius,
+  handle look, fonts) until its fade-out has ended. The fade gate (Phil, HDMI-A-1): items
+  1, 2 and 5-12 passed (no blink, no flicker on the fallback re-raise, the crossfade, the
+  quit statuses 130 and 143); items 3 and 4 passed with findings (square corners at the start
+  of a disable, the window shrinking about 0.5 s before the frame appeared on an enable); a
+  first re-check passed items 4-7 and found the monitor's CSS dropped at the start of a
+  disable, 50 ms still too early, and the rebuild shrinking the window before the new frame;
+  all fixed (commits f61d49a, 4e8c947, 8515e3b, a4452f7 and 4627cc8). Phil's next re-check of
+  items 3 and 4 is pending. During a crossfade the old shell's text and fonts take the new theme's CSS at
   once (its frame keeps the old look until it is gone), and where both shells draw the same
   shape it dims slightly half-way (two half-transparent frames over each other). A reload
   during a crossfade finishes the running fade-in and drops the older leaving shell at once;
