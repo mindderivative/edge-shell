@@ -1140,6 +1140,9 @@ class QuitRecorder:
     def quit(self):
         self.quits += 1
 
+    def set_stylesheet_from_string(self, css, compile=True):
+        pass
+
 
 @pytest.fixture
 def timers(monkeypatch):
@@ -1756,3 +1759,67 @@ def test_a_fading_out_shell_whose_monitor_is_replaced_is_closed_at_once(env, mak
     mapping["HDMI-A-1"] = object()  # a new Gdk monitor while it fades: its output is gone
     app.sync_monitors()
     assert shell.fade_state == "done" and app._leaving == {}
+
+
+# ---- a fading monitor keeps its theme CSS until it is gone (Phil's re-check, finding 1) ----
+
+
+def styled(renv):
+    app, store, _, mapping, make_config = renv
+    app.app = StyledFabricApp()
+    app.refresh_css()
+    return app, store, mapping, make_config
+
+
+def scope_in(app):
+    return app_mod.scope_class("HDMI-A-1") in app.app.stylesheets[-1]
+
+
+def test_a_disabled_monitor_keeps_its_css_while_it_fades_and_loses_it_when_gone(renv):
+    app, store, _, make_config = styled(renv)
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    assert scope_in(app)
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert app.shells == {} and app._leaving == {"HDMI-A-1": shell}
+    assert scope_in(app)  # the panels still fading keep their radius, handle look, fonts
+    shell.faded_out()
+    assert app._leaving == {} and not scope_in(app)
+    assert app.app.stylesheets[-1].strip()  # never empty
+
+
+def test_the_css_of_a_retired_leaving_shell_is_dropped(renv):
+    app, store, mapping, make_config = styled(renv)
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert scope_in(app)
+    del mapping["HDMI-A-1"]  # unplugged mid-fade: closed at once
+    app.sync_monitors()
+    assert app._leaving == {} and not scope_in(app)
+
+
+def test_a_rebuild_keeps_the_css_throughout(renv):
+    app, store, _, make_config = styled(renv)
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    assert scope_in(app)
+    app.shells["HDMI-A-1"].fade_in()
+    old.faded_out()
+    assert scope_in(app)  # the new shell is still there
+
+
+def test_a_quit_drops_the_css_of_the_monitor_when_its_fade_ends(renv, timers):
+    app, _, _, _, _ = renv
+    app.app = StyledFabricApp()
+    app.app.quit = lambda: None
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert app._leaving == {"HDMI-A-1": shell}
+    shell.faded_out()
+    assert not scope_in(app)

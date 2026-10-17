@@ -110,9 +110,13 @@ class EdgeShellApp:
             self._check_monitor_names(connected)
         except Exception:  # a warning must never break startup or a reload
             log.exception("checking the monitor names failed")
+        retired = False
         for name, shell in list(self._leaving.items()):
             if connected.get(name) is not shell.monitor:  # unplugged or replaced: no fade on it
                 self._retire(name)
+                retired = True
+        if retired:
+            self.refresh_css()  # its CSS goes (a shell opened below refreshes again)
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
@@ -221,6 +225,8 @@ class EdgeShellApp:
         """A leaving shell finished its fade-out and closed itself."""
         if self._leaving.get(shell.name) is shell:
             del self._leaving[shell.name]
+            if shell.name not in self.shells:
+                self.refresh_css()  # a monitor with no shell left drops its CSS
         if self._quitting and not self._leaving and not self.shells:
             self._quit_now()
 
@@ -297,7 +303,9 @@ class EdgeShellApp:
 
     def css(self) -> str:
         return "\n".join(
-            to_css(self.config.theme_for(name), scope_class(name)) for name in sorted(self.shells)
+            to_css(self.config.theme_for(name), scope_class(name))
+            # a shell fading out (or held) is still on screen: its panels keep their CSS
+            for name in sorted({*self.shells, *self._leaving})
         )
 
     def refresh_css(self) -> None:
