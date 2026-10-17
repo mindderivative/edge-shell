@@ -141,7 +141,8 @@ def test_the_mouse_wheel_never_edits_a_row():
     length, changes2, _ = row_for(FORM.edge_panel.field("length"), 300)
     for widget in (
         mode.editor.widget,
-        thickness.editor.widget,
+        thickness.editor.widget,  # a slider's spin button
+        thickness.editor.scale,  # and the slider itself
         length.editor.mode,
         length.editor.number,
     ):
@@ -486,3 +487,73 @@ def test_a_toggle_installs_the_stylesheet(monkeypatch):
     monkeypatch.setattr(fields, "install_css", lambda: calls.append(1))
     fields.BoolEditor(lambda _v: None)
     assert calls == [1]
+
+
+def test_a_bounded_number_is_a_slider_beside_a_spin_with_one_value():
+    queued = []
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
+    editor = row.editor
+    assert isinstance(editor, fields.SliderEditor)
+    assert editor.outer.get_children() == [editor.scale, editor.widget]
+    assert editor.outer.is_ancestor(row)  # the row packs the box of both
+    adjustment = editor.scale.get_adjustment()
+    assert (adjustment.get_lower(), adjustment.get_upper()) == (2.0, 64.0)
+    assert editor.scale.get_value() == editor.widget.get_value() == 10
+    assert not editor.scale.get_draw_value()  # the spin button shows the number
+    assert editor.scale.get_accessible().get_name() == "Thickness"
+    editor.scale.set_value(20)  # the slider moves the spin button
+    assert editor.widget.get_value() == 20
+    editor.widget.set_value(30)  # and the spin button the slider
+    assert editor.scale.get_value() == 30
+    assert queued == [(("theme", "x"), 20, 10), (("theme", "x"), 30, 10)] and changes == []
+
+
+def test_a_slider_drag_is_one_queued_edit_and_a_drag_back_none():
+    """Every whole number on the way is pushed; the view's queue keeps the last one per row,
+    and dragging back to the shown value un-queues it (an inherited value stays inherited)."""
+    from settings.queue import EditQueue
+
+    queue = EditQueue()
+    row = fields.FieldRow(FORM.theme.field("thickness"), ("theme", "t"), id, id, queue.push)
+    row.show_value(FieldValue(10, False, "default"))
+    for value in range(11, 31):
+        row.editor.scale.set_value(value)
+    assert [(e.path, e.value) for e in queue] == [(("theme", "t"), 30)]
+    for value in range(29, 9, -1):
+        row.editor.scale.set_value(value)
+    assert len(queue) == 0
+
+
+def test_a_slider_sends_whole_numbers_and_takes_its_keys():
+    row, changes, _ = row_for(FORM.theme.field("thickness"), 10)
+    scale = row.editor.scale
+    scale.emit("change-value", Gtk.ScrollType.JUMP, 12.6)  # a drag between two values
+    assert scale.get_value() == 13 and changes[-1] == (("theme", "x"), 13)
+    assert type(changes[-1][1]) is int
+    scale.emit("move-slider", Gtk.ScrollType.STEP_FORWARD)  # Right arrow
+    assert changes[-1][1] == 14
+    scale.emit("move-slider", Gtk.ScrollType.END)  # End
+    assert changes[-1][1] == 64
+    scale.emit("move-slider", Gtk.ScrollType.START)  # Home
+    assert changes[-1][1] == 2
+
+
+def test_a_wide_or_open_range_keeps_its_spin_button():
+    for spec in (
+        FORM.edge_panel.field("offset"),
+        FORM.edge_panel.field("depth"),
+        FORM.theme.field("duration_ms"),
+        FORM.corner_panel.field("width"),
+    ):
+        row, _, _ = row_for(spec, 100)
+        assert isinstance(row.editor, fields.IntEditor), spec.key
+        assert row.editor.outer is row.editor.widget
+
+
+def test_an_unset_optional_slider_shows_its_minimum_and_sends_nothing():
+    row, changes, _ = row_for(
+        FieldSpec("font_size", "Font size", "int", minimum=6, maximum=96), None
+    )
+    assert row.editor.scale.get_value() == 6 and not row.unsent()
+    row.flush()
+    assert changes == []

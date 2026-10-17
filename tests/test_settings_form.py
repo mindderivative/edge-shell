@@ -21,6 +21,7 @@ from settings.form import (
     rgba_to_hex,
     section_for,
     split_length,
+    uses_slider,
 )
 from shell.config.models import (
     COLOR_FIELDS,
@@ -453,3 +454,45 @@ def test_widgets_with_one_title_get_distinct_panel_type_labels():
         "Float panel (coming soon)",
     ]
     assert len({c.label for c in choices}) == len(choices)
+
+
+def test_a_bounded_whole_number_with_a_short_range_is_a_slider():
+    form = config_form(WIDGETS)
+    sliders = {
+        (name, f.key)
+        for name, section in (
+            ("theme", form.theme),
+            ("border", form.theme.section("border")),
+            ("shadow", form.theme.section("shadow")),
+            ("handle_style", form.theme.section("handle_style")),
+            ("layout", form.layout),
+            ("edge", form.edge_panel),
+            ("edge.handle", form.edge_panel.section("handle")),
+            ("corner", form.corner_panel),
+        )
+        for f in section.fields
+        if uses_slider(f)
+    }
+    assert sliders == {
+        ("theme", "thickness"),
+        ("theme", "radius"),
+        ("theme", "peek"),
+        ("theme", "hover_zone"),
+        ("border", "width"),
+        ("shadow", "elevation"),
+        ("handle_style", "size"),
+        ("handle_style", "weight"),
+        ("layout", "gap"),
+        ("edge.handle", "size"),
+        ("edge.handle", "weight"),
+    }  # duration 0-5000, offsets, depth, order, lengths and corner sizes keep a spin button
+
+
+def test_the_slider_rule_needs_both_bounds_and_a_short_range():
+    from settings.form import SLIDER_MAX_SPAN, FieldSpec
+
+    assert uses_slider(FieldSpec("a", "A", "int", minimum=0, maximum=SLIDER_MAX_SPAN))
+    assert not uses_slider(FieldSpec("a", "A", "int", minimum=0, maximum=SLIDER_MAX_SPAN + 1))
+    assert not uses_slider(FieldSpec("a", "A", "int", minimum=0))
+    assert not uses_slider(FieldSpec("a", "A", "int", maximum=9))
+    assert not uses_slider(FieldSpec("a", "A", "length", minimum=60, maximum=100))

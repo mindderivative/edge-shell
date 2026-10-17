@@ -88,6 +88,12 @@ MODE_HINTS = {
 }
 KIND_LABELS = {"edge": "Edge", "corner": "Corner", "float": "Float (coming soon)"}
 LEAD_ROWS = ("name", "widget", "panel")  # every panel section starts with these
+# A whole number with both bounds gets a slider (Phil: "If a numeric has a minimum and maximum
+# use sliders instead of number spinners") when its range is at most this wide: on a 160 px
+# slider that is at most 3 values per pixel. Wider ranges (an offset of +-20000, a corner
+# width of 60-4000 px, a duration of 0-5000 ms, a depth of 16-2000 px, an order of 0-1000)
+# keep the spin button, whose arrows step by one.
+SLIDER_MAX_SPAN = 500
 CORNER_ROWS = (*LEAD_ROWS, "corner", "edge", "width", "height", "state")  # a corner panel
 
 
@@ -104,6 +110,14 @@ class FieldSpec:
     disabled: tuple[str, ...] = ()  # choices shown but not selectable ("coming soon")
     required: bool = False  # the entry needs it: no reset button
     max_length: int | None = None  # a text row: the most characters the entry takes
+
+
+def uses_slider(spec: FieldSpec) -> bool:
+    """True when the row of `spec` is a slider: an int with both bounds and a range of at most
+    SLIDER_MAX_SPAN."""
+    if spec.kind != "int" or spec.minimum is None or spec.maximum is None:
+        return False
+    return spec.maximum - spec.minimum <= SLIDER_MAX_SPAN
 
 
 @dataclass(frozen=True)

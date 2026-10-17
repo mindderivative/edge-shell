@@ -23,6 +23,7 @@ from settings.form import (  # noqa: E402
     parse_fonts,
     rgba_to_hex,
     split_length,
+    uses_slider,
 )
 from settings.style import SWITCH_CLASS, install_css  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
@@ -34,6 +35,7 @@ UNBOUNDED = (-100000, 100000)
 FALLBACK_PX = 300  # px when switching a length to px with no px value known (never the 60 min)
 FALLBACK_PERCENT = 50.0
 SOURCE_CHARS = 28  # the width of a row's note (where its value comes from); longer is cut
+SLIDER_WIDTH = 160  # px; with its spin button a slider row stays inside a tab's 640 px
 
 Emit = Callable[[Any], None]
 _UNSHOWN = object()
@@ -73,6 +75,11 @@ class _Editor:
     """The value widget of a row: `widget`, `set(value)` (never emits), `emit` on user edits."""
 
     widget: Gtk.Widget
+
+    @property
+    def outer(self) -> Gtk.Widget:
+        """What the row shows: the value widget itself, or a box around it (a slider)."""
+        return self.widget
 
     def set(self, value: Any) -> None:
         raise NotImplementedError
@@ -144,6 +151,52 @@ class IntEditor(_Editor):
     def set(self, value: int | None) -> None:
         # None (e.g. min_length not set) shows the lowest value; the source says "not set"
         self.widget.set_value(self.widget.get_range()[0] if value is None else value)
+
+
+class SliderEditor(_Editor):
+    """A bounded whole number (settings.form.uses_slider): a slider and, beside it, a spin
+    button for exact typing; both move one Gtk.Adjustment, so they always show the same
+    value and every change is sent once. `widget` is the spin button (typed text, flush and
+    the focus after a rebuild work as for a plain number row); `scale` the slider. Dragging
+    sends each whole number on the way: the view's queue keeps the last one per row and
+    applies it after the pause (settings.queue). The keys of a focused slider work (arrows,
+    Page Up/Down, Home, End); the mouse wheel never edits it (wheel_scrolls_the_page). An
+    unset optional value (a widget's font size) shows the minimum, as a spin row does."""
+
+    def __init__(self, spec: FieldSpec, emit: Emit):
+        low, high = spec.minimum, spec.maximum
+        page = max(1, (high - low) // 10)
+        self.adjustment = Gtk.Adjustment(
+            value=low, lower=low, upper=high, step_increment=1, page_increment=page
+        )
+        self.scale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adjustment, draw_value=False
+        )
+        self.scale.set_round_digits(0)  # a drag moves in whole numbers
+        self.scale.set_size_request(SLIDER_WIDTH, -1)
+        self.scale.get_accessible().set_name(spec.label)
+        self.widget = Gtk.SpinButton(adjustment=self.adjustment, climb_rate=1, digits=0)
+        self.widget.set_numeric(True)
+        strict_spin(self.widget)
+        self._box = Gtk.Box(spacing=6)
+        self._box.pack_start(self.scale, False, False, 0)
+        self._box.pack_start(self.widget, False, False, 0)
+        for widget in (self.scale, self.widget):
+            wheel_scrolls_the_page(widget)
+        self.adjustment.connect("value-changed", lambda a: emit(int(round(a.get_value()))))
+
+    @property
+    def outer(self) -> Gtk.Widget:
+        return self._box
+
+    def commit(self) -> None:
+        commit_spin(self.widget)
+
+    def dirty(self) -> bool:
+        return _spin_dirty(self.widget)
+
+    def set(self, value: int | None) -> None:
+        self.adjustment.set_value(self.adjustment.get_lower() if value is None else value)
 
 
 class BoolEditor(_Editor):
@@ -332,7 +385,7 @@ def make_editor(spec: FieldSpec, emit: Emit) -> _Editor:
     if spec.kind == "color":
         return ColorEditor(emit)
     if spec.kind == "int":
-        return IntEditor(spec, emit)
+        return SliderEditor(spec, emit) if uses_slider(spec) else IntEditor(spec, emit)
     if spec.kind == "bool":
         return BoolEditor(emit)
     if spec.kind in ("enum", "widget"):
@@ -391,7 +444,7 @@ class FieldRow(Gtk.Box):
         self.reset.set_tooltip_text("Remove this key from your config (use the inherited value)")
         self.reset.connect("clicked", lambda *_a: on_reset(path))
         line.pack_start(name, False, False, 0)
-        line.pack_start(self.editor.widget, False, False, 0)
+        line.pack_start(self.editor.outer, False, False, 0)
         line.pack_start(self.source, True, True, 0)
         line.pack_end(self.reset, False, False, 0)
         self.error = Gtk.Label(xalign=0, wrap=True, selectable=True)
