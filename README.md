@@ -33,6 +33,12 @@ alongside Plasma and does not replace it.
 - Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
+- Fades: a monitor's Edge Shell fades in when it is turned on or starts (once it is fully
+  built, so it never blinks or grows into place), fades out when it is turned off or the shell
+  quits (Ctrl+C or SIGTERM), and a full rebuild (a thickness change, for example) crossfades
+  from the old frame to the new one. `[theme] fade_ms` (default 50 ms, 0-500, per monitor too)
+  sets the time; 0 turns it off and gives the old instant behaviour. The settings window has
+  it as the **Fade** slider on the Theme page's General tab.
 - Monitor hot-plug, and per-monitor theme overrides scoped to that monitor.
 
 ## Requirements
@@ -65,7 +71,10 @@ scripts/py main.py --restore-config                        # put back config.tom
 
 `scripts/py` runs the shared venv; override it with `EDGE_SHELL_PYTHON=/path/to/python`.
 Only one instance can run (Fabric names the app `edge-shell`). Quit a backgrounded copy
-with `fg`, then Ctrl+C.
+with `fg`, then Ctrl+C. Ctrl+C (or SIGTERM) fades every monitor out first and quits when the
+fade is done (at most the longest `fade_ms` + 250 ms later); a second Ctrl+C or SIGTERM quits at
+once. The exit status is 130 after Ctrl+C, 143 after SIGTERM. The quit is handled by the main
+loop: if the loop is stuck in a callback, Ctrl+C does nothing, so use Ctrl+\ or `kill -9`.
 
 ## Configure
 
@@ -382,7 +391,7 @@ file.
   (Tab reaches them); the toolbar has the same three. After a Remove the monitor's row is
   selected (and keeps the keyboard focus when the tree had it).
 - **Theme** page, tabs: **General** (colours, fonts, thickness, radius, peek, hover zone,
-  duration; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
+  duration, fade; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
   handle colours and the handle style) and **Layout** (the gap). A **monitor** page has the same
   tabs under a banner that is always shown: "These values override the Theme for HDMI-A-1. A row
   you have not set here shows the Theme's value." A row not set there reads "global theme".
@@ -586,6 +595,29 @@ that need `gi` or Fabric skip themselves there.
 - The "Panels adjusted" notification is not repeated after an unplug and replug that yields
   identical layout warnings.
 - On a dark wallpaper the border and shadow are faint; raise the shadow alpha or elevation.
+- Fades (spec section 21). When it fades: a monitor turned on or started (fade in), a monitor
+  turned off (`shell = "plasma"` or `"none"`: fade out), a full rebuild (a change of
+  `thickness`, `radius`, `peek`, `hover_zone` or `duration_ms`: crossfade), and a quit by
+  Ctrl+C or SIGTERM. What does not fade: a restyle (colours, borders, shadows, handle style,
+  fonts, and `fade_ms` itself, which applies from the next fade), panel adds, removes,
+  rebuilds and state changes, a resolution change (re-laid out in place), an unplugged or
+  replaced (new Gdk monitor) output (closed at once: the output is gone), the failure rebuilds
+  (a shell whose in-place apply or re-layout raised is closed at once, its replacement still
+  fades in), and `--stats` (never fades). What you may see: a monitor appears about half a
+  second after it is turned on or started, not at once: the fade waits for the panels' first
+  re-raise (which re-maps them and would blink) and, if something is stuck, starts after a
+  1000 ms ready timeout anyway. The maximized windows take the new frame size when the frame
+  strips are built, about 0.5 s before the frame fades in (and grow back as a disabled frame
+  starts fading out); that resize is the compositor's and is not faded. The fallback re-raise
+  2 s after the start may still re-map the panels once after the fade (one flicker of handles
+  and content). During a crossfade the old shell's text and fonts take the new theme's CSS at
+  once (its frame keeps the old look until it is gone), and where both shells draw the same
+  shape it dims slightly half-way (two half-transparent frames over each other). A reload
+  during a crossfade finishes the running fade-in and drops the older leaving shell at once;
+  a hot-plug or a quit in the middle of a crossfade drops the old shell at once. Quit: the
+  first signal fades and quits, bounded by the longest `fade_ms` + 250 ms; a second signal
+  quits at once. Ctrl+C and SIGTERM now need the main loop to be running: a loop stuck in a
+  callback ignores them (use Ctrl+\ or `kill -9`).
 
 ## Licence
 

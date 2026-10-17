@@ -189,6 +189,8 @@ shell = "plasma"
   | Change | Reaction |
   | --- | --- |
   | Theme colour, border, shadow or handle style | Regenerate CSS; redraw the canvas (no rebuild) |
+  | Theme `thickness`, `radius`, `peek`, `hover_zone` or `duration_ms` | Rebuild the monitor: the new shell crossfades over the old one (section 21) |
+  | Theme `fade_ms` | Nothing now: the next fade uses it (a restyle, section 21) |
   | Panel `state` | Retarget the tween |
   | Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |
   | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
@@ -196,7 +198,7 @@ shell = "plasma"
   | Panel `panel`, `widget`, `name` or a widget property | Rebuild that panel (section 20) |
   | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
-  | Monitor `shell` mode | Create or destroy that monitor's windows |
+  | Monitor `shell` mode | Create (fade in) or destroy (fade out) that monitor's windows (section 21) |
   | Invalid config | Keep the old config; report the error |
 
 ## 7. Plasma integration
@@ -547,3 +549,82 @@ Spec: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (sections
   widget or kind is one edit that drops the keys the new one does not take.
 
 **Results.** Gate (Phil, live on HDMI-A-1, 2026-10-14): all 13 checklist items, counted by Phil as 21 steps with the eight error cases of item 4 (a-h), passed with no failures: the start state and its four `building panel` lines (each panel built once, the clock at a fixed 320 px); the clock's `format`, quoted text, `font` and `font_size` by hand (one `panel-rebuild` each); a rename by hand; the eight error cases keeping the previous layout with the quoted notification texts; the settings window's panel list, Widget frame and add list; adding panels with free names (`Clock`, `Clock 2`); widget properties from the window; names in the window; switching the widget; Revert all; a hand edit while the window is open; `examples/corner-test.toml`; DP-1 untouched. The deferred-rebuild click fix (panel buttons keep the focus where it is) was not reported as a problem. Not checked live (covered by tests): a widget whose build raises and is not retried until its entry changes, a widget property type the window cannot show refused at registration, the Panel type row and the greyed-out `float` row (no built-in widget supports two panel kinds). Known limits: the duplicate-name error under a renamed row names the later entry's index in its path prefix (the message names both entries); a live theme-font change leaves an existing clock's font fallback until the panel is rebuilt.
+
+## 21. Implemented: shell fade
+
+Plan: `docs/superpowers/plans/2026-10-16-shell-fade.md`. Phil: "make the shell fade-in when
+enabled or requires a full redraw ... On disable have it fade out instead of just disappear
+instantly."
+
+Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
+
+1. **Key.** `[theme] fade_ms` (default 50, 0-500 ms; `[monitors.X.theme] fade_ms` per monitor;
+   0 = no fade, exactly the old behaviour). A change is a restyle: nothing is rebuilt, the next
+   fade uses it. The settings window shows it on the General tab as the **Fade** slider (0-500
+   is within the slider rule's span of 500). `--stats` never fades.
+2. **Mechanism: `Gtk.Widget.set_opacity` on every toplevel of the monitor.** GTK 3.24 paints a
+   toplevel's opacity itself (a group with alpha, since the Wayland visual is the RGBA one),
+   over everything the window draws (the canvas drawing, panel content, handles). Alternatives
+   not taken: drawing the fade into the canvas only (the panels' own content and handles
+   would not fade), CSS `opacity` on the content (the canvas would not fade). Contingency if
+   KWin shows no fade (gate item 3): the opacity on each window's child.
+3. **Built at opacity 0, mapped as before** (not hidden): first configures, first frames,
+   content rebuilds and re-raises all happen invisibly.
+4. **Ready condition.** A monitor fades in when its first re-raise (`RAISE_DELAY_MS`, 500 ms:
+   a re-map that would blink) has run and no "content" measurement (which can rebuild a panel)
+   is pending, checked after each re-raise, each measurement and once after the build. If it
+   is not ready after `READY_TIMEOUT_MS` (1000 ms) it fades in anyway. The 2 s fallback
+   re-raise is not waited for.
+5. **One linear Tween per monitor** on the canvas window's frame clock; its one callback sets
+   every window's opacity in the same frame. A fade still running `FINISH_MARGIN_MS` (300 ms)
+   after its duration (a canvas that gets no frames) is finished at once, with a warning.
+6. **Input follows visibility.** Panels are built without input (`set_input_enabled(False)`),
+   take it from the start of the fade-in, and lose it at the start of a fade-out.
+7. **Fade out.** Turning a monitor off fades it out over its `fade_ms` from the opacity it has,
+   then destroys its windows; the shell is detached (no re-layout, measurement or re-raise)
+   and its strips (the reserved zone) go at once. An unplugged or replaced monitor, and a
+   shell that never became visible, are closed at once.
+8. **Crossfade on a full rebuild** (theme `thickness`, `radius`, `peek`, `hover_zone`,
+   `duration_ms`): the old shell stays on screen, detached and fully shown, until the new
+   shell starts its fade-in; then new 0 -> 1 and old 1 -> 0 over `fade_ms`, and the old one is
+   destroyed. Input moves at that moment. The new windows are mapped later, so they stack
+   above. Known effect: where both shells cover the same shape, the two half-transparent
+   frames dim it slightly half-way.
+9. **No stacking.** At most one leaving shell per monitor: a reload during a crossfade
+   destroys the older leaving shell at once and completes the current fade-in (held fully
+   shown); a shell replaced before it was ever visible is simply closed; a held shell whose
+   successor fails to build fades out on its own, so no shell is held forever. The app keeps
+   leaving shells out of `shells`, so reports, CSS and reloads never see them.
+10. **Quit.** SIGINT and SIGTERM (GLib's Unix signal source; Python's SIGINT handler stays the
+    default so PyGObject installs no quit-without-fade fallback) fade every monitor out and
+    quit when the last fade is done, at the latest the longest `fade_ms` +
+    `QUIT_MARGIN_MS` (250 ms) later. A second signal quits at once. The exit status is 128 +
+    the signal (130, 143). Reloads and hot-plug syncs are ignored while quitting; a leaving
+    shell of a crossfade is dropped at once. Ctrl+C and SIGTERM need the main loop to be
+    running (a callback that never returns blocks them: Ctrl+\ or `kill -9`).
+11. **Not faded.** A restyle, panel adds, removes, rebuilds and state changes, a resolution
+    change (re-laid out in place), failure rebuilds (an in-place apply or a re-layout that
+    raised: the broken shell is closed at once, the new shell still fades in), `--stats`.
+12. **Bookkeeping.** Every window stays registered with Fabric's `Application` until the shell
+    that owns it closes, so a crossfade has two sets of windows.
+13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
+    full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
+    a frame may be dropped with effects on) plus GTK's group for each; blending a translucent
+    layer surface is the compositor's work, as it already is for these ARGB windows.
+
+Code: `shell/fade.py` (`Fade`, pure state machine: waiting, fading-in, shown, fading-out,
+done), `shell/monitors.py` (`MonitorShell`: opacity, input gating, ready check, `detach`,
+`fade_out`), `shell/app.py` (`_leave_shell`, `_fade_away`, `_retire`, `_release_held`, the
+quit path).
+
+Verified headless: the state machine (`tests/test_fade.py`), the build, ready, timeout, input
+and close paths of `MonitorShell` on fake windows and a fake frame clock
+(`tests/test_monitor_fade.py`), the app's hold, crossfade, release and quit rules
+(`tests/test_app_sync.py`). Live only (the gate): what KWin shows: no blink or growth at
+enable, the fade itself, the crossfade, the quit.
+
+Known limits: the monitor appears about 0.5 s after it is turned on; maximized windows resize
+when the strips are built, about 0.5 s before the frame fades in; the 2 s fallback re-raise
+may flicker once after the fade; the crossfade's mid-way dim.
+
+**Results (Phil, live on HDMI-A-1): to be recorded after the gate (plan Task 8).**
