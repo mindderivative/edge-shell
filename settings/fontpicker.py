@@ -113,13 +113,28 @@ class FontPicker:
         self.popover = Gtk.Popover(relative_to=self.button)
         self.popover.add(box)
         self.button.set_popover(self.popover)
-        self.button.connect("toggled", self._toggled)
-        self.button.connect("destroy", lambda _b: self._destroyed_now())
-        self.search.connect("changed", lambda _e: self.list.invalidate_filter())
-        self.search.connect("activate", self._pick_first)
-        self.list.connect(
-            "row-activated", lambda _l, row: self._pick(self.entries[row.get_index()])
+        self._handlers: list[tuple[Gtk.Widget, int]] = []
+        self._connect(self.button, "toggled", self._toggled)
+        self._connect(self.button, "destroy", lambda _b: self._destroyed_now())
+        self._connect(self.search, "changed", lambda _e: self.list.invalidate_filter())
+        self._connect(self.search, "activate", self._pick_first)
+        self._connect(
+            self.list, "row-activated", lambda _l, row: self._pick(self.entries[row.get_index()])
         )
+
+    def _connect(self, widget: Gtk.Widget, signal: str, handler: Callable) -> None:
+        self._handlers.append((widget, widget.connect(signal, handler)))
+
+    def release(self) -> None:
+        """The picker is retired (its row was discarded by a rebuild). Its widgets keep
+        handlers that close over the picker, and GTK holds the list's filter function (a
+        bound method of the picker) in C, where Python's collector cannot see it: left as
+        they are, the picker and all its widgets stay alive for the life of the window."""
+        self._destroyed_now()  # what its "destroy" handler does, as that is disconnected below
+        for widget, handler in self._handlers:
+            widget.disconnect(handler)
+        self._handlers.clear()
+        self.list.set_filter_func(None)
 
     def set(self, value: str | None) -> None:
         """Show `value` (None: the inherited row's label)."""

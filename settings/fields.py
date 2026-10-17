@@ -90,6 +90,10 @@ class _Editor:
     def set(self, value: Any) -> None:
         raise NotImplementedError
 
+    def release(self) -> None:
+        """The row is retired: drop what would keep this editor alive after its widgets are
+        destroyed (a handler on a long-lived GObject, a callback held by GTK)."""
+
     def commit(self) -> None:
         """Send a typed but not yet applied value (the window is closing)."""
 
@@ -194,11 +198,17 @@ class SliderEditor(_Editor):
             wheel_scrolls_the_page(widget)
         self._emit = emit
         self._dragging = False  # the mouse button is down on the slider
-        self.adjustment.connect("value-changed", self._on_value)
+        self._value_handler = self.adjustment.connect("value-changed", self._on_value)
         self.scale.connect("button-press-event", self._press)
         for signal in ("button-release-event", "grab-broken-event", "focus-out-event"):
             self.scale.connect(signal, self._release)
         self.scale.connect("key-press-event", self._key)
+
+    def release(self) -> None:
+        """The adjustment, held by both widgets in C, keeps this editor (its handler) alive."""
+        if self._value_handler:
+            self.adjustment.disconnect(self._value_handler)
+            self._value_handler = 0
 
     def _value(self) -> int:
         return int(round(self.adjustment.get_value()))
@@ -355,6 +365,10 @@ class FontListEditor(_Editor):
         self.widget.pack_start(self.list_box, False, False, 0)
         self.widget.pack_start(self.add_button, False, False, 0)
 
+    def release(self) -> None:
+        for line in self.lines:
+            line.picker.release()
+
     def set(self, value: list[str]) -> None:
         self.fonts = list(value)
         self._sync()
@@ -443,6 +457,9 @@ class FontEditor(_Editor):
             lambda value: emit(UNSET if value is None else value), inherit_label=THEME_FONT
         )
         self.widget = self.picker.button
+
+    def release(self) -> None:
+        self.picker.release()
 
     def set(self, value: str | None) -> None:
         self.picker.set(value)
@@ -705,3 +722,4 @@ class FieldRow(Gtk.Box):
         for the focus-out GTK sends when its entry is unparented. Its queued edits stay in the
         view's queue (they are not the row's)."""
         self._discarding = True
+        self.editor.release()
