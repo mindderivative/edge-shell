@@ -1017,3 +1017,69 @@ def test_a_failing_on_closing_is_logged_and_the_shell_still_closes(build, loop, 
     shell.frames(5)
     assert shell.canvas.destroyed and done == [shell]
     assert "the closing callback of HDMI-A-1 failed" in caplog.text
+
+
+# ---- a strip that fails to build leaves no earlier strip behind ----------------------
+
+
+class FlakyEdges:
+    """FrameEdge stand-in: the `fail_on`-th strip asked for raises, the others are FakeWindows."""
+
+    def __init__(self, fail_on):
+        self.fail_on, self.calls, self.made = fail_on, 0, []
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == self.fail_on:
+            raise RuntimeError("strip broke")
+        strip = FakeWindow(*args, **kwargs)
+        self.made.append(strip)
+        return strip
+
+
+@pytest.fixture
+def flaky(build, make_config, monkeypatch):
+    """flaky(fail_on, **kwargs) -> (shell or None, edges, registered, unregistered, error)."""
+
+    def _flaky(fail_on, **kwargs):
+        edges = FlakyEdges(fail_on)
+        monkeypatch.setattr(mon_mod, "FrameEdge", edges)
+        registered, unregistered = [], []
+        shell = error = None
+        try:
+            shell = mon_mod.MonitorShell(
+                "HDMI-A-1",
+                FakeMonitor(),
+                make_config(monitors=edge(DOCK)),
+                registered.append,
+                unregistered.append,
+                **kwargs,
+            )
+        except RuntimeError as exc:
+            error = exc
+        return shell, edges, registered, unregistered, error
+
+    return _flaky
+
+
+@pytest.mark.parametrize("kwargs", [{"fade_ms": 0}, {"fade_ms": 50, "reserve_now": True}])
+def test_a_strip_failing_in_the_build_releases_the_earlier_strips(flaky, kwargs):
+    shell, edges, registered, unregistered, error = flaky(3, **kwargs)
+    assert shell is None and error is not None and len(edges.made) == 2
+    assert all(s in registered for s in edges.made)  # they were on screen
+    assert registered and all(w.destroyed for w in registered)  # none keeps reserving space
+    assert {id(w) for w in unregistered} == {id(w) for w in registered}
+
+
+def test_a_strip_failing_late_is_logged_and_close_releases_the_earlier_strips(flaky, loop, caplog):
+    shell, edges, registered, unregistered, error = flaky(3, fade_ms=50, reserve_now=False)
+    assert error is None and shell is not None
+    started(shell, loop)
+    loop.fire(100)
+    assert "reserving the edges of HDMI-A-1 failed" in caplog.text
+    assert len(edges.made) == 2 and shell.strips == edges.made  # partial, but tracked
+    assert all(s in shell.windows and s in registered for s in edges.made)
+    shell.close()
+    assert shell.strips == [] and shell.windows == []
+    assert all(w.destroyed for w in registered)  # canvas, panel and both strips
+    assert all(s in unregistered for s in edges.made)
