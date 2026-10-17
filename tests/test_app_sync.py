@@ -16,6 +16,7 @@ class FakeShell:
     applied: list = []
     faded: list = []  # (name, ms) of every fade_out call
     finished: list = []  # every shell finish_fade was called on
+    order: list = []  # "flush"/"close" events, in order
     fail_apply: set = set()
     layout_warnings: list = []
     build_failures: list = []
@@ -36,10 +37,12 @@ class FakeShell:
         on_fade_in=None,
         reserve_now=True,
         on_reserved=None,
+        on_closing=None,
     ):
         self.name = name
         self.reserve_now = reserve_now
         self.on_reserved = on_reserved
+        self.on_closing = on_closing
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
@@ -58,6 +61,7 @@ class FakeShell:
 
     def close(self):
         FakeShell.closed.append(self.name)
+        FakeShell.order.append(f"close {self.name} {id(self)}")
         self.fade_state = "done"
 
     @property
@@ -73,6 +77,7 @@ class FakeShell:
 
     def reserve_pending_now(self):
         self.flushed += 1
+        FakeShell.order.append(f"flush {self.name} {id(self)}")
         self.reserved()  # the real shell builds its strips and reports
 
     def reserved(self):
@@ -104,6 +109,8 @@ class FakeShell:
 
     def faded_out(self):
         """Test helper: the real shell's fade-out reached 0 and it closed itself."""
+        if self.on_closing is not None:
+            self.on_closing(self)  # before its windows go
         self.close()
         self.on_done(self)
 
@@ -122,6 +129,7 @@ def _reset_fake_shell(monkeypatch):
         ("applied", []),
         ("faded", []),
         ("finished", []),
+        ("order", []),
         ("fail_apply", set()),
         ("fail_open", set()),
         ("layout_warnings", []),
@@ -1885,3 +1893,27 @@ def test_a_quit_drops_the_css_of_the_monitor_when_its_fade_ends(renv, timers):
     assert app._leaving == {"HDMI-A-1": shell}
     shell.faded_out()
     assert not scope_in(app)
+
+
+def test_a_fade_out_that_ends_hands_the_pending_zone_to_the_successor_before_closing(renv):
+    """With fade_ms below the zone delay the old fade ends before the successor's strips are
+    due: the successor builds them first, so there is never a moment without a zone."""
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    FakeShell.order.clear()
+    new.fade_in()  # the crossfade starts: the old one fades out, the zone is due in 100 ms
+    old.faded_out()  # a 50 ms fade ends first
+    assert FakeShell.order == [f"flush HDMI-A-1 {id(new)}", f"close HDMI-A-1 {id(old)}"]
+
+
+def test_a_rebuild_right_after_a_fade_in_started_builds_the_held_shells_zone(renv):
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()  # nothing older leaves: the pending zone is still built, not cancelled
+    assert old.flushed == 1 and old.kept_strips is True

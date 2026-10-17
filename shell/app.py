@@ -176,7 +176,8 @@ class EdgeShellApp:
             shell.close()
             return
         shell.finish_fade()  # mid fade-in: held fully shown, never two fades at once
-        self._hand_over(name, shell)  # at most one leaving shell per monitor
+        shell.reserve_pending_now()  # its zone is due: build it, detach would cancel it
+        self._retire(name)  # at most one leaving shell per monitor: an older one goes now
         shell.detach(keep_strips=True)  # held with its zone until its successor has its own
         self._leaving[name] = shell
 
@@ -197,6 +198,14 @@ class EdgeShellApp:
         old = self._leaving.get(shell.name)
         if old is not None:
             old.drop_strips()
+
+    def _closing(self, shell: MonitorShell) -> None:
+        """A leaving shell's fade-out has ended and its windows (and strips) are about to go:
+        the successor builds its own strips now if they are still due (a fade shorter than
+        RESERVE_DELAY_MS), so the zone passes on without a gap."""
+        successor = self.shells.get(shell.name)
+        if successor is not None and successor is not shell:
+            successor.reserve_pending_now()
 
     def _faded_in(self, shell: MonitorShell) -> None:
         """`shell` starts fading in: the shell it replaces (held) fades out with it."""
@@ -273,6 +282,7 @@ class EdgeShellApp:
             on_fade_in=self._faded_in,
             reserve_now=fade_ms <= 0,
             on_reserved=self._reserved,
+            on_closing=self._closing,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)

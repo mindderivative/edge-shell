@@ -918,3 +918,102 @@ def test_a_re_enable_during_a_fade_out_swaps_the_zone_when_the_new_one_has_its_o
     loop.fire(500)
     loop.fire(mon_mod.RESERVE_DELAY_MS)
     assert len(again.strips) == 4 and all(s.destroyed for s in first_strips)
+
+
+def rebuild_probe(loop, monkeypatch, make_config, fade_ms):
+    """Real shells: a rebuild with a maximized window. Returns the live-strip counts seen on
+    every frame while a frame is visible, and the app."""
+    monitor = FakeMonitor()
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: {"HDMI-A-1": monitor})
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+    theme = {"fade_ms": fade_ms}
+    store = Store(make_config(monitors=edge(DOCK), theme=theme))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    old = app.shells["HDMI-A-1"]
+    clock = FakeClock()
+
+    def vsync(*shells):
+        clock.now_us += FRAME_US
+        for shell in shells:
+            if not shell.canvas.destroyed:
+                shell.canvas.ticker.run(clock)
+
+    loop.run_idles()
+    loop.fire(500)
+    loop.fire(mon_mod.RESERVE_DELAY_MS)
+    for _ in range(40):
+        vsync(old)
+    assert old.fade_state == "shown" and len(old.strips) == 4
+    store.pending = make_config(monitors=edge(DOCK), theme={**theme, "thickness": 12})
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    loop.run_idles()
+    loop.fire(500)  # the new frame starts to appear, the old one fades out
+    seen, fired = [], False
+    for frame in range(60):
+        vsync(new, old)
+        if fade_ms > mon_mod.RESERVE_DELAY_MS and frame == 6 and not fired:
+            loop.fire(mon_mod.RESERVE_DELAY_MS)  # its own timer, about 100 ms in
+            fired = True
+        live = [s for sh in (old, new) for s in sh.strips if not s.destroyed]
+        seen.append(len(live))
+        if app._leaving == {} and new.fade_state == "shown":
+            break
+    return seen, app, old, new
+
+
+@pytest.mark.parametrize("fade_ms", [50, 80, 100, 200])
+def test_a_rebuild_never_leaves_the_zone_empty_whatever_the_fade_length(
+    build, loop, monkeypatch, make_config, fade_ms
+):
+    seen, app, old, new = rebuild_probe(loop, monkeypatch, make_config, fade_ms)
+    assert seen and set(seen) == {4}, seen  # one full set on every frame, never none, never two
+    assert app._leaving == {} and old.strips == [] and len(new.strips) == 4
+    assert mon_mod.RESERVE_DELAY_MS not in loop.delays()  # the timer was consumed or fired
+
+
+def test_a_rebuild_within_100_ms_of_a_fresh_enable_keeps_the_held_frames_zone(
+    build, loop, monkeypatch, make_config
+):
+    monitor = FakeMonitor()
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: {"HDMI-A-1": monitor})
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+    store = Store(make_config(monitors=edge(DOCK)))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    first = app.shells["HDMI-A-1"]
+    loop.run_idles()
+    loop.fire(500)  # its frame starts to appear; its zone is due in 100 ms
+    assert first.strips == []
+    store.pending = make_config(monitors=edge(DOCK), theme={"thickness": 12})
+    app.reload()  # the rebuild comes first: the held frame must have its zone
+    assert app._leaving == {"HDMI-A-1": first} and len(first.strips) == 4
+    assert not any(s.destroyed for s in first.strips)
+
+
+def test_on_closing_runs_once_when_the_fade_out_ends_before_the_windows_go(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    seen = []
+    shell._on_closing = lambda s: seen.append(([x.destroyed for x in s.strips], s.canvas.destroyed))
+    shell.fade_out(50, lambda _s: None)
+    shell.frames(3)
+    assert seen == []  # not while the frame is still there
+    shell.frames(2)
+    assert seen == [([False] * 4, False)] and shell.canvas.destroyed
+
+
+def test_a_failing_on_closing_is_logged_and_the_shell_still_closes(build, loop, caplog):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+
+    def boom(_shell):
+        raise RuntimeError("callback failed")
+
+    shell._on_closing = boom
+    done = []
+    shell.fade_out(50, done.append)
+    shell.frames(5)
+    assert shell.canvas.destroyed and done == [shell]
+    assert "the closing callback of HDMI-A-1 failed" in caplog.text

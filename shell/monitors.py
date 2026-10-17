@@ -134,6 +134,7 @@ class MonitorShell:
         on_fade_in: Callable[[MonitorShell], None] | None = None,
         reserve_now: bool = True,
         on_reserved: Callable[[MonitorShell], None] | None = None,
+        on_closing: Callable[[MonitorShell], None] | None = None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
@@ -148,6 +149,8 @@ class MonitorShell:
         `reserve_now` False (only with a fade): the 4 zone strips are not built with the shell
         but RESERVE_DELAY_MS after the fade-in starts (an enable, a startup, a hot-plug, a
         rebuild's successor; the maximized windows shrink after the frame appears), and
+        `on_closing(shell)` is called when a fade-out has ended, just before the windows are
+        closed (the app lets the successor build its due strips first), and
         `on_reserved(shell)` is called when they exist (the app drops the strips of the shell
         this one replaces). True: built at once. Without a fade they are always built at
         once."""
@@ -191,6 +194,7 @@ class MonitorShell:
         self._reserve_now = reserve_now or fade_ms <= 0
         self._reserve_id = 0  # pending late build of the strips
         self._on_reserved = on_reserved or (lambda _shell: None)
+        self._on_closing = on_closing or (lambda _shell: None)
         self._on_fade_in = on_fade_in or (lambda _shell: None)
         self._fade: Fade | None = None  # made in _build, right after the canvas
         self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
@@ -620,6 +624,10 @@ class MonitorShell:
         self._fade.fade_out(duration_ms, lambda: self._faded_out(on_done))
 
     def _faded_out(self, on_done: Callable[[MonitorShell], None]) -> None:
+        try:
+            self._on_closing(self)  # its successor takes over the zone before the windows go
+        except Exception:
+            log.exception("the closing callback of %s failed", self.name)
         try:
             self.close()
         except Exception:  # in a frame-clock tick: never raise into GTK
