@@ -538,7 +538,10 @@ class MonitorShell:
             return
         self.detach()
         for panel in self.live_panels():
-            panel.set_input_enabled(False)
+            try:
+                panel.set_input_enabled(False)
+            except Exception:  # the fade-out must start whatever one panel does
+                log.exception("could not disable the input of a panel on %s", self.name)
         self._fade.fade_out(duration_ms, lambda: self._faded_out(on_done))
 
     def _faded_out(self, on_done: Callable[[MonitorShell], None]) -> None:

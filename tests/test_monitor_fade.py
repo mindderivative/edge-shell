@@ -303,6 +303,22 @@ def test_one_panel_failing_its_input_does_not_leave_the_others_without_input(bui
     assert len(shell.faded) == 1 and "input" in caplog.text  # on_fade_in still ran
 
 
+def test_a_panel_that_cannot_drop_its_input_does_not_stop_the_fade_out(build, loop, caplog):
+    shell = build(edge(DOCK, CLOCK))
+    shown(shell, loop)
+
+    def gone(_enabled):
+        raise RuntimeError("panel destroyed")
+
+    shell.panels[0].set_input_enabled = gone
+    done = []
+    shell.fade_out(50, done.append)
+    assert shell.panels[1].inputs[-1] is False and "input" in caplog.text  # the others dropped
+    assert shell.fade_state == "fading-out" and shell.strips == []
+    shell.frames(5)
+    assert shell.canvas.destroyed and done == [shell] and shell.fade_state == "done"
+
+
 def test_a_build_that_fails_after_the_canvas_leaves_no_fade_behind(build, loop, monkeypatch):
     def bad_strip(*_args, **_kwargs):
         raise RuntimeError("strip failed")

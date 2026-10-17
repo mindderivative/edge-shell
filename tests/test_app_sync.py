@@ -1309,3 +1309,106 @@ def test_a_rebuild_that_keeps_the_windows_closes_the_old_shell_at_once(renv):
     app.reload()  # a structural change: rebuilt from the new config
     assert FakeShell.faded == [] and FakeShell.closed == ["HDMI-A-1"] and app._leaving == {}
     assert "HDMI-A-1" in app.shells
+
+
+# ---- the quit and the leaving shells: guards (spec 21) ---------------------------------
+
+
+def two_monitors(env, make_config, first=None, second=None):
+    app, mapping = env
+    app.store.config = make_config(
+        monitors={
+            "HDMI-A-1": {"shell": "edge", "theme": first or {}},
+            "HDMI-A-2": {"shell": "edge", "theme": second or {}},
+        }
+    )
+    mapping.update({"HDMI-A-1": object(), "HDMI-A-2": object()})
+    app.sync_monitors()
+    for shell in app.shells.values():
+        shell.fade_in()
+    return app
+
+
+def test_the_quit_waits_for_the_longest_fade_plus_the_margin(env, make_config, timers):
+    app = two_monitors(env, make_config, {"fade_ms": 50}, {"fade_ms": 300})
+    app.app = QuitRecorder()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert [ms for ms, _ in timers.values()] == [300 + app_mod.QUIT_MARGIN_MS]
+    assert app_mod.QUIT_MARGIN_MS == 250
+
+
+def test_a_failing_fade_out_at_quit_still_fades_the_others_and_quits_after_the_bound(
+    env, make_config, timers, caplog
+):
+    app = two_monitors(env, make_config)
+    app.app = QuitRecorder()
+
+    def broken(_ms, _on_done):
+        raise RuntimeError("cannot fade")
+
+    app.shells["HDMI-A-1"].fade_out = broken
+    app._on_quit_signal(app_mod.signal.SIGTERM)
+    assert (
+        FakeShell.faded == [("HDMI-A-2", 50)]
+        and "fading out HDMI-A-1 for the quit failed" in caplog.text
+    )
+    assert app.app.quits == 0
+    ((_, fn),) = timers.values()
+    assert fn() is False
+    assert app.app.quits == 1 and app._exit_code == 143
+
+
+def test_a_leaving_shell_that_cannot_close_is_logged_and_does_not_stop_the_next(renv, caplog):
+    app, store, _, _, make_config = renv
+    first = app.shells["HDMI-A-1"]
+    first.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert app._leaving == {"HDMI-A-1": first}
+
+    def broken():
+        raise RuntimeError("cannot close")
+
+    first.close = broken
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()
+    second = app.shells["HDMI-A-1"]
+    second.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()  # retires the first, whose close raises
+    assert "closing the leaving shell of HDMI-A-1 failed" in caplog.text
+    assert app._leaving == {"HDMI-A-1": second} and second.fade_state == "fading-out"
+
+
+def test_a_monitor_replaced_while_its_older_shell_leaves_closes_both_at_once(renv):
+    app, store, _, mapping, make_config = renv
+    first = app.shells["HDMI-A-1"]
+    first.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()  # on again, while the first still fades
+    second = app.shells["HDMI-A-1"]
+    assert app._leaving == {"HDMI-A-1": first} and first.fade_state == "fading-out"
+    mapping["HDMI-A-1"] = object()  # a new Gdk monitor: the second is closed now
+    app.sync_monitors()
+    assert first.fade_state == "done" and second.fade_state == "done"
+    assert app._leaving == {} and FakeShell.closed.count("HDMI-A-1") == 2
+
+
+def test_a_monitor_turned_off_just_before_the_quit_is_waited_for(env, make_config, timers):
+    app = two_monitors(env, make_config)
+    app.store.config = make_config(
+        monitors={
+            "HDMI-A-1": {"shell": "plasma", "theme": {"fade_ms": 300}},
+            "HDMI-A-2": {"shell": "edge"},
+        }
+    )
+    app.sync_monitors()  # HDMI-A-1 is off: fading out, only in _leaving
+    leaving = app._leaving["HDMI-A-1"]
+    assert "HDMI-A-1" not in app.shells and leaving.fade_state == "fading-out"
+    app.app = QuitRecorder()
+    app._on_quit_signal(app_mod.signal.SIGINT)
+    assert [ms for ms, _ in timers.values()] == [300 + app_mod.QUIT_MARGIN_MS]
+    leaving.faded_out()
+    assert app.app.quits == 0 and "HDMI-A-2" in app._leaving  # still waiting for the other
