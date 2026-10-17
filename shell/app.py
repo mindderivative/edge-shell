@@ -175,10 +175,28 @@ class EdgeShellApp:
             # never visible: closed now; a shell it was replacing stays held for the next one
             shell.close()
             return
-        self._retire(name)  # at most one leaving shell per monitor: an older one goes now
         shell.finish_fade()  # mid fade-in: held fully shown, never two fades at once
-        shell.detach()
+        self._hand_over(name, shell)  # at most one leaving shell per monitor
+        shell.detach(keep_strips=True)  # held with its zone until its successor has its own
         self._leaving[name] = shell
+
+    def _hand_over(self, name: str, shell: MonitorShell) -> None:
+        """An older leaving shell of `name` is about to be closed for `shell`, which is leaving
+        too: if `shell` has not built its strips yet (its zone is due), build them first, so the
+        zone passes from the older one to this one without a gap."""
+        if name in self._leaving:
+            shell.reserve_pending_now()
+        self._retire(name)
+
+    def _reserved(self, shell: MonitorShell) -> None:
+        """`shell` (current) has built its zone strips: the shell it replaces, held or fading
+        out and still keeping its own, drops them in the same call. New set first, then the old
+        one; no frame is drawn between, and the edges are never reserved twice for longer."""
+        if self.shells.get(shell.name) is not shell:
+            return
+        old = self._leaving.get(shell.name)
+        if old is not None:
+            old.drop_strips()
 
     def _faded_in(self, shell: MonitorShell) -> None:
         """`shell` starts fading in: the shell it replaces (held) fades out with it."""
@@ -195,10 +213,6 @@ class EdgeShellApp:
             if only is not None and name != only:
                 continue
             if name not in self.shells and not shell.fading_out:
-                # held shells have no strips (the successor was to reserve the zone): it is
-                # not coming, so the shell keeps the zone until it has faded out
-                if self._fade_ms(name) > 0:
-                    shell.reserve_again()
                 shell.fade_out(self._fade_ms(name), self._gone)
 
     def _fade_away(self, name: str, shell: MonitorShell) -> None:
@@ -208,7 +222,7 @@ class EdgeShellApp:
             shell.close()
             self._release_held(name)  # only this monitor's: another may be waiting on a successor
             return
-        self._retire(name)  # at most one leaving shell per monitor: an older one goes now
+        self._hand_over(name, shell)  # at most one leaving shell per monitor
         self._leaving[name] = shell
         shell.fade_out(self._fade_ms(name), self._gone)
 
@@ -243,17 +257,6 @@ class EdgeShellApp:
         self._layout_reported.pop(name, None)
         self._failures_reported.pop(name, None)
 
-    def _reserves_now(self, name: str, fade_ms: int) -> bool:
-        """Whether a shell opened now builds its zone strips at once. Without a fade: yes. A
-        rebuild's successor, whose predecessor is HELD (detached, its strips already
-        destroyed): yes, the zone stays continuous. Otherwise (a fresh enable, a startup, a
-        hot-plug, or a predecessor still fading out and keeping its strips): 50 ms after its
-        own fade-in starts, so two sets of strips never stack their zones for long."""
-        if fade_ms <= 0:
-            return True
-        old = self._leaving.get(name)
-        return old is not None and not old.fading_out
-
     def _open_shell(self, name: str, monitor) -> None:
         log.info("opening Edge Shell on %s", name)
         fade_ms = self._fade_ms(name)
@@ -268,7 +271,8 @@ class EdgeShellApp:
             on_settings=self.open_settings,
             fade_ms=fade_ms,
             on_fade_in=self._faded_in,
-            reserve_now=self._reserves_now(name, fade_ms),
+            reserve_now=fade_ms <= 0,
+            on_reserved=self._reserved,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)

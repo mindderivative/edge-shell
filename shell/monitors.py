@@ -50,12 +50,12 @@ RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
 # A resolution change arrives as several notify::geometry signals; re-layout once it settles.
 RELAYOUT_DELAY_MS = 250
-# A fresh enable (no predecessor, or one still fading out) builds the zone strips this long
-# after its fade-in starts, not
-# with the shell: the strips make a maximized window shrink, which must not happen before the
-# frame is seen (Phil's gate finding 4; building them with the shell shrank it ~0.5 s early, the
-# wait for the first re-raise). The window resizes a beat after the frame starts to appear.
-RESERVE_DELAY_MS = 50
+# With a fade, every shell builds its zone strips this long after its fade-in starts, not with
+# the shell: the strips make a maximized window shrink, which must not happen before the frame
+# is seen (Phil's gate findings 4 and 3 of the re-check: building them with the shell shrank the
+# window ~0.5 s early; 50 ms was still too early). A rebuild's successor does the same: the
+# held old shell keeps its own strips until the successor has built its set (on_reserved).
+RESERVE_DELAY_MS = 100
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
@@ -133,6 +133,7 @@ class MonitorShell:
         fade_ms: int = 0,
         on_fade_in: Callable[[MonitorShell], None] | None = None,
         reserve_now: bool = True,
+        on_reserved: Callable[[MonitorShell], None] | None = None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
@@ -145,10 +146,11 @@ class MonitorShell:
         the start of the fade, and `on_fade_in(shell)` is called. 0: no fade (as before).
 
         `reserve_now` False (only with a fade): the 4 zone strips are not built with the shell
-        but RESERVE_DELAY_MS after the fade-in starts (a fresh enable, a startup, a hot-plug;
-        the maximized windows shrink after the frame appears). True: built at once, as a
-        rebuild's successor does (the held old shell already destroyed its own strips, so the
-        zone stays continuous). Without a fade they are always built at once."""
+        but RESERVE_DELAY_MS after the fade-in starts (an enable, a startup, a hot-plug, a
+        rebuild's successor; the maximized windows shrink after the frame appears), and
+        `on_reserved(shell)` is called when they exist (the app drops the strips of the shell
+        this one replaces). True: built at once. Without a fade they are always built at
+        once."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
@@ -188,6 +190,7 @@ class MonitorShell:
         self._fade_ms = fade_ms
         self._reserve_now = reserve_now or fade_ms <= 0
         self._reserve_id = 0  # pending late build of the strips
+        self._on_reserved = on_reserved or (lambda _shell: None)
         self._on_fade_in = on_fade_in or (lambda _shell: None)
         self._fade: Fade | None = None  # made in _build, right after the canvas
         self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
@@ -240,22 +243,35 @@ class MonitorShell:
         self._reserve_id = 0
         if self._closed or self._detached or self.strips:
             return False
-        try:
-            self._build_strips(self._theme)
-        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
-            log.exception("reserving the edges of %s failed", self.name)
+        self._reserve_built()  # a GLib callback: never raises into the main loop (decision 11)
         return False
 
-    def reserve_again(self) -> None:
-        """A held shell (detached at a rebuild, its strips destroyed) that loses its successor
-        is about to fade out: give it its zone back, so a maximized window does not grow under
-        the fading frame. Built from the current theme; nothing if closed or it has strips."""
-        if self._closed or self.strips:
-            return
+    def reserve_pending_now(self) -> None:
+        """The late build of the strips is due but not yet run, and the shell is about to leave
+        (a second rebuild replaces it before its zone came): build it now, so the zone the
+        older leaving shell is about to lose is handed to this one. Nothing otherwise."""
+        if self._reserve_id and not self._closed:
+            GLib.source_remove(self._reserve_id)
+            self._reserve_id = 0
+            self._reserve_built()
+
+    def _reserve_built(self) -> None:
+        """Build the strips and report (the body of _reserve, without its guards)."""
         try:
             self._build_strips(self._theme)
-        except Exception:  # the release path must go on to the fade-out
+        except Exception:
             log.exception("reserving the edges of %s failed", self.name)
+            return
+        try:
+            self._on_reserved(self)
+        except Exception:
+            log.exception("the reserve callback of %s failed", self.name)
+
+    def drop_strips(self) -> None:
+        """Destroy the zone strips now (the successor's set exists)."""
+        for strip in self.strips:
+            self._destroy(strip)
+        self.strips = []
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -564,13 +580,15 @@ class MonitorShell:
         """Stop following the config and the monitor: the shell is leaving (fade_out, or a
         rebuild replaces it). Pending measurements, re-layouts and readiness checks are
         dropped, re-raises do nothing (a re-map would blink), the monitor's geometry is no
-        longer watched, and the zone strips are destroyed now, so the edges are reserved by
-        the successor's strips alone (never twice). Everything else stays on screen, as it
-        is, until fade_out or close. Once only.
+        longer watched, and a pending late build of the strips is cancelled. Everything else
+        stays on screen, as it is, until fade_out or close. Once only.
 
-        `keep_strips` (fade_out, a leaving shell with no successor): the strips stay, and are
-        closed with the other windows, so a maximized window grows only when the frame is
-        gone (it would show its square corners through the fading frame's rounded ones)."""
+        The zone strips are destroyed now unless `keep_strips` (what fade_out and a rebuild's
+        hold pass): they stay and are closed with the other windows, so a maximized window
+        grows only when the frame is gone (it would show its square corners through the fading
+        frame's rounded ones), and a held shell reserves the zone until its successor has built
+        its own strips (the app then calls drop_strips: never two sets for longer than that
+        call)."""
         if self._detached or self._closed:
             return
         self._detached = True

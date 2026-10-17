@@ -247,12 +247,7 @@ def check(app, w, fa, where):
         assert not s._closed, f"{where}: closed shell still in _leaving"
         assert s._detached, f"{where}: leaving shell not detached"
         assert s.fade_state in ("shown", "fading-out"), (where, s.fade_state)
-        if s.fade_state == "fading-out" and name not in app.shells and not s.strips:
-            # no successor reserves its zone: a shell that fades out alone keeps its own,
-            # unless it was disabled before its late strips were ever due
-            assert s._reserve_now is False, f"{where}: {name} fades out without a zone"
         if s.fade_state == "shown":  # held: must have an invisible successor
-            assert s.strips == [], f"{where}: held shell keeps strips (stacked zones)"
             succ = app.shells.get(name)
             assert succ is not None and succ.fade_state == "waiting", (
                 f"{where}: held shell of {name} with successor "
@@ -268,6 +263,9 @@ def check(app, w, fa, where):
         assert len(ss) <= 2, f"{where}: {len(ss)} live shells on {name}"
         assert sum(s.fade_state == "fading-in" for s in ss) <= 1
         assert sum(s.fade_state == "fading-out" for s in ss) <= 1
+        # one zone per monitor: a held or fading shell keeps its strips until its successor
+        # has built its own (handed over in one call), so the sets never stack
+        assert sum(len(s.strips) for s in ss) <= 4, f"{where}: stacked zone strips on {name}"
     livewins = [win for s in live for win in s.windows]
     assert len({id(x) for x in livewins}) == len(livewins)
     for x in ALL_WINDOWS:
