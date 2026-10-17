@@ -621,7 +621,12 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
     partly opaque and its square corners showed through the frame's rounded inner corners).
     Only a rebuild's `detach()` destroys them at once. The successor builds them at once only when
     its predecessor is held (detached, strips already destroyed, not fading out;
-    `EdgeShellApp._reserves_now`). A shell enabled again while the previous one is still fading
+    `EdgeShellApp._reserves_now`). A held shell that loses its successor (turned off while the
+    successor waited, a quit, a failed rebuild) gets its strips back (`reserve_again`, called by
+    `_release_held`) before it fades out, so the zone is kept until the end. Known, accepted
+    limits: the error-path rebuilds (`_relayout_failed`, a failed in-place apply) open their
+    shell without a held predecessor, so they reserve late (a maximized window grows, then
+    shrinks about 0.55 s later); a late strip that fails to build is logged, not retried. A shell enabled again while the previous one is still fading
     out, and keeping its strips, builds its own late like any fresh enable, so two sets never
     stack their zones for long.
 13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
@@ -646,12 +651,14 @@ the crossfade's mid-way dim. (The 2 s fallback re-raise was expected to flicker 
 fade; the gate saw none.) Open question 6 (the early shrink) is answered by decision 12.
 
 **Results (Phil, live on HDMI-A-1, DP-1 untouched, 2026-10-17): the gate (plan Task 7, items 1-12)
-passed with two findings.** No blink, no flicker on the fallback re-raise, the crossfade passed,
+items 1, 2 and 5-12 passed; items 3 and 4 passed with findings.** No blink, no flicker on the fallback re-raise, the crossfade passed,
 the quit statuses were 130 and 143. Finding 3: on a disable (Enable unticked) at Fade 300 the
 frame's rounded inner corners reverted instantly to 90 degrees (not on an enable nor on a
 rebuild): the strips were destroyed at the start of the fade-out, a maximized window grew while
 the frame was still partly opaque and its square corners showed through. Finding 4: on an
 enable the strips came with the build, so a maximized window shrank about 0.5 s before the
-frame faded in; Phil wants the frame to appear and the window to resize 50 ms later. Both fixed
-in the fix commit (decision 12): the strips are kept until a fade-out ends and built 50 ms after
-a fade-in starts. Items 3 and 4 are to be re-checked by Phil after the fix.
+frame faded in; Phil wants the frame to appear and the window to resize 50 ms later. Fixed
+in f61d49a (decision 12: the strips are kept until a fade-out ends and built 50 ms after a
+fade-in starts), 4e8c947 (a shell opened while the previous one fades out reserves late) and
+8515e3b (a held shell whose successor is gone keeps its zone until it has faded out). Phil's
+re-check of items 3 and 4 is pending.

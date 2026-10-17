@@ -50,7 +50,8 @@ RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
 # A resolution change arrives as several notify::geometry signals; re-layout once it settles.
 RELAYOUT_DELAY_MS = 250
-# A fresh enable (no predecessor) builds the zone strips this long after its fade-in starts, not
+# A fresh enable (no predecessor, or one still fading out) builds the zone strips this long
+# after its fade-in starts, not
 # with the shell: the strips make a maximized window shrink, which must not happen before the
 # frame is seen (Phil's gate finding 4; building them with the shell shrank it ~0.5 s early, the
 # wait for the first re-raise). The window resizes a beat after the frame starts to appear.

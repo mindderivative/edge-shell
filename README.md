@@ -613,14 +613,18 @@ that need `gi` or Fabric skip themselves there.
   gone by then, so the window's square corners never show through it); a rebuild keeps the
   zone continuous (the successor builds its strips at once, the held old shell destroys its own
   at the swap, so a maximized window does not bounce); a monitor turned on again while the
-  previous frame is still fading out builds its strips late like any enable, so the two sets
-  never stack their zones. That resize is the compositor's and is
+  previous frame is still fading out builds its strips late like any enable (the two sets may
+  overlap for up to the rest of that fade, not longer); a held old shell whose successor never
+  appears (turned off meanwhile, a quit, a failed rebuild) gets its strips back before it
+  fades out. That resize is the compositor's and is
   not faded. The fallback re-raise
   2 s after the start may still re-map the panels once after the fade (the live gate saw no
-  flicker from it). The fade gate (Phil, HDMI-A-1) passed: no blink, no flicker on the fallback
-  re-raise, the crossfade, the quit statuses 130 and 143; it found two things (the frame's
+  flicker from it). The fade gate (Phil, HDMI-A-1): items 1, 2 and 5-12 passed (no blink, no flicker on the
+  fallback re-raise, the crossfade, the quit statuses 130 and 143); items 3 and 4 passed with
+  findings (the frame's
   rounded inner corners snapping square at the start of a disable, and the window shrinking
-  about 0.5 s before the frame appeared on an enable), both fixed as above. During a crossfade the old shell's text and fonts take the new theme's CSS at
+  about 0.5 s before the frame appeared on an enable), fixed as above (commits f61d49a, 4e8c947 and 8515e3b); Phil's re-check of items 3 and 4 is
+  pending. During a crossfade the old shell's text and fonts take the new theme's CSS at
   once (its frame keeps the old look until it is gone), and where both shells draw the same
   shape it dims slightly half-way (two half-transparent frames over each other). A reload
   during a crossfade finishes the running fade-in and drops the older leaving shell at once;
