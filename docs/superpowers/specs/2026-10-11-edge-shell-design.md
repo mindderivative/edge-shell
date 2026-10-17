@@ -567,7 +567,7 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
    over everything the window draws (the canvas drawing, panel content, handles). Alternatives
    not taken: drawing the fade into the canvas only (the panels' own content and handles
    would not fade), CSS `opacity` on the content (the canvas would not fade). Contingency if
-   KWin shows no fade (gate item 3): the opacity on each window's child.
+   KWin shows no fade (gate item 2): the opacity on each window's child.
 3. **Built at opacity 0, mapped as before** (not hidden): first configures, first frames,
    content rebuilds and re-raises all happen invisibly.
 4. **Ready condition.** A monitor fades in when its first re-raise (`RAISE_DELAY_MS`, 500 ms:
@@ -606,7 +606,9 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
     change (re-laid out in place), failure rebuilds (an in-place apply or a re-layout that
     raised: the broken shell is closed at once, the new shell still fades in), `--stats`.
 12. **Bookkeeping.** Every window stays registered with Fabric's `Application` until the shell
-    that owns it closes, so a crossfade has two sets of windows.
+    that owns it closes, so a crossfade has two sets of windows; the zone strips are the
+    exception: they are unregistered and destroyed at `detach()` (the shell leaving), not when
+    the shell closes.
 13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
     full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
     a frame may be dropped with effects on) plus GTK's group for each; blending a translucent

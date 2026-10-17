@@ -33,8 +33,9 @@ alongside Plasma and does not replace it.
 - Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
-- Fades: a monitor's Edge Shell fades in when it is turned on or starts (once it is fully
-  built, so it never blinks or grows into place), fades out when it is turned off or the shell
+- Fades: a monitor's Edge Shell fades in when it is turned on or starts (it is built hidden and
+  fades in once ready; whether the panels trail the frame by a frame or two is for the live
+  gate to decide), fades out when it is turned off or the shell
   quits (Ctrl+C or SIGTERM), and a full rebuild (a thickness change, for example) crossfades
   from the old frame to the new one. `[theme] fade_ms` (default 50 ms, 0-500, per monitor too)
   sets the time; 0 turns it off and gives the old instant behaviour. The settings window has
@@ -614,7 +615,9 @@ that need `gi` or Fabric skip themselves there.
   once (its frame keeps the old look until it is gone), and where both shells draw the same
   shape it dims slightly half-way (two half-transparent frames over each other). A reload
   during a crossfade finishes the running fade-in and drops the older leaving shell at once;
-  a hot-plug or a quit in the middle of a crossfade drops the old shell at once. Quit: the
+  an unplug or replacement of that monitor in the middle of a crossfade drops its old shell
+  at once (a quit in the middle of a crossfade also closes the fading old shell at once and fades the
+  new one out). Quit: the
   first signal fades and quits, bounded by the longest `fade_ms` + 250 ms; a second signal
   quits at once. Ctrl+C and SIGTERM now need the main loop to be running: a loop stuck in a
   callback ignores them (use Ctrl+\ or `kill -9`).
