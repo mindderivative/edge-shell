@@ -407,8 +407,9 @@ file.
     a spin button beside it for typing an exact value; both show the same number. These are
     Theme: thickness, radius, peek, hover zone (General), border width, shadow elevation,
     handle size and weight; Layout: gap; a panel's Handle tab: size and weight; and a widget's
-    font size (the clock, 6-96). A focused slider takes the arrow keys (1), Page Up/Down
-    (a tenth of the range), Home and End. The wider ranges keep a spin button: duration
+    font size (the clock, 6-96). A focused slider takes the arrow keys (1), Page Up (+ a tenth of the
+    range) and Page Down (- a tenth), Home and End. Dragging a slider writes once, when you
+    release the mouse button (the number beside it follows the drag). The wider ranges keep a spin button: duration
     (0-5000 ms), a panel's offset, order, depth, minimum and maximum length and handle offset,
     a corner panel's width and height. An unset optional number (the font size) shows the
     slider's minimum and its note says where the value comes from.
@@ -441,8 +442,8 @@ file.
     not set; choosing it removes the key (the theme's font is used again), choosing a family
     writes `font`.
 - Changes apply at once; the running shell reloads them like a hand edit. Spin buttons and
-  sliders wait 0.4 s after the last change of any of them (a drag writes once, after you
-  stop), and one queue applies every change in the order you made it: per setting only the
+  sliders wait 0.4 s after the last change of any of them (a mouse drag of a slider writes once,
+  when you release the button), and one queue applies every change in the order you made it: per setting only the
   last value counts, and a value changed and changed back is not written at all. Anything
   still waiting is applied before a panel is added, moved or removed, before Undo, Save or
   leaving the config (New, Open, Close, Exit), and before Detect monitors; Revert all drops
@@ -520,9 +521,10 @@ that need `gi` or Fabric skip themselves there.
   no right-click menu; Remove (button or Delete) selects the monitor's row, not a neighbouring
   panel; a panel's Move and Remove buttons show on the selected row only (not on hover); the
   mode checkboxes always write `shell` (no reset to the default); two spin buttons changed
-  within 0.4 s are written together after the last change; at narrow widths the tabs scroll
-  sideways; a right-click on a handle opens the window but not yet on that panel's page
-  (follow-up).
+  within 0.4 s are written together after the last change; at the narrowest width a horizontal
+  scrollbar appears and the Reset buttons are reached by scrolling (at the default 860 px
+  nothing scrolls sideways); a right-click on a handle opens the window but not yet on that
+  panel's page (follow-up).
 - Settings window, inputs: the dropdown fix is a GTK quirk workaround (a combo with a wrap
   width of 1 is anchored below its row); if a dropdown still opens one row high on some setup,
   the planned fallback is a popover list like the font picker's. A dropdown's list may be a
