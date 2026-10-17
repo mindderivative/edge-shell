@@ -47,6 +47,7 @@ class FakeShell:
         self.fade_state = "waiting" if fade_ms > 0 else "shown"  # as MonitorShell
         self.on_done = None
         self.detached = False
+        self.reserved_again = 0
         if name in FakeShell.fail_open:
             raise RuntimeError("cannot build")
         FakeShell.opened.append(name)
@@ -61,6 +62,10 @@ class FakeShell:
 
     def detach(self):
         self.detached = True
+
+    def reserve_again(self):
+        """MonitorShell.reserve_again: a held shell gets its zone strips back."""
+        self.reserved_again += 1
 
     def finish_fade(self):
         FakeShell.finished.append(self)
@@ -1453,6 +1458,7 @@ def test_a_rebuild_holds_the_old_shell_until_the_new_one_fades_in(renv):
     assert app._leaving == {"HDMI-A-1": old} and new.on_fade_in == app._faded_in
     new.fade_in()  # the new shell is ready: both fade, the old one out
     assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    assert old.reserved_again == 0  # the successor reserves the zone: never two sets
     old.faded_out()
     assert FakeShell.closed == ["HDMI-A-1"] and app._leaving == {} and errors == []
 
@@ -1501,6 +1507,21 @@ def test_without_a_fade_the_strips_are_reserved_at_once(renv):
     assert app.shells["HDMI-A-1"].fade_ms == 0 and app.shells["HDMI-A-1"].reserve_now is True
 
 
+def test_a_held_shell_whose_waiting_successor_is_turned_off_keeps_its_zone(renv):
+    """Gate item 7: change the thickness, then untick Enable before the new frame appears."""
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    assert new.fade_state == "waiting" and old.reserved_again == 0  # held: no strips
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert new.fade_state == "done" and old.fading_out
+    assert old.reserved_again == 1  # its strips are back before the fade-out starts
+
+
 def test_the_old_shell_fades_out_over_the_new_configs_fade(renv):
     app, store, _, _, make_config = renv
     app.shells["HDMI-A-1"].fade_in()
@@ -1535,6 +1556,7 @@ def test_a_held_shell_whose_successor_fails_to_build_fades_out(renv):
     app.reload()  # the new shell raises: reported, and the old one must not stay held
     assert len(errors) == 1 and "cannot build" in errors[0]
     assert app.shells == {} and FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    assert old.reserved_again == 1  # no successor: it keeps the zone until it has faded out
     old.faded_out()
     assert app._leaving == {}
 
@@ -1563,6 +1585,7 @@ def test_a_failed_relayout_rebuild_releases_the_held_shell(renv):
     new.on_error(new)  # its own re-layout fails and the rebuild raises
     assert app.shells == {} and len(errors) == 1 and "rebuilding the panels" in errors[0]
     assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    assert old.reserved_again == 1
     old.faded_out()
     assert app._leaving == {}
 
@@ -1672,6 +1695,7 @@ def test_a_quit_while_a_shell_is_held_releases_it_and_never_hangs(renv, timers):
     app._on_quit_signal(app_mod.signal.SIGINT)
     assert new.fade_state == "done" and old.fading_out  # the new one closed, the held one fades
     assert FakeShell.faded == [("HDMI-A-1", 50)] and app.app.quits == 0
+    assert old.reserved_again == 1
     old.faded_out()
     assert app._leaving == {} and app.shells == {} and app.app.quits == 1 and timers == {}
 

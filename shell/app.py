@@ -191,6 +191,10 @@ class EdgeShellApp:
             if only is not None and name != only:
                 continue
             if name not in self.shells and not shell.fading_out:
+                # held shells have no strips (the successor was to reserve the zone): it is
+                # not coming, so the shell keeps the zone until it has faded out
+                if self._fade_ms(name) > 0:
+                    shell.reserve_again()
                 shell.fade_out(self._fade_ms(name), self._gone)
 
     def _fade_away(self, name: str, shell: MonitorShell) -> None:

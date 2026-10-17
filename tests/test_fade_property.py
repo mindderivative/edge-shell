@@ -247,6 +247,10 @@ def check(app, w, fa, where):
         assert not s._closed, f"{where}: closed shell still in _leaving"
         assert s._detached, f"{where}: leaving shell not detached"
         assert s.fade_state in ("shown", "fading-out"), (where, s.fade_state)
+        if s.fade_state == "fading-out" and name not in app.shells and not s.strips:
+            # no successor reserves its zone: a shell that fades out alone keeps its own,
+            # unless it was disabled before its late strips were ever due
+            assert s._reserve_now is False, f"{where}: {name} fades out without a zone"
         if s.fade_state == "shown":  # held: must have an invisible successor
             assert s.strips == [], f"{where}: held shell keeps strips (stacked zones)"
             succ = app.shells.get(name)

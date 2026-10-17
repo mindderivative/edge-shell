@@ -245,6 +245,17 @@ class MonitorShell:
             log.exception("reserving the edges of %s failed", self.name)
         return False
 
+    def reserve_again(self) -> None:
+        """A held shell (detached at a rebuild, its strips destroyed) that loses its successor
+        is about to fade out: give it its zone back, so a maximized window does not grow under
+        the fading frame. Built from the current theme; nothing if closed or it has strips."""
+        if self._closed or self.strips:
+            return
+        try:
+            self._build_strips(self._theme)
+        except Exception:  # the release path must go on to the fade-out
+            log.exception("reserving the edges of %s failed", self.name)
+
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
 

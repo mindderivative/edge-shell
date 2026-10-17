@@ -522,6 +522,8 @@ def test_a_rebuild_crossfades_two_real_shells_in_the_same_frames(
     assert old.panels[0].inputs == [False, True]  # the held shell keeps its input
     loop.run_idles()
     loop.fire(500)  # the new shell is ready: the crossfade starts
+    live = [x for x in (*old_strips, *new.strips) if not x.destroyed]
+    assert len(live) == 4 and live == new.strips  # exactly one set, the successor's
     assert new.panels[0].inputs == [False, True] and old.panels[0].inputs[-1] is False
     old_canvas = old.canvas
     vsync(4, new, old)
@@ -735,3 +737,80 @@ def test_a_timer_that_fires_late_on_a_detached_shell_builds_nothing(build, loop)
     shell.detach()
     assert fn() is False and shell.strips == []
     shell.close()
+
+
+# ---- a held shell that loses its successor gets its zone back (review of finding 3) ----
+
+
+def test_reserve_again_builds_the_strips_of_a_detached_shell_once(build, loop):
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    shell.detach()  # held for a crossfade: no strips
+    assert shell.strips == []
+    shell.reserve_again()
+    assert len(shell.strips) == 4 and all(s in shell.windows for s in shell.strips)
+    built = list(shell.strips)
+    shell.reserve_again()  # already has them: nothing
+    assert shell.strips == built and len(shell.windows) == 6
+    shell.close()
+    assert all(s.destroyed for s in built) and shell.strips == []
+
+
+def test_reserve_again_does_nothing_on_a_closed_shell_and_logs_a_failure(
+    build, loop, monkeypatch, caplog
+):
+    closed = build(edge(DOCK))
+    shown(closed, loop)
+    closed.detach()
+    closed.close()
+    closed.reserve_again()
+    assert closed.strips == [] and closed.windows == []
+    shell = build(edge(DOCK))
+    shown(shell, loop)
+    shell.detach()
+
+    def bad(*_a, **_k):
+        raise RuntimeError("no strip")
+
+    monkeypatch.setattr(mon_mod, "FrameEdge", bad)
+    shell.reserve_again()  # never raises into the app's release path
+    assert "reserving the edges" in caplog.text and shell.strips == []
+
+
+def test_a_held_shell_whose_waiting_successor_is_disabled_keeps_a_zone_while_it_fades(
+    build, loop, monkeypatch, make_config
+):
+    """Gate item 7 on the real shells: rebuild, then untick Enable before the new frame
+    appears: the held old shell fades out, and a maximized window must not grow under it."""
+    monitor = FakeMonitor()
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: {"HDMI-A-1": monitor})
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+    store = Store(make_config(monitors=edge(DOCK)))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    old = app.shells["HDMI-A-1"]
+    loop.run_idles()
+    loop.fire(500)
+    loop.fire(mon_mod.RESERVE_DELAY_MS)
+    clock = FakeClock()
+
+    def vsync(n, *shells):
+        for _ in range(n):
+            clock.now_us += FRAME_US
+            for shell in shells:
+                shell.canvas.ticker.run(clock)
+
+    vsync(4, old)
+    store.pending = make_config(monitors=edge(DOCK), theme={"thickness": 12})
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    assert old.strips == [] and new.fade_state == "waiting"  # held, zone carried by the new
+    store.pending = make_config(monitors={"HDMI-A-1": {"shell": "plasma"}})
+    app.reload()  # the waiting successor is closed; the held one fades out
+    assert old.fading_out and new.fade_state == "done"
+    strips = list(old.strips)
+    assert len(strips) == 4 and not any(s.destroyed for s in strips)
+    vsync(2, old)
+    assert not any(s.destroyed for s in strips) and old.canvas.opacity[-1] > 0
+    vsync(2, old)
+    assert all(s.destroyed for s in strips) and app._leaving == {}
