@@ -115,7 +115,7 @@ def band_room(thickness: int) -> int:
 def shape_room(thickness: int) -> int:
     """Px the drawn shape may use across (draw_handle's `max_across`): `band_room`, but never
     more than on the default frame (6 px), so a thicker frame does not make the shape taller.
-    A thinner frame still shrinks it (4 px at 8 and 6, 0 at 2)."""
+    A thinner frame still shrinks it (4 px at 8 and 6, 3 at 5, the thinnest frame)."""
     return band_room(min(thickness, DEFAULT_THICKNESS))
 
 

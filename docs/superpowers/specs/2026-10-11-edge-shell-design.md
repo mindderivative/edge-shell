@@ -36,7 +36,7 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 
 | Token | Default | Notes |
 | --- | --- | --- |
-| `T` frame thickness | 10 px | Also the space reserved on each edge |
+| `T` frame thickness | 10 px | 5-64 px (at least 5 since 2026-10-17; before it 2-64: a file with 2-4 is now invalid). Also the space reserved on each edge |
 | `R` corner and join radius | 14 px | Joins shrink to half the panel's depth while it animates (so the convex corner and concave join stack into a smooth S-curve instead of overlapping) |
 | Frame color | `#0b0c0d` | Panels use the same color so they read as part of the frame |
 | Text / secondary | `#e6e8ea` / `#9ba0a6` | |

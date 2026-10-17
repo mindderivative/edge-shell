@@ -82,6 +82,11 @@ loop: if the loop is stuck in a callback, Ctrl+C does nothing, so use Ctrl+\ or 
 `config.default.toml` lists every key. Your config (`~/.config/edge-shell/config.toml`, or
 `--config PATH`) is overlaid on it and reloads live when saved.
 
+The frame's `[theme] thickness` is 5 to 64 px (it was 2 to 64 before 2026-10-17). A config that
+still says 2, 3 or 4 is invalid like any bad value: a running shell keeps its last good config
+and notifies, the settings window opens that file read-only with the error, and a start refuses
+it with `config error: theme.thickness: ...` (exit status 2). Raise the value to 5 or more.
+
 ```toml
 [monitors.HDMI-A-1]
 shell = "edge"            # edge | plasma | both | none
@@ -391,7 +396,7 @@ file.
   elsewhere). The selected panel row has Move up, Move down and Remove buttons at its right
   (Tab reaches them); the toolbar has the same three. After a Remove the monitor's row is
   selected (and keeps the keyboard focus when the tree had it).
-- **Theme** page, tabs: **General** (colours, fonts, thickness, radius, peek, hover zone,
+- **Theme** page, tabs: **General** (colours, fonts, thickness (5-64 px), radius, peek, hover zone,
   duration, fade; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
   handle colours and the handle style) and **Layout** (the gap). A **monitor** page has the same
   tabs under a banner that is always shown: "These values override the Theme for HDMI-A-1. A row

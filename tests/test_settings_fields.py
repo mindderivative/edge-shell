@@ -59,7 +59,7 @@ def test_int_row_takes_its_bounds_from_the_schema_and_queues_its_edits():
     queued = []
     row, changes, _ = row_for(FORM.theme.field("thickness"), 10, queued=queued)
     spin = row.editor.widget
-    assert tuple(spin.get_range()) == (2.0, 64.0)
+    assert tuple(spin.get_range()) == (5.0, 64.0)
     spin.set_value(11)
     spin.set_value(12)
     assert changes == []  # the view applies them after the pause
@@ -571,7 +571,7 @@ def test_a_bounded_number_is_a_slider_beside_a_spin_with_one_value():
     assert editor.outer.get_children() == [editor.scale, editor.widget]
     assert editor.outer.is_ancestor(row)  # the row packs the box of both
     adjustment = editor.scale.get_adjustment()
-    assert (adjustment.get_lower(), adjustment.get_upper()) == (2.0, 64.0)
+    assert (adjustment.get_lower(), adjustment.get_upper()) == (5.0, 64.0)
     assert editor.scale.get_value() == editor.widget.get_value() == 10
     assert not editor.scale.get_draw_value()  # the spin button shows the number
     assert editor.scale.get_accessible().get_name() == "Thickness"
@@ -609,7 +609,7 @@ def test_a_slider_sends_whole_numbers_and_takes_its_keys():
     scale.emit("move-slider", Gtk.ScrollType.END)  # End
     assert changes[-1][1] == 64
     scale.emit("move-slider", Gtk.ScrollType.START)  # Home
-    assert changes[-1][1] == 2
+    assert changes[-1][1] == 5
 
 
 def _key(scale, keyval):

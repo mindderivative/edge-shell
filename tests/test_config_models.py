@@ -30,6 +30,7 @@ def test_unknown_key_rejected(make_config):
     ("theme", "field"),
     [
         ({"thickness": 0}, "thickness"),
+        ({"thickness": 4}, "thickness"),
         ({"radius": 0}, "radius"),
         ({"thickness": 9999}, "thickness"),
         ({"duration_ms": -1}, "duration_ms"),
@@ -39,6 +40,21 @@ def test_theme_bounds(make_config, theme, field):
     with pytest.raises(ValidationError) as exc:
         make_config(theme=theme)
     assert exc.value.errors()[0]["loc"] == ("theme", field)
+
+
+def test_the_frame_is_at_least_5_px_thick(make_config):
+    assert make_config(theme={"thickness": 5}).theme.thickness == 5
+    assert make_config(theme={"thickness": 64}).theme.thickness == 64
+    for thin in (1, 2, 3, 4):
+        with pytest.raises(ValidationError):
+            make_config(theme={"thickness": thin})
+
+
+def test_a_monitor_override_keeps_the_same_minimum(make_config):
+    ok = make_config(monitors={"HDMI-A-1": {"theme": {"thickness": 5}}})
+    assert ok.theme_for("HDMI-A-1").thickness == 5
+    with pytest.raises(ValidationError, match=r"monitors\.HDMI-A-1\.theme: thickness"):
+        make_config(monitors={"HDMI-A-1": {"theme": {"thickness": 4}}})
 
 
 @pytest.mark.parametrize(

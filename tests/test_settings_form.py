@@ -52,7 +52,7 @@ def test_theme_colours_are_colour_fields(form):
 
 def test_theme_numbers_take_their_bounds_from_the_schema(form):
     thickness = form.theme.field("thickness")
-    assert (thickness.kind, thickness.minimum, thickness.maximum) == ("int", 2, 64)
+    assert (thickness.kind, thickness.minimum, thickness.maximum) == ("int", 5, 64)
     assert form.theme.field("duration_ms").maximum == 5000
     assert form.theme.field("thickness").hint == "px"
 

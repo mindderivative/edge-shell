@@ -127,7 +127,7 @@ class Theme(_Strict):
     handle: str
     handle_hover: str
     surface_hover: str
-    thickness: Annotated[int, Field(ge=2, le=64)]
+    thickness: Annotated[int, Field(ge=5, le=64)]
     radius: Annotated[int, Field(ge=1, le=64)]
     peek: Annotated[int, Field(ge=1, le=64)]
     hover_zone: Annotated[int, Field(ge=1, le=64)]
