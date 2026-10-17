@@ -616,9 +616,12 @@ that need `gi` or Fabric skip themselves there.
   continuous and the window does not bounce); a held shell whose successor never appears
   (turned off meanwhile, a quit, a failed rebuild) fades out with its strips. A monitor turned
   on again while the previous frame is still fading out reserves like any enable, and the old
-  strips go when the new ones exist. Known: after a failed in-place apply or re-layout the
-  replacement shell reserves late too, so a maximized window grows and then shrinks about
-  0.1 s after that frame appears. That resize is the compositor's and is not faded. The
+  strips go when the new ones exist. The handover is continuous for every fade length: with
+  a fade shorter than the 100 ms (the default is 50 ms) the new shell builds its strips just
+  before the old one closes. Known: after a failed in-place apply or re-layout the failed
+  shell closes at once and the replacement reserves late, so a maximized window grows at
+  once and shrinks again about 0.6 s later (the ready wait plus 100 ms). A monitor whose
+  `[monitors.X]` entry was removed gets the global theme CSS for the rest of its fade. That resize is the compositor's and is not faded. The
   fallback re-raise 2 s after the start may still re-map the panels once after the fade (the
   live gate saw no flicker from it). A disabled monitor keeps its theme CSS (border radius,
   handle look, fonts) until its fade-out has ended. The fade gate (Phil, HDMI-A-1): items

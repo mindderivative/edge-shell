@@ -629,12 +629,19 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
     still partly opaque and its square corners showed through the frame's rounded inner
     corners). A second rebuild, or a disable, in the 100 ms before the first successor's
     strips are due builds them first (`reserve_pending_now`, from `_hand_over`) when an older
-    leaving shell is about to be closed, so the zone passes on without a gap. A shell enabled
+    leaving shell is about to be closed, so the zone passes on without a gap. A rebuild within
+    100 ms of a fresh enable's fade-in does the same for the held shell itself (`_leave_shell`
+    builds the due strips before `detach` would cancel them). The handover is continuous for
+    every fade length: when a leaving shell's fade-out ends, `MonitorShell._faded_out` calls
+    `on_closing` before its windows go and the app (`_closing`) lets the successor build its
+    due strips first, so with `fade_ms` below `RESERVE_DELAY_MS` (the default is 50) the new
+    strips come when the old shell closes instead of 50 ms later. A shell enabled
     again while the previous one is still fading out reserves late like any enable; the old
     strips go when the new ones exist. Known, accepted limits: the error-path rebuilds
     (`_relayout_failed`, a failed in-place apply) open their shell with no held predecessor,
-    so a maximized window grows and then shrinks about 0.1 s after the new frame appears; a
-    late strip that fails to build is logged, not retried; a shell opened with `fade_ms` 0
+    so the failed shell closes at once, a maximized window grows at once and shrinks again about
+    0.6 s later (the ready wait plus 100 ms); a monitor whose `[monitors.X]` entry was removed
+    gets the global theme CSS for the rest of its fade (one scope per monitor); a late strip that fails to build is logged, not retried; a shell opened with `fade_ms` 0
     while an older one still fades out keeps both sets until the old fade ends.
 13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
     full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
