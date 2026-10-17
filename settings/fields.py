@@ -614,6 +614,10 @@ class FieldRow(Gtk.Box):
         align = Gtk.Align.START if self.editor.first_line is not None else Gtk.Align.CENTER
         name = Gtk.Label(label=spec.label, xalign=0, valign=align)
         name.set_size_request(150, -1)
+        # a Gtk.Label shows a tooltip without an event box; only the label has this one (the
+        # editors, the note and the reset button keep their own)
+        name.set_tooltip_text(spec.tooltip or None)
+        self.name_label = name
         self.source = Gtk.Label(xalign=0, valign=align)
         # a long hint never widens the page (its Reset button would sit off screen): the end
         # is cut, the whole text is the tooltip

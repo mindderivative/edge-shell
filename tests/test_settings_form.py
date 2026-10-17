@@ -310,7 +310,9 @@ def test_join_length_rounds_px_and_ignores_the_number_for_fill():
 
 
 class TileProps(WidgetProps):
-    text: str = Field("hi", description="what it says")
+    text: str = Field(
+        "hi", description="what it says", json_schema_extra={"hint": "up to 20 characters"}
+    )
     size: Annotated[int, Field(ge=6, le=96)] | None = None
     mode: Literal["a", "b"] = "a"
     on: bool = False
@@ -327,10 +329,12 @@ def test_a_widget_with_properties_gets_a_widget_section():
     text, size, mode, on = section.fields
     assert (text.kind, text.hint, text.label, text.required) == (
         "text",
-        "what it says",
+        "up to 20 characters",  # the note beside the value: json_schema_extra "hint"
         "Text",
         False,
     )
+    assert text.tooltip == "what it says"  # the label's tooltip: the field's description
+    assert size.tooltip == ""  # no description: no tooltip (the coverage test catches it)
     assert (size.kind, size.minimum, size.maximum) == ("int", 6, 96)
     assert (mode.kind, mode.choices) == ("enum", ("a", "b"))
     assert on.kind == "bool"
@@ -504,3 +508,72 @@ def test_a_widget_font_property_is_a_font_row_and_other_strings_stay_text():
     assert section.field("font").kind == "font"
     assert section.field("format").kind == "text"
     assert config_form(WIDGETS).theme.field("font").kind == "fonts"  # the theme's list
+
+
+# ---- every label has a tooltip, from the field's description --------------------------------
+
+TOOLTIP_MAX = 110  # characters: one short sentence
+
+
+def walk(section, prefix=""):
+    """(dotted key, FieldSpec) of every field of a section and of its sub-tables."""
+    for f in section.fields:
+        yield f"{prefix}{f.key}", f
+    for sub in section.sections:
+        yield from walk(sub, f"{prefix}{sub.key}.")
+
+
+def every_field(form):
+    sections = {
+        "theme": form.theme,
+        "layout": form.layout,
+        "monitor": form.monitor,
+        "edge panel": form.edge_panel,
+        "corner panel": form.corner_panel,
+        **{f"widget {wid}": s for wid, s in form.widget_sections.items()},
+    }
+    return [(f"{name}: {path}", f) for name, s in sections.items() for path, f in walk(s)]
+
+
+def check_tooltips(form):
+    fields = every_field(form)
+    bad = [path for path, f in fields if not f.tooltip.strip()]
+    assert not bad, f"fields without a description in their model: {bad}"
+    long = [path for path, f in fields if len(f.tooltip) > TOOLTIP_MAX]
+    assert not long, f"descriptions over {TOOLTIP_MAX} characters: {long}"
+    return fields
+
+
+def test_every_field_of_the_config_models_has_a_tooltip(form):
+    # A new field in shell/config/models.py must carry Field(description="..."): this walks
+    # every row the form generates (theme, layout, monitor, both panel kinds and every
+    # sub-table), so one without a description fails here.
+    fields = check_tooltips(form)
+    assert len(fields) > 40  # the walk really reaches the nested tables
+
+
+def test_every_property_of_every_registered_widget_has_a_tooltip():
+    pytest.importorskip("gi")  # the widgets import GTK; the models test above needs none
+    pytest.importorskip("fabric")
+    import widgets  # noqa: F401  (registers the built-in panels)
+    from settings.form import registry_widgets
+
+    form = config_form(registry_widgets())
+    assert {"clock"} <= set(form.widget_sections)
+    check_tooltips(form)
+
+
+def test_a_tooltip_is_the_models_description(form):
+    from shell.config.models import Theme
+
+    assert form.theme.field("thickness").tooltip == Theme.model_fields["thickness"].description
+    assert form.theme.field("thickness").hint == "px"  # the unit note beside the value stays
+
+
+def test_a_property_without_a_description_has_no_tooltip_and_the_walk_catches_it():
+    bare = create_model("Bare", __base__=WidgetProps, size=(int, 3))
+    section = props_section(bare)
+    assert section.field("size").tooltip == ""
+    form = config_form((WidgetChoice("bare", "Bare", props=bare),))
+    with pytest.raises(AssertionError, match="without a description"):
+        check_tooltips(form)

@@ -417,6 +417,9 @@ file.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
+- Every label has a tooltip: a one-sentence explanation of what the property does. It comes
+  from the field's `description` in the model (`shell/config/models.py`, or the widget's
+  property model). Every settings field must have one; a test enforces it.
 - **Inputs.**
   - **Sliders.** A whole number with a minimum and a maximum at most 500 apart is a slider with
     a spin button beside it for typing an exact value; both show the same number. These are

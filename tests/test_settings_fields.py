@@ -13,9 +13,12 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 if not Gtk.init_check()[0]:
     pytest.skip("no display", allow_module_level=True)
 
+from pydantic import create_model  # noqa: E402
+
 import settings.fields as fields  # noqa: E402
-from settings.form import FieldSpec, WidgetChoice, config_form  # noqa: E402
+from settings.form import FieldSpec, WidgetChoice, config_form, props_section  # noqa: E402
 from settings.values import FieldValue  # noqa: E402
+from shell.widget import WidgetProps  # noqa: E402
 
 FORM = config_form(tuple(WidgetChoice(w) for w in ("clock", "dock", "system_bar")))
 
@@ -28,6 +31,54 @@ def row_for(spec, value, is_set=False, path=("theme", "x"), queued=None):
     row = fields.FieldRow(spec, path, lambda p, v: changes.append((p, v)), resets.append, on_queue)
     row.show_value(FieldValue(value, is_set, "default"))
     return row, changes, resets
+
+
+def test_the_label_has_the_tooltip_and_the_other_tooltips_are_unchanged():
+    spec = dataclasses.replace(FORM.theme.field("thickness"), tooltip="How thick the frame is.")
+    row, _, _ = row_for(spec, 10)
+    assert row.name_label.get_text() == "Thickness"
+    assert row.name_label.get_tooltip_text() == "How thick the frame is."
+    assert row.name_label.get_has_tooltip()
+    assert row.reset.get_tooltip_text() == (
+        "Remove this key from your config (use the inherited value)"
+    )
+    assert row.source.get_tooltip_text() == "px · default"  # the hint and where it comes from
+    for editor in (row.editor.widget, row.editor.outer):  # the editors keep their own
+        assert editor.get_tooltip_text() is None
+
+
+def test_a_label_without_a_tooltip_shows_none():
+    spec = FieldSpec("a", "A", "int", minimum=0, maximum=9)
+    row, _, _ = row_for(spec, 1)
+    assert row.name_label.get_tooltip_text() is None
+
+
+def test_every_kind_of_row_puts_its_tooltip_on_the_label():
+    shown = {
+        "color": "#8fd3b6",
+        "int": 6,
+        "bool": True,
+        "fonts": ["A"],
+        "font": "A",
+        "length": "fill",
+        "text": "x",
+        "deprecated": 600,
+    }
+    props = create_model("Props", __base__=WidgetProps, format=(str, "x"), font=(str | None, None))
+    seen = set()
+    for section in (
+        FORM.theme,
+        FORM.theme.section("border"),
+        FORM.edge_panel,
+        props_section(props),
+    ):
+        for spec in section.fields:
+            spec = dataclasses.replace(spec, tooltip=f"about {spec.key}")
+            value = spec.choices[0] if spec.kind in ("enum", "widget") else shown[spec.kind]
+            row, _, _ = row_for(spec, value)
+            assert row.name_label.get_tooltip_text() == f"about {spec.key}", spec.key
+            seen.add(spec.kind)
+    assert seen >= {"color", "int", "bool", "enum", "fonts", "font", "length", "text", "widget"}
 
 
 def test_show_value_never_calls_back():

@@ -39,7 +39,9 @@ LENGTH_PERCENT = (1, 100)
 LENGTH_MODES = ("px", "fill", "content", "percent")
 # The unit or meaning shown next to a row, by (model, key): one key can mean different things
 # in different tables ("width" of the border vs the width of a corner panel). A widget
-# property's hint is its Field(description=...).
+# property's hint is its Field(json_schema_extra={"hint": ...}). The label's tooltip is the
+# field's Field(description=...) in every model: one short sentence, and a test fails for a
+# field of any model (widgets' included) that has none.
 HINTS = {
     ("Theme", "thickness"): "px",
     ("Theme", "radius"): "px",
@@ -108,6 +110,7 @@ class FieldSpec:
     minimum: int | None = None
     maximum: int | None = None
     hint: str = ""
+    tooltip: str = ""  # the label's tooltip: the model field's description (one sentence)
     labels: tuple[str, ...] = ()  # what the choices show (empty: the choices themselves)
     disabled: tuple[str, ...] = ()  # choices shown but not selectable ("coming soon")
     required: bool = False  # the entry needs it: no reset button
@@ -194,8 +197,14 @@ def _field(
     panel, pos, length, the colours) and only `name` is a text row: every other string key
     must be classified here (pinned by a test)."""
     first = _options(prop)[0]
-    hint = HINTS.get((model, key), prop.get("description", ""))
-    common = {"key": key, "label": label_for(key), "hint": hint, "required": required}
+    hint = HINTS.get((model, key), prop.get("hint", ""))
+    common = {
+        "key": key,
+        "label": label_for(key),
+        "hint": hint,
+        "tooltip": prop.get("description", ""),
+        "required": required,
+    }
     if not text:
         if key == "widget":
             choices, labels = widget_choices(widgets)
