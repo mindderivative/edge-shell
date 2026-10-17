@@ -76,6 +76,7 @@ class EdgePanel(WaylandWindow):
     """The window of an edge panel; CornerPanel is the corner one. It shows a Widget."""
 
     wants_keyboard = False
+    _input_off = False  # set_input_enabled(False): no input region at all
 
     def __init__(
         self,
@@ -249,6 +250,17 @@ class EdgePanel(WaylandWindow):
         self._last_rect = None
         self._update_input_region(self._d)
 
+    def set_input_enabled(self, enabled: bool) -> None:
+        """Take input or not (spec 21: a monitor's panels take none while it is invisible
+        before its fade-in, nor while it fades out). Kept across every re-allocate and depth
+        frame; a hover peek in progress is dropped."""
+        self._input_off = not enabled
+        if not enabled and self._hovered:
+            self._hovered = False
+            self._retarget()
+        self._last_rect = None
+        self._update_input_region(self._d)
+
     def apply_theme(self, theme: Theme) -> None:
         """A restyle: colours and the theme's handle style are redrawn in place (CSS and the
         canvas repaint the rest); geometry changes rebuild the panel."""
@@ -331,7 +343,7 @@ class EdgePanel(WaylandWindow):
     def _update_input_region(self, d: float) -> None:
         # The body (plus an invisible hover zone while collapsed, or only the handle's hit
         # target when hover is off) takes input: shell.handle.input_rects.
-        rects = tuple(self._input_rects(d))
+        rects = () if self._input_off else tuple(self._input_rects(d))
         if rects == self._last_rect:
             return
         self._last_rect = rects

@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 
 import gi
@@ -21,6 +22,7 @@ from shell.config.diff import Change
 from shell.config.models import Config
 from shell.corner_panel import CornerPanel
 from shell.edge_panel import EdgePanel
+from shell.fade import Fade
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.panel_layout import Layout, layout_monitor
@@ -122,11 +124,18 @@ class MonitorShell:
         on_layout=None,
         on_error=None,
         on_settings=None,
+        fade_ms: int = 0,
+        on_fade_in: Callable[[MonitorShell], None] | None = None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
         `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us);
-        `on_settings()` is given to every panel (a right-click on its handle)."""
+        `on_settings()` is given to every panel (a right-click on its handle).
+
+        `fade_ms` > 0 (spec 21): every window is built at opacity 0 and the panels take no
+        input; once the monitor is ready (the first re-raise has run, no "content" measurement
+        is pending) all windows fade in together over `fade_ms`, the panels take input from
+        the start of the fade, and `on_fade_in(shell)` is called. 0: no fade (as before)."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
@@ -163,6 +172,12 @@ class MonitorShell:
         self._relayout_id = 0  # pending geometry re-layout
         self._scale_warned = False
         self._monitor_handlers: list[int] = []
+        self._fade_ms = fade_ms
+        self._on_fade_in = on_fade_in or (lambda _shell: None)
+        self._fade: Fade | None = None  # made in _build, right after the canvas
+        self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
+        self._raises_pending = 0  # first re-raises still to run: the monitor is not ready
+        self._ready_id = 0  # pending idle readiness check
         try:
             self._build(config)
         except BaseException:
@@ -175,14 +190,27 @@ class MonitorShell:
         # The canvas first: it draws the frame and corners and must stay below every panel.
         self.canvas = ShapeCanvas(monitor, theme, self._scope)
         self._track(self.canvas)
+        # One Tween on the canvas's frame clock sets every window (0 ms: no fade work at all).
+        self._fade = Fade(
+            self.canvas,
+            self._set_opacity,
+            self._fade_ms,
+            GLib.timeout_add,
+            GLib.source_remove,
+            on_start=self._faded_in,
+        )
         self.strips = [FrameEdge(edge, monitor, theme, self._scope) for edge in EDGES]
         for strip in self.strips:
             self._track(strip)
         self._sync_panels(config, theme, startup=True)
         if self.live_panels():
-            for delay in raise_delays():
-                GLib.timeout_add(delay, self._raise_panels)
+            for i, delay in enumerate(raise_delays()):
+                first = i == 0  # the fallback re-raise is not waited for
+                self._raises_pending += first
+                GLib.timeout_add(delay, self._raise_panels, first)
         self._monitor_handlers.append(monitor.connect("notify::geometry", self._on_geometry))
+        if self._fade.state == "waiting":  # checked once the build has returned to the loop
+            self._ready_id = GLib.idle_add(self._ready_idle)
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -320,6 +348,7 @@ class MonitorShell:
                 self._on_error(self)
             except Exception:
                 log.exception("handling the measurement failure of %s failed", self.name)
+        self._check_ready()
         return False
 
     # ---- monitor geometry -----------------------------------------------------------------
@@ -405,9 +434,12 @@ class MonitorShell:
             self._failed[index] = (_entry_key(req), message)
             return None
         panel.scene_key = key
+        if not self._input_live:  # invisible until the fade-in: no input either
+            panel.set_input_enabled(False)
         self._track(panel)
         if raise_later:  # created after startup: re-raise it like the first ones
             for delay in raise_delays()[:1]:
+                self._raises_pending += 1
                 GLib.timeout_add(delay, self._raise_one, panel)
         return panel
 
@@ -417,22 +449,63 @@ class MonitorShell:
         self.canvas.remove_panel(panel.scene_key)
         self._destroy(panel)
 
-    def _raise_panels(self) -> bool:
-        """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS)."""
+    def _raise_panels(self, first: bool = False) -> bool:
+        """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS). The
+        `first` one is waited for by the fade-in: a re-map is a visible blink."""
         if not self._closed:
             for panel in self.live_panels():
                 panel.raise_to_top()
+        if first:
+            self._raised()
         return False
 
     def _raise_one(self, panel: EdgePanel) -> bool:
         # The panel may have been rebuilt or removed during the delay: only raise live ones.
         if panel in self.panels:
             panel.raise_to_top()
+        self._raised()
         return False
+
+    # ---- fade (spec 21) -------------------------------------------------------------------
+    def _raised(self) -> None:
+        self._raises_pending = max(0, self._raises_pending - 1)
+        self._check_ready()
+
+    def _ready_idle(self) -> bool:
+        self._ready_id = 0
+        self._check_ready()
+        return False
+
+    def _check_ready(self) -> None:
+        """Fade in once nothing that re-maps or resizes a window is pending (Fade.ready only
+        acts while waiting; its own timeout fades in anyway)."""
+        if self._closed or self._fade is None or self._raises_pending or self._measure_id:
+            return
+        self._fade.ready()
+
+    def _faded_in(self) -> None:
+        """The fade-in starts: the panels take input from now on (what is seen is clicked)."""
+        self._input_live = True
+        for panel in self.live_panels():
+            panel.set_input_enabled(True)
+        self._on_fade_in(self)
+
+    def _set_opacity(self, value: float) -> None:
+        """One frame of the fade: every window of the monitor, in the same tick."""
+        for window in self.windows:
+            self._apply_opacity(window, value)
+
+    def _apply_opacity(self, window, value: float) -> None:
+        try:
+            window.set_opacity(value)  # GTK 3 paints a toplevel's opacity as a group alpha
+        except Exception:  # one window going away must not stop the others
+            log.debug("could not set the opacity of a window on %s", self.name, exc_info=True)
 
     # ---- windows --------------------------------------------------------------------------
     def _track(self, window) -> None:
         self.windows.append(window)
+        if self._fade is not None and self._fade.state != "shown":
+            self._apply_opacity(window, self._fade.value)  # before its first frame is drawn
         self._register(window)
         self._check_monitor(window)
 
@@ -479,10 +552,12 @@ class MonitorShell:
 
     def close(self) -> None:
         self._closed = True
-        for source in (self._measure_id, self._relayout_id):
+        if self._fade is not None:
+            self._fade.cancel()  # before the canvas (its frame clock) is destroyed
+        for source in (self._measure_id, self._relayout_id, self._ready_id):
             if source:
                 GLib.source_remove(source)
-        self._measure_id = self._relayout_id = 0
+        self._measure_id = self._relayout_id = self._ready_id = 0
         for handler in self._monitor_handlers:
             try:
                 self.monitor.disconnect(handler)
