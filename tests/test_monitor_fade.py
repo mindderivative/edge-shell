@@ -6,6 +6,7 @@ import pytest
 pytest.importorskip("gi")
 pytest.importorskip("fabric")
 
+import shell.app as app_mod  # noqa: E402
 import shell.monitors as mon_mod  # noqa: E402
 from shell.canvas.simulate import FRAME_US, FakeClock, FakeTicker  # noqa: E402
 from shell.config.diff import Change  # noqa: E402
@@ -449,3 +450,59 @@ def test_a_panel_added_before_the_detach_is_not_re_raised_by_its_pending_timers(
     loop.fire(500)
     loop.fire(2000)
     assert added.raised == 0  # a re-map of a leaving window blinks
+
+
+# ---- crossfade, end to end with the real app (Task 5) -----------------------------------
+
+
+class Store:
+    """A ConfigStore stand-in: `pending` is what the next reload reads."""
+
+    def __init__(self, config):
+        self.config, self.pending, self.path, self.last_error = config, None, None, None
+
+    def reload(self):
+        old, self.config = self.config, self.pending
+        return old, self.config
+
+
+def test_a_rebuild_crossfades_two_real_shells_in_the_same_frames(
+    build, loop, monkeypatch, make_config
+):
+    """`build` installs the window fakes; the app builds the real MonitorShells on them."""
+    monitor = FakeMonitor()
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: {"HDMI-A-1": monitor})
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+    store = Store(make_config(monitors=edge(DOCK)))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    old = app.shells["HDMI-A-1"]
+    loop.run_idles()
+    loop.fire(500)
+    clock = FakeClock()
+
+    def vsync(n, *shells):  # one output: both canvases get the same frame times
+        for _ in range(n):
+            clock.now_us += FRAME_US
+            for shell in shells:
+                shell.canvas.ticker.run(clock)
+
+    vsync(4, old)
+    assert old.fade_state == "shown"
+    old_strips = list(old.strips)
+    store.pending = make_config(monitors=edge(DOCK), theme={"thickness": 12})
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    assert new is not old and app._leaving == {"HDMI-A-1": old}
+    assert all(s.destroyed for s in old_strips)  # the edges are reserved once: by the new ones
+    assert old.canvas.opacity[-1] == 1.0 and new.canvas.opacity == [0.0]  # old still shown
+    assert old.panels[0].inputs == [False, True]  # the held shell keeps its input
+    loop.run_idles()
+    loop.fire(500)  # the new shell is ready: the crossfade starts
+    assert new.panels[0].inputs == [False, True] and old.panels[0].inputs[-1] is False
+    old_canvas = old.canvas
+    vsync(4, new, old)
+    assert new.canvas.opacity[-4:] == pytest.approx(THIRDS, abs=1e-3)
+    assert old_canvas.opacity[-4:] == pytest.approx(list(reversed(THIRDS)), abs=1e-3)
+    assert old_canvas.destroyed and old.panels == [] and app._leaving == {}
+    assert not new.canvas.destroyed and new.fade_state == "shown"

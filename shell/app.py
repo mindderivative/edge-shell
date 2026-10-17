@@ -155,6 +155,34 @@ class EdgeShellApp:
             self._retire(name)
             shell.close()
 
+    def _leave_shell(self, name: str) -> None:
+        """A full rebuild of `name` (spec 21, crossfade): the old shell stays on screen,
+        detached (held), until its successor starts fading in; then it fades out over the
+        same time (_faded_in). Without a fade it is closed now, as before."""
+        if self._fade_ms(name) <= 0:
+            self._close_shell(name, fade=False)
+            return
+        self._forget_reports(name)
+        shell = self.shells.pop(name)
+        self._retire(name)  # at most one leaving shell per monitor: an older one goes now
+        shell.detach()
+        self._leaving[name] = shell
+
+    def _faded_in(self, shell: MonitorShell) -> None:
+        """`shell` starts fading in: the shell it replaces (held) fades out with it."""
+        if self.shells.get(shell.name) is not shell:
+            return
+        old = self._leaving.get(shell.name)
+        if old is not None and not old.fading_out:
+            old.fade_out(self._fade_ms(shell.name), self._gone)
+
+    def _release_held(self) -> None:
+        """A held shell whose monitor got no successor (its rebuild failed, or it was never
+        opened) fades out on its own."""
+        for name, shell in list(self._leaving.items()):
+            if name not in self.shells and not shell.fading_out:
+                shell.fade_out(self._fade_ms(name), self._gone)
+
     def _fade_away(self, name: str, shell: MonitorShell) -> None:
         self._retire(name)  # at most one leaving shell per monitor: an older one goes now
         self._leaving[name] = shell
@@ -201,6 +229,7 @@ class EdgeShellApp:
             on_error=lambda shell, n=name: self._relayout_failed(n, shell),
             on_settings=self.open_settings,
             fade_ms=self._fade_ms(name),
+            on_fade_in=self._faded_in,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)
@@ -277,10 +306,15 @@ class EdgeShellApp:
         log.info("config reloaded: %d change(s): %s", len(changes), kinds)
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
         for name in sorted(rebuild & set(self.shells)):
-            # turned off (plasma / none): it fades out; else it is rebuilt from the new config
-            self._close_shell(name, fade=not plan.has_windows(new, name))
+            if plan.has_windows(new, name):
+                self._leave_shell(name)  # rebuilt: the old one is held for the crossfade
+            else:
+                self._close_shell(name)  # turned off (plasma / none): it fades out
         # Shells opened here are built from the new config already: never apply onto them.
-        _, opened = self.sync_monitors()
+        try:
+            _, opened = self.sync_monitors()
+        finally:
+            self._release_held()  # e.g. the new shell failed to build: the old one fades out
         grouped: dict[str, list] = defaultdict(list)
         for change in changes:
             if change.monitor not in rebuild:

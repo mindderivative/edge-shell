@@ -303,16 +303,17 @@ def test_opened_shells_get_the_settings_opener(env):
 
 
 def test_reload_rebuild_monitor_closes_and_reopens_without_apply(renv):
+    """With fade_ms 0 a rebuild is what it always was: closed, then opened (spec 21)."""
     app, store, errors, _, make_config = renv
     store.pending = make_config(
-        theme={"thickness": 12},
+        theme={"thickness": 12, "fade_ms": 0},
         monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
     )
     app.reload()
     assert FakeShell.closed == ["HDMI-A-1"]
     assert FakeShell.opened == ["HDMI-A-1"]
-    assert FakeShell.applied == []
-    assert errors == []
+    assert FakeShell.applied == [] and FakeShell.faded == []
+    assert errors == [] and app._leaving == {}
 
 
 def test_reload_applies_grouped_changes_to_existing_shell(renv):
@@ -1302,13 +1303,14 @@ def test_a_monitor_turned_off_twice_closes_its_older_leaving_shell_at_once(renv)
     assert first.fade_state == "done" and app._leaving == {"HDMI-A-1": second}
 
 
-def test_a_rebuild_that_keeps_the_windows_closes_the_old_shell_at_once(renv):
+def test_a_rebuild_that_keeps_the_windows_holds_the_old_shell_too(renv):
     app, store, _, _, make_config = renv
-    app.shells["HDMI-A-1"].fade_in()
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
     store.pending = make_config(theme={"thickness": 9}, monitors={"HDMI-A-1": mon()})
-    app.reload()  # a structural change: rebuilt from the new config
-    assert FakeShell.faded == [] and FakeShell.closed == ["HDMI-A-1"] and app._leaving == {}
-    assert "HDMI-A-1" in app.shells
+    app.reload()  # a structural change: rebuilt from the new config, crossfaded
+    assert FakeShell.faded == [] and FakeShell.closed == [] and app._leaving == {"HDMI-A-1": old}
+    assert app.shells["HDMI-A-1"] is not old
 
 
 # ---- the quit and the leaving shells: guards (spec 21) ---------------------------------
@@ -1412,3 +1414,77 @@ def test_a_monitor_turned_off_just_before_the_quit_is_waited_for(env, make_confi
     assert [ms for ms, _ in timers.values()] == [300 + app_mod.QUIT_MARGIN_MS]
     leaving.faded_out()
     assert app.app.quits == 0 and "HDMI-A-2" in app._leaving  # still waiting for the other
+
+
+# ---- crossfade on a rebuild (spec 21) -------------------------------------------------
+
+
+def thicker(make_config, **theme):
+    return make_config(
+        theme={"thickness": 12, **theme},
+        monitors={"HDMI-A-1": mon(panels=[{"panel": "edge", "name": "dock", "widget": "dock"}])},
+    )
+
+
+def test_a_rebuild_holds_the_old_shell_until_the_new_one_fades_in(renv):
+    app, store, errors, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    assert new is not old and FakeShell.opened == ["HDMI-A-1"]
+    assert old.detached and FakeShell.closed == [] and FakeShell.faded == []  # held, on screen
+    assert app._leaving == {"HDMI-A-1": old} and new.on_fade_in == app._faded_in
+    new.fade_in()  # the new shell is ready: both fade, the old one out
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    old.faded_out()
+    assert FakeShell.closed == ["HDMI-A-1"] and app._leaving == {} and errors == []
+
+
+def test_the_old_shell_fades_out_over_the_new_configs_fade(renv):
+    app, store, _, _, make_config = renv
+    app.shells["HDMI-A-1"].fade_in()
+    store.pending = thicker(make_config, fade_ms=300)
+    app.reload()
+    app.shells["HDMI-A-1"].fade_in()
+    assert FakeShell.faded == [("HDMI-A-1", 300)]
+    assert app.shells["HDMI-A-1"].fade_ms == 300
+
+
+def test_a_held_shell_is_out_of_every_report_and_reload(renv, monkeypatch):
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    old.on_error(old)  # a stale re-layout failure of the held shell: ignored
+    assert app.shells["HDMI-A-1"] is new and FakeShell.opened == ["HDMI-A-1"]
+    store.pending = thicker(make_config, accent="#112233")
+    app.reload()  # a restyle: applied to the new shell only, never a fade
+    assert FakeShell.applied == [("HDMI-A-1", ["restyle"])] and FakeShell.faded == []
+    assert app._leaving == {"HDMI-A-1": old} and not old.fading_out  # still held
+
+
+def test_a_held_shell_whose_successor_fails_to_build_fades_out(renv):
+    app, store, errors, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    FakeShell.fail_open = {"HDMI-A-1"}
+    store.pending = thicker(make_config)
+    app.reload()  # the new shell raises: reported, and the old one must not stay held
+    assert len(errors) == 1 and "cannot build" in errors[0]
+    assert app.shells == {} and FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    old.faded_out()
+    assert app._leaving == {}
+
+
+def test_a_fade_in_of_a_shell_that_is_not_the_current_one_does_not_fade_the_held_out(renv):
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    app._faded_in(SimpleNamespace(name="HDMI-A-1"))  # a late ready of a replaced shell
+    assert FakeShell.faded == [] and not old.fading_out and app._leaving == {"HDMI-A-1": old}
