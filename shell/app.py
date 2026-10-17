@@ -233,6 +233,17 @@ class EdgeShellApp:
         self._layout_reported.pop(name, None)
         self._failures_reported.pop(name, None)
 
+    def _reserves_now(self, name: str, fade_ms: int) -> bool:
+        """Whether a shell opened now builds its zone strips at once. Without a fade: yes. A
+        rebuild's successor, whose predecessor is HELD (detached, its strips already
+        destroyed): yes, the zone stays continuous. Otherwise (a fresh enable, a startup, a
+        hot-plug, or a predecessor still fading out and keeping its strips): 50 ms after its
+        own fade-in starts, so two sets of strips never stack their zones for long."""
+        if fade_ms <= 0:
+            return True
+        old = self._leaving.get(name)
+        return old is not None and not old.fading_out
+
     def _open_shell(self, name: str, monitor) -> None:
         log.info("opening Edge Shell on %s", name)
         fade_ms = self._fade_ms(name)
@@ -247,9 +258,7 @@ class EdgeShellApp:
             on_settings=self.open_settings,
             fade_ms=fade_ms,
             on_fade_in=self._faded_in,
-            # a rebuild's successor reserves the edges at once (the held old shell has no strips
-            # any more); a fresh enable, startup or hot-plug only after its fade-in starts
-            reserve_now=fade_ms <= 0 or name in self._leaving,
+            reserve_now=self._reserves_now(name, fade_ms),
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)

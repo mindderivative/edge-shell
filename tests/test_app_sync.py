@@ -1469,6 +1469,20 @@ def test_only_a_shell_without_a_predecessor_reserves_its_edges_late(renv):
     assert app.shells["HDMI-A-1"].reserve_now is True  # a predecessor is held
 
 
+def test_a_shell_opened_while_the_previous_one_fades_out_reserves_late(renv):
+    """The fading-out shell keeps its strips until its fade ends: a second set built at once
+    would stack the zones, so the new shell builds its own 50 ms after its fade-in starts."""
+    app, store, _, _, make_config = renv
+    first = app.shells["HDMI-A-1"]
+    first.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert first.fade_state == "fading-out" and app._leaving == {"HDMI-A-1": first}
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()  # enabled again, the first still fading out
+    assert app.shells["HDMI-A-1"].reserve_now is False
+
+
 def test_an_enable_after_a_finished_disable_reserves_late_again(renv):
     app, store, _, _, make_config = renv
     app.shells["HDMI-A-1"].fade_in()

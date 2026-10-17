@@ -619,9 +619,11 @@ Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
     (`fade_out`) they are kept until the fade-out ends and closed with the other windows (they
     used to be destroyed at the start, so a maximized window grew while the frame was still
     partly opaque and its square corners showed through the frame's rounded inner corners).
-    Only a rebuild's `detach()` destroys them at once. A re-enable while the old shell is still
-    fading out (it is in `_leaving`) builds them at once, so the two sets overlap until the
-    old fade ends.
+    Only a rebuild's `detach()` destroys them at once. The successor builds them at once only when
+    its predecessor is held (detached, strips already destroyed, not fading out;
+    `EdgeShellApp._reserves_now`). A shell enabled again while the previous one is still fading
+    out, and keeping its strips, builds its own late like any fresh enable, so two sets never
+    stack their zones for long.
 13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
     full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
     a frame may be dropped with effects on) plus GTK's group for each; blending a translucent

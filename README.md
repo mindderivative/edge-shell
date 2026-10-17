@@ -612,7 +612,9 @@ that need `gi` or Fabric skip themselves there.
   they grow back when a disable's fade-out has ended and the strips are destroyed (the frame is
   gone by then, so the window's square corners never show through it); a rebuild keeps the
   zone continuous (the successor builds its strips at once, the held old shell destroys its own
-  at the swap, so a maximized window does not bounce). That resize is the compositor's and is
+  at the swap, so a maximized window does not bounce); a monitor turned on again while the
+  previous frame is still fading out builds its strips late like any enable, so the two sets
+  never stack their zones. That resize is the compositor's and is
   not faded. The fallback re-raise
   2 s after the start may still re-map the panels once after the fade (the live gate saw no
   flicker from it). The fade gate (Phil, HDMI-A-1) passed: no blink, no flicker on the fallback
