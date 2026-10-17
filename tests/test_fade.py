@@ -257,3 +257,44 @@ def test_a_failing_callback_never_breaks_the_fade(caplog):
     assert rig.fade.state == "done" and rig.timers.pending == {} and not rig.ticking
     failed = [r for r in caplog.records if r.name == "shell.fade" and r.exc_info]
     assert [str(r.exc_info[1]) for r in failed] == ["callback failed", "callback failed"]
+
+
+def test_a_failing_opacity_setter_cannot_stop_a_fade_from_finishing():
+    rig = Rig()
+    calls = []
+
+    def boom(value):
+        calls.append(value)
+        raise RuntimeError("no window")
+
+    rig.fade._set_opacity = boom
+    rig.fade.ready()
+    rig.frames(5)
+    assert rig.fade.state == "shown" and rig.fade.value == 1.0
+    rig.fade.fade_out(50, rig.on_done)
+    rig.frames(5)
+    assert rig.fade.state == "done" and rig.done == 1 and calls
+    assert rig.timers.pending == {} and not rig.ticking
+    rig.fade.finish()  # still does not raise
+
+
+def test_fade_out_right_after_ready_but_before_the_first_frame_is_done_at_once():
+    """Value still 0: nothing is visible, so the fade-out settles in the jump, no timer left."""
+    rig = Rig()
+    rig.fade.ready()
+    rig.fade.fade_out(50, rig.on_done)
+    assert rig.fade.state == "done" and rig.done == 1
+    assert rig.timers.pending == {} and not rig.ticking
+    rig.frames(5)
+    assert rig.done == 1
+
+
+def test_fade_out_from_shown_does_not_set_the_opacity_it_already_has():
+    rig = Rig()
+    rig.fade.ready()
+    rig.frames(5)
+    seen = len(rig.values)
+    rig.fade.fade_out(50, rig.on_done)
+    assert len(rig.values) == seen  # nothing before the first frame of the fade-out
+    rig.frames(5)
+    assert rig.values[-1] == 0.0 and rig.done == 1

@@ -73,8 +73,9 @@ class Fade:
     def fade_out(self, duration_ms: int, on_done: Callable[[], None]) -> None:
         """Fade out over `duration_ms` from the current opacity (no jump), then on_done().
         Done at once when nothing is visible yet (waiting), with 0 ms (the opacity is not
-        touched) or when already done. A second call while fading out is ignored: the running
-        fade keeps its callback."""
+        touched) or when already done. A second call while fading out is ignored and its
+        callback dropped (the running fade keeps its own, whatever the new duration): a caller
+        that wants its callback now must call finish() first."""
         if self.state == "fading-out":
             return
         if self.state in ("waiting", "done") or duration_ms <= 0:
@@ -86,7 +87,10 @@ class Fade:
         self.state = "fading-out"
         self._on_done = on_done
         self._tween = Tween(self._ticker, self._on_value, duration_ms, easing=linear)
-        self._tween.jump_to(self.value)
+        if self.value <= 0.0:
+            self._tween.jump_to(0.0)  # nothing left to fade: settles the fade-out now
+        else:
+            self._tween.value = self.value  # the windows already have it: no redundant set
         self._tween.animate_to(0.0)
         if self.state == "fading-out":  # not settled by the jump (a value already at 0)
             self._arm(duration_ms + FINISH_MARGIN_MS, self._finish_timeout)
@@ -110,7 +114,11 @@ class Fade:
     # ---- internals --------------------------------------------------------------------
     def _on_value(self, value: float) -> None:
         self.value = value
-        self._set_opacity(value)
+        try:
+            self._set_opacity(value)
+        except Exception:
+            # the state change and on_done below must happen whatever the setter does
+            log.debug("setting the opacity failed", exc_info=True)
         if self._tween.running:
             return
         if self.state == "fading-in" and value >= 1.0:
