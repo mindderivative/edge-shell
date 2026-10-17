@@ -184,10 +184,12 @@ class EdgeShellApp:
         if old is not None and not old.fading_out:
             old.fade_out(self._fade_ms(shell.name), self._gone)
 
-    def _release_held(self) -> None:
+    def _release_held(self, only: str | None = None) -> None:
         """A held shell whose monitor got no successor (its rebuild failed, or it was never
-        opened) fades out on its own."""
+        opened) fades out on its own; with `only`, just that monitor's."""
         for name, shell in list(self._leaving.items()):
+            if only is not None and name != only:
+                continue
             if name not in self.shells and not shell.fading_out:
                 shell.fade_out(self._fade_ms(name), self._gone)
 
@@ -196,7 +198,7 @@ class EdgeShellApp:
             # never visible: closed now, and the shell it was replacing (held, on screen)
             # fades out instead of disappearing
             shell.close()
-            self._release_held()
+            self._release_held(name)  # only this monitor's: another may be waiting on a successor
             return
         self._retire(name)  # at most one leaving shell per monitor: an older one goes now
         self._leaving[name] = shell

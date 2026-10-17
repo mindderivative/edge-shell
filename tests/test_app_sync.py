@@ -418,17 +418,23 @@ def test_the_fabric_dbus_client_is_off(env, monkeypatch):
             pass
 
         def run(self):
-            pass
+            order.append(("run",))
 
+    order: list = []
     monkeypatch.setattr(app_mod, "_already_running", lambda: False)
     monkeypatch.setattr(app_mod, "Application", FakeApplication)
     monkeypatch.setattr(app, "start_watching", lambda: None)
     monkeypatch.setattr(app, "watch_displays", lambda: None)
-    monkeypatch.setattr(app_mod.signal, "signal", lambda *_a: None)
-    monkeypatch.setattr(app, "_watch_quit_signals", lambda: None)
+    monkeypatch.setattr(app_mod.signal, "signal", lambda *a: order.append(("signal", a)))
+    monkeypatch.setattr(app, "_watch_quit_signals", lambda: order.append(("watch",)))
     assert app.run() == 0
     ((args, kwargs),) = made
     assert args[0] == app_mod.APP_NAME and kwargs == {"open_client": False}
+    # Fabric's own SIGINT handler would quit without the fade: reset before the Gtk main loop
+    # starts, and GLib's handlers installed
+    sigint = app_mod.signal
+    assert order.index(("signal", (sigint.SIGINT, sigint.SIG_DFL))) < order.index(("run",))
+    assert ("watch",) in order
 
 
 def test_notify_send_body_cannot_be_parsed_as_option(env, monkeypatch):
@@ -1634,3 +1640,49 @@ def test_a_quit_mid_crossfade_closes_the_old_one_and_fades_the_new_one(renv, tim
     assert app._leaving == {"HDMI-A-1": new} and app.app.quits == 0
     new.faded_out()
     assert app._leaving == {} and app.app.quits == 1 and timers == {}
+
+
+def test_a_reload_only_releases_the_held_shell_of_its_own_monitor(env, make_config):
+    """One reload rebuilds A and turns B off while B's shell still waits: B's never-seen shell
+    closes, but A's held shell stays on screen until A's successor fades in."""
+    app, mapping = env
+    mapping.update({"HDMI-A-1": object(), "HDMI-A-2": object()})
+    store = ReloadStore(make_config(monitors={"HDMI-A-1": mon(), "HDMI-A-2": mon("plasma")}))
+    app.store = store
+    app.sync_monitors()
+    a_old = app.shells["HDMI-A-1"]
+    a_old.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon(), "HDMI-A-2": mon()})
+    app.reload()  # B on: a waiting shell
+    b_waiting = app.shells["HDMI-A-2"]
+    assert b_waiting.fade_state == "waiting"
+    store.pending = make_config(
+        monitors={
+            "HDMI-A-1": {"shell": "edge", "panels": [], "theme": {"thickness": 12}},
+            "HDMI-A-2": mon("plasma"),
+        }
+    )
+    app.reload()  # A rebuilt (its old shell held), B turned off
+    a_new = app.shells["HDMI-A-1"]
+    assert a_new is not a_old and a_new.fade_state == "waiting"
+    assert b_waiting.fade_state == "done"
+    assert app._leaving == {"HDMI-A-1": a_old}
+    assert not a_old.fading_out and a_old.fade_state == "shown"  # A still shows a frame
+    a_new.fade_in()
+    assert a_old.fading_out
+
+
+def test_a_fading_out_shell_whose_monitor_is_replaced_is_closed_at_once(env, make_config):
+    app, mapping = env
+    store = ReloadStore(make_config(monitors={"HDMI-A-1": mon()}))
+    app.store = store
+    mapping["HDMI-A-1"] = object()
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    shell.fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    assert app._leaving == {"HDMI-A-1": shell} and shell.fade_state == "fading-out"
+    mapping["HDMI-A-1"] = object()  # a new Gdk monitor while it fades: its output is gone
+    app.sync_monitors()
+    assert shell.fade_state == "done" and app._leaving == {}
