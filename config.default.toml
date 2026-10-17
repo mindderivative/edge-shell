@@ -14,6 +14,7 @@ radius = 14         # R, px
 peek = 14           # hover peek depth, px
 hover_zone = 16     # invisible hover target past the frame, px
 duration_ms = 280
+fade_ms = 50        # fade in/out of a monitor's Edge Shell, 0-500 ms; 0 = no fade
 font = ["Hack Nerd Font Mono", "JetBrains Mono", "monospace"]
 
 # Border around the outside of the frame and panel outline (spec section 18). Opt-in.

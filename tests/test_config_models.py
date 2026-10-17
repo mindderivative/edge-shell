@@ -80,6 +80,24 @@ def test_monitor_theme_override_merges(make_config):
     assert cfg.theme_for("DP-1").accent == "#8fd3b6"
 
 
+def test_fade_ms_defaults_to_50_and_is_bounded_0_to_500(make_config):
+    assert make_config().theme.fade_ms == 50
+    assert make_config(theme={"fade_ms": 0}).theme.fade_ms == 0  # 0: no fade
+    assert make_config(theme={"fade_ms": 500}).theme.fade_ms == 500
+    for bad in (-1, 501):
+        with pytest.raises(ValidationError) as exc:
+            make_config(theme={"fade_ms": bad})
+        assert exc.value.errors()[0]["loc"] == ("theme", "fade_ms")
+
+
+def test_fade_ms_has_a_per_monitor_override(make_config):
+    cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 300}}})
+    assert cfg.theme_for("HDMI-A-1").fade_ms == 300
+    assert cfg.theme_for("DP-1").fade_ms == 50
+    with pytest.raises(ValidationError, match="monitors.HDMI-A-1.theme: fade_ms"):
+        make_config(monitors={"HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 501}}})
+
+
 def test_bad_override_color_fails_at_load(make_config):
     with pytest.raises(ValidationError) as exc:
         make_config(monitors={"HDMI-A-1": {"theme": {"accent": "nope"}}})

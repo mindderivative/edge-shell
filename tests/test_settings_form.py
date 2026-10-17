@@ -57,6 +57,14 @@ def test_theme_numbers_take_their_bounds_from_the_schema(form):
     assert form.theme.field("thickness").hint == "px"
 
 
+def test_the_fade_is_a_0_to_500_ms_slider_with_its_hint(form):
+    fade = form.theme.field("fade_ms")
+    assert (fade.kind, fade.minimum, fade.maximum) == ("int", 0, 500)
+    assert uses_slider(fade)  # 500 is SLIDER_MAX_SPAN: the slider rule takes it
+    assert fade.label == "Fade"
+    assert fade.hint == "ms; 0 turns the fade off"
+
+
 def test_theme_font_is_a_font_list(form):
     assert form.theme.field("font").kind == "fonts"
 
@@ -466,6 +474,7 @@ def test_a_bounded_whole_number_with_a_short_range_is_a_slider():
         ("theme", "radius"),
         ("theme", "peek"),
         ("theme", "hover_zone"),
+        ("theme", "fade_ms"),
         ("border", "width"),
         ("shadow", "elevation"),
         ("handle_style", "size"),

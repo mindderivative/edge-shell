@@ -46,6 +46,7 @@ HINTS = {
     ("Theme", "peek"): "px",
     ("Theme", "hover_zone"): "px",
     ("Theme", "duration_ms"): "ms",
+    ("Theme", "fade_ms"): "ms; 0 turns the fade off",
     ("Border", "width"): "px",
     ("Shadow", "elevation"): "% (100 % = 48 px)",
     ("HandleStyle", "size"): "px along the edge",
@@ -68,6 +69,7 @@ HINTS = {
 # Row labels; any other key reads "Some key" (pydantic's own titles read "Duration Ms").
 LABELS = {
     "duration_ms": "Duration",
+    "fade_ms": "Fade",
     "text_secondary": "Secondary text",
     "surface_hover": "Surface (hover)",
     "handle_hover": "Handle (hover)",
@@ -90,9 +92,9 @@ KIND_LABELS = {"edge": "Edge", "corner": "Corner", "float": "Float (coming soon)
 LEAD_ROWS = ("name", "widget", "panel")  # every panel section starts with these
 # A whole number with both bounds gets a slider (Phil: "If a numeric has a minimum and maximum
 # use sliders instead of number spinners") when its range is at most this wide: on a 160 px
-# slider that is at most 3 values per pixel. Wider ranges (an offset of +-20000, a corner
-# width of 60-4000 px, a duration of 0-5000 ms, a depth of 16-2000 px, an order of 0-1000)
-# keep the spin button, whose arrows step by one.
+# slider that is at most 3 values per pixel (the fade, 0-500 ms, is the widest slider). Wider
+# ranges (an offset of +-20000, a corner width of 60-4000 px, a duration of 0-5000 ms, a depth
+# of 16-2000 px, an order of 0-1000) keep the spin button, whose arrows step by one.
 SLIDER_MAX_SPAN = 500
 CORNER_ROWS = (*LEAD_ROWS, "corner", "edge", "width", "height", "state")  # a corner panel
 

@@ -132,6 +132,9 @@ class Theme(_Strict):
     peek: Annotated[int, Field(ge=1, le=64)]
     hover_zone: Annotated[int, Field(ge=1, le=64)]
     duration_ms: Annotated[int, Field(ge=0, le=5000)]
+    # The fade in and out of a monitor's windows (spec 21); 0 = none. At most 500, so the
+    # settings window shows a slider (settings.form.SLIDER_MAX_SPAN).
+    fade_ms: Annotated[int, Field(ge=0, le=500)] = 50
     font: Annotated[list[str], Field(min_length=1)]
     border: Border = Field(default_factory=Border)
     shadow: Shadow = Field(default_factory=Shadow)
