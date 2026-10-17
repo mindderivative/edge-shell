@@ -34,8 +34,10 @@ class FakeShell:
         on_settings=None,
         fade_ms=0,
         on_fade_in=None,
+        reserve_now=True,
     ):
         self.name = name
+        self.reserve_now = reserve_now
         self.monitor = monitor
         self.on_layout = on_layout
         self.on_error = on_error
@@ -1453,6 +1455,36 @@ def test_a_rebuild_holds_the_old_shell_until_the_new_one_fades_in(renv):
     assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
     old.faded_out()
     assert FakeShell.closed == ["HDMI-A-1"] and app._leaving == {} and errors == []
+
+
+def test_only_a_shell_without_a_predecessor_reserves_its_edges_late(renv):
+    """Phil's gate finding 4: a fresh enable builds the zone strips 50 ms after the fade-in
+    starts; a rebuild's successor builds them at once (the held shell has none any more)."""
+    app, store, _, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    assert old.fade_ms == 50 and old.reserve_now is False  # fresh, fading: late
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    assert app.shells["HDMI-A-1"].reserve_now is True  # a predecessor is held
+
+
+def test_an_enable_after_a_finished_disable_reserves_late_again(renv):
+    app, store, _, _, make_config = renv
+    app.shells["HDMI-A-1"].fade_in()
+    store.pending = make_config(monitors={"HDMI-A-1": mon("plasma")})
+    app.reload()
+    app._leaving["HDMI-A-1"].faded_out()  # gone: nothing is held
+    store.pending = make_config(monitors={"HDMI-A-1": mon()})
+    app.reload()
+    assert app.shells["HDMI-A-1"].reserve_now is False
+
+
+def test_without_a_fade_the_strips_are_reserved_at_once(renv):
+    app, store, _, _, make_config = renv
+    store.pending = thicker(make_config, fade_ms=0)
+    app.reload()
+    assert app.shells["HDMI-A-1"].fade_ms == 0 and app.shells["HDMI-A-1"].reserve_now is True
 
 
 def test_the_old_shell_fades_out_over_the_new_configs_fade(renv):

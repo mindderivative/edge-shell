@@ -121,7 +121,7 @@ def bare_shell(windows, panels=(), unregister=None):
     shell._unregister = unregister or (lambda _w: None)
     shell.monitor = FakeMonitor()
     shell._monitor_handlers = []
-    shell._measure_id = shell._relayout_id = 0
+    shell._measure_id = shell._relayout_id = shell._reserve_id = 0
     shell._fade = None
     shell._raises_pending = shell._ready_id = 0
     shell._detached = False

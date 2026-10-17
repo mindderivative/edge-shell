@@ -50,6 +50,11 @@ RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
 # A resolution change arrives as several notify::geometry signals; re-layout once it settles.
 RELAYOUT_DELAY_MS = 250
+# A fresh enable (no predecessor) builds the zone strips this long after its fade-in starts, not
+# with the shell: the strips make a maximized window shrink, which must not happen before the
+# frame is seen (Phil's gate finding 4; building them with the shell shrank it ~0.5 s early, the
+# wait for the first re-raise). The window resizes a beat after the frame starts to appear.
+RESERVE_DELAY_MS = 50
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
@@ -126,6 +131,7 @@ class MonitorShell:
         on_settings=None,
         fade_ms: int = 0,
         on_fade_in: Callable[[MonitorShell], None] | None = None,
+        reserve_now: bool = True,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
@@ -135,7 +141,13 @@ class MonitorShell:
         `fade_ms` > 0 (spec 21): every window is built at opacity 0 and the panels take no
         input; once the monitor is ready (the first re-raise has run, no "content" measurement
         is pending) all windows fade in together over `fade_ms`, the panels take input from
-        the start of the fade, and `on_fade_in(shell)` is called. 0: no fade (as before)."""
+        the start of the fade, and `on_fade_in(shell)` is called. 0: no fade (as before).
+
+        `reserve_now` False (only with a fade): the 4 zone strips are not built with the shell
+        but RESERVE_DELAY_MS after the fade-in starts (a fresh enable, a startup, a hot-plug;
+        the maximized windows shrink after the frame appears). True: built at once, as a
+        rebuild's successor does (the held old shell already destroyed its own strips, so the
+        zone stays continuous). Without a fade they are always built at once."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
@@ -173,6 +185,8 @@ class MonitorShell:
         self._scale_warned = False
         self._monitor_handlers: list[int] = []
         self._fade_ms = fade_ms
+        self._reserve_now = reserve_now or fade_ms <= 0
+        self._reserve_id = 0  # pending late build of the strips
         self._on_fade_in = on_fade_in or (lambda _shell: None)
         self._fade: Fade | None = None  # made in _build, right after the canvas
         self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
@@ -200,9 +214,8 @@ class MonitorShell:
             GLib.source_remove,
             on_start=self._faded_in,
         )
-        self.strips = [FrameEdge(edge, monitor, theme, self._scope) for edge in EDGES]
-        for strip in self.strips:
-            self._track(strip)
+        if self._reserve_now:
+            self._build_strips(theme)
         self._sync_panels(config, theme, startup=True)
         if self.live_panels():
             for i, delay in enumerate(raise_delays()):
@@ -212,6 +225,25 @@ class MonitorShell:
         self._monitor_handlers.append(monitor.connect("notify::geometry", self._on_geometry))
         if self._fade.state == "waiting":  # checked once the build has returned to the loop
             self._ready_id = GLib.idle_add(self._ready_idle)
+
+    def _build_strips(self, theme) -> None:
+        """The 4 zone strips, each tracked (and so registered) as soon as it exists."""
+        for edge in EDGES:
+            strip = FrameEdge(edge, self.monitor, theme, self._scope)
+            self.strips.append(strip)
+            self._track(strip)
+
+    def _reserve(self) -> bool:
+        """RESERVE_DELAY_MS after the fade-in started: build the strips from the current theme,
+        unless the shell was closed or detached meanwhile."""
+        self._reserve_id = 0
+        if self._closed or self._detached or self.strips:
+            return False
+        try:
+            self._build_strips(self._theme)
+        except Exception:  # a GLib callback: never raise into the main loop (decision 11)
+            log.exception("reserving the edges of %s failed", self.name)
+        return False
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -494,6 +526,8 @@ class MonitorShell:
                 panel.set_input_enabled(True)
             except Exception:  # one failing panel must not leave the others without input
                 log.exception("could not enable the input of a panel on %s", self.name)
+        if not self._reserve_now and not self.strips and not self._reserve_id:
+            self._reserve_id = GLib.timeout_add(RESERVE_DELAY_MS, self._reserve)
         self._on_fade_in(self)
 
     @property
@@ -514,21 +548,26 @@ class MonitorShell:
         if not self._closed and self._fade is not None and self._fade.state == "fading-in":
             self._fade.finish()
 
-    def detach(self) -> None:
+    def detach(self, keep_strips: bool = False) -> None:
         """Stop following the config and the monitor: the shell is leaving (fade_out, or a
         rebuild replaces it). Pending measurements, re-layouts and readiness checks are
         dropped, re-raises do nothing (a re-map would blink), the monitor's geometry is no
         longer watched, and the zone strips are destroyed now, so the edges are reserved by
         the successor's strips alone (never twice). Everything else stays on screen, as it
-        is, until fade_out or close. Once only."""
+        is, until fade_out or close. Once only.
+
+        `keep_strips` (fade_out, a leaving shell with no successor): the strips stay, and are
+        closed with the other windows, so a maximized window grows only when the frame is
+        gone (it would show its square corners through the fading frame's rounded ones)."""
         if self._detached or self._closed:
             return
         self._detached = True
         self._cancel_sources()
         self._disconnect_monitor()
-        for strip in self.strips:
-            self._destroy(strip)
-        self.strips = []
+        if not keep_strips:
+            for strip in self.strips:
+                self._destroy(strip)
+            self.strips = []
 
     def fade_out(self, duration_ms: int, on_done: Callable[[MonitorShell], None]) -> None:
         """Fade every window out over `duration_ms` from the opacity it has, then close and
@@ -542,7 +581,7 @@ class MonitorShell:
             return
         if self.fading_out:
             return
-        self.detach()
+        self.detach(keep_strips=True)  # the zones go with the frame, at the end
         for panel in self.live_panels():
             try:
                 panel.set_input_enabled(False)
@@ -624,10 +663,10 @@ class MonitorShell:
         self._sync_panels(config, theme, startup=False)
 
     def _cancel_sources(self) -> None:
-        for source in (self._measure_id, self._relayout_id, self._ready_id):
+        for source in (self._measure_id, self._relayout_id, self._ready_id, self._reserve_id):
             if source:
                 GLib.source_remove(source)
-        self._measure_id = self._relayout_id = self._ready_id = 0
+        self._measure_id = self._relayout_id = self._ready_id = self._reserve_id = 0
 
     def _disconnect_monitor(self) -> None:
         for handler in self._monitor_handlers:
@@ -646,6 +685,7 @@ class MonitorShell:
         for window in self.windows:
             self._release(window)
         self.windows.clear()
+        self.strips = []  # released with the windows
         self.panels.clear()
         self._resolved.clear()
         self._handles.clear()

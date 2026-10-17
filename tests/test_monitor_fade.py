@@ -98,7 +98,7 @@ def build(monkeypatch, make_config, fake_registry, loop):
     )
     monkeypatch.setattr(mon_mod.MonitorShell, "_check_monitor", lambda self, w: None)
 
-    def _build(monitors, fade_ms=50, theme=None):
+    def _build(monitors, fade_ms=50, theme=None, reserve_now=True):
         faded = []
         shell = mon_mod.MonitorShell(
             "HDMI-A-1",
@@ -107,6 +107,7 @@ def build(monkeypatch, make_config, fake_registry, loop):
             lambda _w: None,
             fade_ms=fade_ms,
             on_fade_in=faded.append,
+            reserve_now=reserve_now,
         )
         clock = FakeClock()
 
@@ -315,7 +316,7 @@ def test_a_panel_that_cannot_drop_its_input_does_not_stop_the_fade_out(build, lo
     done = []
     shell.fade_out(50, done.append)
     assert shell.panels[1].inputs[-1] is False and "input" in caplog.text  # the others dropped
-    assert shell.fade_state == "fading-out" and shell.strips == []
+    assert shell.fade_state == "fading-out" and len(shell.strips) == 4  # kept
     shell.frames(5)
     assert shell.canvas.destroyed and done == [shell] and shell.fade_state == "done"
 
@@ -348,14 +349,18 @@ def test_fade_out_fades_every_window_then_closes_and_calls_back_once(build, loop
     canvas, panel, strips = shell.canvas, shell.panels[0], list(shell.strips)
     done = []
     shell.fade_out(50, done.append)
-    assert all(s.destroyed for s in strips) and shell.strips == []  # the zones go at once
+    # the zones stay until the frame is gone: a window must not grow into the fading frame
+    assert shell.strips == strips and not any(s.destroyed for s in strips)
     assert panel.inputs[-1] is False and not canvas.destroyed  # clicks go through it now
-    shell.frames(4)
+    shell.frames(2)
+    assert not any(s.destroyed for s in strips) and set(strips) <= set(shell.windows)
+    shell.frames(2)
     out = canvas.opacity[-4:]
     assert out == pytest.approx(list(reversed(THIRDS)), abs=1e-3)  # from 1 down to 0
     assert panel.opacity[-4:] == out  # the same frames for every window
     assert canvas.destroyed and panel.destroyed and done == [shell]
     assert shell.fade_state == "done" and not canvas.ticker._callbacks
+    assert all(s.destroyed for s in strips) and shell.strips == []  # gone with the frame
     shell.frames(3)
     assert done == [shell]
 
@@ -501,14 +506,18 @@ def test_a_rebuild_crossfades_two_real_shells_in_the_same_frames(
             for shell in shells:
                 shell.canvas.ticker.run(clock)
 
+    assert old.strips == []  # a fresh enable: the zones come 50 ms after the fade-in starts
     vsync(4, old)
     assert old.fade_state == "shown"
+    loop.fire(mon_mod.RESERVE_DELAY_MS)
     old_strips = list(old.strips)
+    assert len(old_strips) == 4
     store.pending = make_config(monitors=edge(DOCK), theme={"thickness": 12})
     app.reload()
     new = app.shells["HDMI-A-1"]
     assert new is not old and app._leaving == {"HDMI-A-1": old}
     assert all(s.destroyed for s in old_strips)  # the edges are reserved once: by the new ones
+    assert len(new.strips) == 4 and mon_mod.RESERVE_DELAY_MS not in loop.delays()  # at once
     assert old.canvas.opacity[-1] == 1.0 and new.canvas.opacity == [0.0]  # old still shown
     assert old.panels[0].inputs == [False, True]  # the held shell keeps its input
     loop.run_idles()
@@ -520,3 +529,209 @@ def test_a_rebuild_crossfades_two_real_shells_in_the_same_frames(
     assert old_canvas.opacity[-4:] == pytest.approx(list(reversed(THIRDS)), abs=1e-3)
     assert old_canvas.destroyed and old.panels == [] and app._leaving == {}
     assert not new.canvas.destroyed and new.fade_state == "shown"
+
+
+# ---- the zone strips: 50 ms after a fade-in starts, until a fade-out ends (Phil's gate) ----
+
+
+def started(shell, loop):
+    """Run a fresh (late-reserving) build up to the start of its fade-in."""
+    loop.run_idles()
+    loop.fire(mon_mod.RAISE_DELAY_MS)
+    assert shell.fade_state == "fading-in"
+
+
+def test_a_fresh_enable_builds_no_strips_with_the_shell(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    assert shell.strips == [] and len(shell.windows) == 2  # canvas, panel
+    assert mon_mod.RESERVE_DELAY_MS not in loop.delays()  # nothing is armed before the fade-in
+    loop.run_idles()
+    assert shell.strips == [] and mon_mod.RESERVE_DELAY_MS not in loop.delays()
+
+
+def test_the_strips_come_50_ms_after_the_fade_in_starts_and_not_before(build, loop):
+    assert mon_mod.RESERVE_DELAY_MS == 50
+    shell = build(edge(DOCK, CLOCK), reserve_now=False)
+    started(shell, loop)
+    assert shell.faded == [shell] and shell.strips == []  # the frame appears first
+    assert loop.delays().count(50) == 1
+    shell.frames(1)
+    assert shell.strips == []
+    loop.fire(50)
+    assert len(shell.strips) == 4 and len(shell.windows) == 7
+    assert [s.args[0] for s in shell.strips] == list(mon_mod.EDGES)
+    assert all(s in shell.windows for s in shell.strips)
+    assert all(s.opacity == [pytest.approx(shell._fade.value)] for s in shell.strips)
+    shell.frames(4)
+    assert all(s.opacity[-1] == 1.0 for s in shell.strips) and shell.fade_state == "shown"
+    assert 50 not in loop.delays()
+
+
+def test_the_late_strips_take_the_shells_current_theme(build, loop):
+    shell = build(edge(DOCK), reserve_now=False, theme={"thickness": 8})
+    started(shell, loop)
+    config = shell.config_for(monitors=edge(DOCK), theme={"thickness": 12})
+    shell.apply(config, [Change("restyle", "HDMI-A-1")])  # before the strips exist
+    loop.fire(50)
+    assert [s.args[2].thickness for s in shell.strips] == [12] * 4
+
+
+def test_the_late_strips_are_not_built_when_the_shell_closes_first(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    (source,) = [i for i, (ms, _, _) in loop.timers.items() if ms == 50]
+    shell.close()
+    assert 50 not in loop.delays() and source in loop.removed
+    assert shell.strips == [] and shell.windows == []
+
+
+def test_the_late_strips_are_not_built_when_the_shell_is_detached_first(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    shell.detach()
+    assert 50 not in loop.delays() and shell.strips == []
+    shell.close()
+
+
+def test_a_disable_right_after_the_enable_never_builds_the_strips(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    done = []
+    shell.fade_out(50, done.append)
+    assert 50 not in loop.delays() and shell.strips == []
+    shell.frames(5)
+    assert done == [shell] and shell.strips == []
+
+
+def test_a_timer_that_fires_late_on_a_closed_shell_builds_nothing(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    (_, fn, _args), *_ = [t for t in loop.timers.values() if t[0] == 50]
+    shell.close()
+    assert fn() is False and shell.strips == [] and shell.windows == []
+
+
+def test_with_a_predecessor_the_strips_are_built_at_once(build, loop):
+    shell = build(edge(DOCK), reserve_now=True)
+    assert len(shell.strips) == 4 and len(shell.windows) == 6
+    started(shell, loop)
+    assert 50 not in loop.delays()  # no timer, and no second set
+    assert len(shell.strips) == 4 and len(shell.windows) == 6
+
+
+def test_without_a_fade_the_strips_are_built_at_once_whatever_is_asked(build, loop):
+    shell = build(edge(DOCK), fade_ms=0, reserve_now=False)
+    assert len(shell.strips) == 4 and 50 not in loop.delays()
+    loop.fire(500)
+    assert len(shell.strips) == 4 and 50 not in loop.delays()
+    assert all(w.opacity == [] for w in shell.windows)
+
+
+def test_a_plain_disable_keeps_the_strips_until_the_fade_out_ends(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    loop.fire(50)
+    shell.frames(4)
+    strips = list(shell.strips)
+    done = []
+    shell.fade_out(50, done.append)
+    for _ in range(3):  # the whole fade-out but its last frame: the frame is still partly there
+        shell.frames(1)
+        assert shell.canvas.opacity[-1] > 0 and not any(s.destroyed for s in strips)
+        assert shell.strips == strips and set(strips) <= set(shell.windows)
+    shell.frames(1)
+    assert done == [shell] and all(s.destroyed for s in strips) and shell.strips == []
+    assert shell.windows == []
+
+
+def test_detach_keeps_the_strips_only_when_asked(build, loop):
+    kept = build(edge(DOCK))
+    strips = list(kept.strips)
+    kept.detach(keep_strips=True)
+    assert kept.strips == strips and not any(s.destroyed for s in strips)
+    kept.detach()  # once only: the second call changes nothing
+    assert kept.strips == strips and not any(s.destroyed for s in strips)
+    kept.close()
+    assert all(s.destroyed for s in strips) and kept.strips == [] and kept.windows == []
+    plain = build(edge(DOCK))
+    strips = list(plain.strips)
+    plain.detach()
+    assert plain.strips == [] and all(s.destroyed for s in strips)
+    assert all(s not in plain.windows for s in strips)
+
+
+def test_a_quit_in_the_middle_of_a_fade_out_leaves_no_strip_behind(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    loop.fire(50)
+    shell.frames(4)
+    strips = list(shell.strips)
+    shell.fade_out(50, lambda _s: None)
+    shell.frames(1)
+    shell.close()  # the quit status: everything goes now
+    assert all(s.destroyed for s in strips) and shell.strips == [] and shell.windows == []
+    assert not shell.canvas.ticker._callbacks and 50 not in loop.delays()
+
+
+def test_a_failing_late_strip_is_logged_and_the_shell_closes_cleanly(
+    build, loop, monkeypatch, caplog
+):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    real, built = mon_mod.FrameEdge, []
+
+    def flaky(edge_name, *args):
+        if edge_name == "left":
+            raise RuntimeError("no strip")
+        built.append(real(edge_name, *args))
+        return built[-1]
+
+    monkeypatch.setattr(mon_mod, "FrameEdge", flaky)
+    loop.fire(50)  # a GLib callback: never raises into the main loop
+    assert "reserving the edges" in caplog.text
+    shell.close()
+    assert all(s.destroyed for s in built) and shell.windows == [] and shell.strips == []
+
+
+def test_disabling_a_monitor_keeps_its_strips_until_the_frame_is_gone_end_to_end(
+    build, loop, monkeypatch, make_config
+):
+    """The app's own path: Enable unticked -> _close_shell -> fade_out (Phil's finding 3)."""
+    monitor = FakeMonitor()
+    monkeypatch.setattr(app_mod, "monitors_by_name", lambda: {"HDMI-A-1": monitor})
+    monkeypatch.setattr(app_mod.subprocess, "Popen", lambda *_a, **_k: None)
+    store = Store(make_config(monitors=edge(DOCK)))
+    app = app_mod.EdgeShellApp(store)
+    app.sync_monitors()
+    shell = app.shells["HDMI-A-1"]
+    assert shell.strips == []  # a fresh enable
+    loop.run_idles()
+    loop.fire(500)
+    loop.fire(mon_mod.RESERVE_DELAY_MS)
+    clock = FakeClock()
+
+    def frames(n):
+        for _ in range(n):
+            clock.now_us += FRAME_US
+            shell.canvas.ticker.run(clock)
+
+    frames(4)
+    strips = list(shell.strips)
+    assert len(strips) == 4
+    store.pending = make_config(monitors={"HDMI-A-1": {"shell": "plasma"}})
+    app.reload()
+    assert "HDMI-A-1" not in app.shells and app._leaving == {"HDMI-A-1": shell}
+    assert not any(s.destroyed for s in strips)  # the window must not grow into the frame yet
+    frames(2)
+    assert not any(s.destroyed for s in strips) and shell.canvas.opacity[-1] > 0
+    frames(2)
+    assert all(s.destroyed for s in strips) and app._leaving == {}
+
+
+def test_a_timer_that_fires_late_on_a_detached_shell_builds_nothing(build, loop):
+    shell = build(edge(DOCK), reserve_now=False)
+    started(shell, loop)
+    (_, fn, _args), *_ = [t for t in loop.timers.values() if t[0] == 50]
+    shell.detach()
+    assert fn() is False and shell.strips == []
+    shell.close()

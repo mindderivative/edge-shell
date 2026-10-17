@@ -235,6 +235,7 @@ class EdgeShellApp:
 
     def _open_shell(self, name: str, monitor) -> None:
         log.info("opening Edge Shell on %s", name)
+        fade_ms = self._fade_ms(name)
         shell = self.shells[name] = MonitorShell(
             name,
             monitor,
@@ -244,8 +245,11 @@ class EdgeShellApp:
             on_layout=lambda shell, n=name: self._report_layout(n, shell),
             on_error=lambda shell, n=name: self._relayout_failed(n, shell),
             on_settings=self.open_settings,
-            fade_ms=self._fade_ms(name),
+            fade_ms=fade_ms,
             on_fade_in=self._faded_in,
+            # a rebuild's successor reserves the edges at once (the held old shell has no strips
+            # any more); a fresh enable, startup or hot-plug only after its fade-in starts
+            reserve_now=fade_ms <= 0 or name in self._leaving,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)

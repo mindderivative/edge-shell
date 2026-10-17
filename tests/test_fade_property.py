@@ -246,9 +246,9 @@ def check(app, w, fa, where):
     for name, s in app._leaving.items():
         assert not s._closed, f"{where}: closed shell still in _leaving"
         assert s._detached, f"{where}: leaving shell not detached"
-        assert s.strips == []
         assert s.fade_state in ("shown", "fading-out"), (where, s.fade_state)
         if s.fade_state == "shown":  # held: must have an invisible successor
+            assert s.strips == [], f"{where}: held shell keeps strips (stacked zones)"
             succ = app.shells.get(name)
             assert succ is not None and succ.fade_state == "waiting", (
                 f"{where}: held shell of {name} with successor "
