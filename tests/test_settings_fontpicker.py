@@ -86,6 +86,125 @@ def test_a_font_that_is_not_installed_is_listed_and_kept():
     assert p.label.get_text() == "Gone Font" and picks == []
 
 
+def rows(p):
+    return [r.get_child().get_text() for r in p.list.get_children()]
+
+
+def test_the_shown_row_is_matched_without_case_like_missing_is():
+    p, _ = picker("noto sans", system="")  # configured in lower case, installed as "Noto Sans"
+    p.fill()
+    assert p.visible_labels()[0] != "noto sans (not installed)"
+    assert p.list.get_selected_row().get_child().get_text() == "Noto Sans"
+    assert p.value == "noto sans"  # the configured spelling is kept until the user picks
+
+
+def test_opening_again_rebuilds_the_rows_only_when_the_value_or_the_families_changed():
+    p, _ = picker("Fira Mono")
+    p.fill()
+    first = p.list.get_children()
+    p.search.set_text("sans")
+    p.fill()  # the same value and families: the same row widgets, the search cleared
+    assert p.list.get_children() == first and p.search.get_text() == ""
+    assert p.list.get_selected_row().get_child().get_text() == "Fira Mono"
+    p.set("Hack Nerd Font")
+    p.fill()
+    again = p.list.get_children()
+    assert again != first and len(again) == len(p.entries)  # rebuilt, nothing left over
+    assert p.list.get_selected_row().get_child().get_text() == "Hack Nerd Font"
+    families = list(FAMILIES)
+    q = fontpicker.FontPicker(lambda _v: None, lambda: families, lambda: "Noto Sans")
+    q.set("Fira Mono")
+    q.fill()
+    old = q.list.get_children()
+    families.append("Zeta")
+    q.fill()
+    assert q.list.get_children() != old and rows(q)[-1] == "Zeta"
+
+
+def test_two_opens_never_hold_duplicate_rows():
+    p, _ = picker("Fira Mono")
+    p.fill()
+    p.fill()
+    p.set("Gone Font")
+    p.fill()
+    p.set("Fira Mono")
+    p.fill()
+    assert len(p.list.get_children()) == len(p.entries) == len(set(rows(p)))
+
+
+def test_opening_scrolls_to_the_selected_row(monkeypatch):
+    p, _ = picker("Noto Sans")
+    scheduled = []
+    monkeypatch.setattr(fontpicker.GLib, "idle_add", lambda f, *a: scheduled.append(f))
+    p.fill()
+    assert len(scheduled) == 1
+
+    class Row:
+        @staticmethod
+        def get_allocation():
+            return type("A", (), {"y": 800, "height": 30})()
+
+    p.scroller.get_vadjustment().configure(0, 0, 2000, 10, 100, 360)
+    monkeypatch.setattr(p.list, "get_selected_row", lambda: Row())
+    scheduled[0]()
+    assert p.scroller.get_vadjustment().get_value() == 800 + 15 - 180  # centred on the row
+
+
+def test_a_pick_closes_the_list_and_opening_focuses_the_search():
+    p, picks = picker("Fira Mono")
+    closed, focused = [], []
+    p.popover = type("Pop", (), {"popdown": lambda self: closed.append(1)})()
+    p.search.grab_focus = lambda: focused.append(1)
+    p.fill()
+    assert focused == [1]
+    p.list.emit("row-activated", p.list.get_row_at_index(len(p.entries) - 1))
+    assert closed == [1] and len(picks) == 1
+
+
+def test_the_button_label_is_cut_and_the_list_scrolls_at_its_height():
+    from gi.repository import Pango
+
+    p, _ = picker("Fira Mono")
+    assert p.label.get_ellipsize() == Pango.EllipsizeMode.END
+    assert p.label.get_max_width_chars() == p.label.get_width_chars() == fontpicker.FONT_CHARS
+    assert p.scroller.get_max_content_height() == fontpicker.POPUP_HEIGHT
+    assert p.scroller.get_propagate_natural_height()
+    assert p.scroller.get_min_content_width() == fontpicker.POPUP_WIDTH
+
+
+def test_a_missing_pangocairo_gives_no_installed_families(monkeypatch):
+    import importlib.util
+
+    real = gi.require_version
+
+    def refuse(name, version):
+        if name == "PangoCairo":
+            raise ValueError("Namespace PangoCairo not available")
+        return real(name, version)
+
+    monkeypatch.setattr(gi, "require_version", refuse)
+    spec = importlib.util.spec_from_file_location("fontpicker_nopc", fontpicker.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # a fresh copy; the real module is untouched
+    assert module.PangoCairo is None and module.installed_families() == ()
+
+
+def test_the_system_font_is_cleaned_like_the_installed_ones(monkeypatch):
+    class Settings:
+        def __init__(self, name):
+            self.props = type("P", (), {"gtk_font_name": name})()
+
+    def with_name(name):
+        stub = type("G", (), {"Settings": type("S", (), {"get_default": lambda: Settings(name)})})
+        monkeypatch.setattr(fontpicker, "Gtk", stub)
+        return fontpicker.system_family()
+
+    assert with_name("Sans 10") == "sans-serif"
+    assert with_name("Noto Sans 11") == "Noto Sans"
+    assert with_name('Bad"Font 10') == ""
+    assert with_name("Cantarell, Noto Sans 11") == ""
+
+
 def test_the_desktop_font_and_the_installed_families(monkeypatch):
     assert fontpicker.family_of("Hack Nerd Font  10") == "Hack Nerd Font"
     assert fontpicker.family_of("Noto Sans Bold Italic 11") == "Noto Sans"

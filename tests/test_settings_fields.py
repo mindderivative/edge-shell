@@ -538,6 +538,14 @@ def test_a_slider_sends_whole_numbers_and_takes_its_keys():
     assert changes[-1][1] == 2
 
 
+def test_a_slider_pages_by_a_tenth_of_its_range():
+    spec = FieldSpec("font_size", "Font size", "int", minimum=6, maximum=96)
+    row, changes, _ = row_for(spec, 6)
+    assert row.editor.adjustment.get_page_increment() == 9
+    row.editor.scale.emit("move-slider", Gtk.ScrollType.PAGE_FORWARD)  # Page Down / Up
+    assert changes[-1][1] == 15
+
+
 def test_a_wide_or_open_range_keeps_its_spin_button():
     for spec in (
         FORM.edge_panel.field("offset"),

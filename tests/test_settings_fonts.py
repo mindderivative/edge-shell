@@ -63,3 +63,44 @@ def test_enter_picks_the_first_row_shown():
     assert first_match(entries, "mono") == ("monospace", "monospace")
     assert first_match(entries, "") == (None, "Theme font")
     assert first_match(entries, "zzz") is None
+
+
+def labels(entries):
+    return [label for _v, label in entries]
+
+
+def test_the_system_font_is_filtered_and_mapped_like_the_installed_ones():
+    families = ("Fira Mono", "Noto Sans")
+    # GTK's default "Sans 10": the alias is the generic family, listed once, never "missing"
+    for alias, generic in (("Sans", "sans-serif"), ("MONOSPACE", "monospace"), ("serif", "serif")):
+        entries = picker_entries(families, alias, generic)
+        assert entries[0] == (generic, generic + " (system font)"), alias
+        assert [v for v, _l in entries].count(generic) == 1, alias
+        assert not any(label.endswith("(not installed)") for label in labels(entries)), alias
+    # a name the config could not hold, or two families in one name: no system row
+    for bad in ('Bad"Font', "Cantarell,Noto Sans", "Semi;colon"):
+        entries = picker_entries(families, bad, "Fira Mono")
+        assert not any(label.endswith("(system font)") for label in labels(entries)), bad
+        assert [v for v, _l in entries] == [*GENERIC_FAMILIES, *families], bad
+    # the system name is known: a configured value naming it is never also "not installed"
+    entries = picker_entries(families, "Cantarell", "cantarell")
+    assert labels(entries) == ["Cantarell (system font)", *GENERIC_FAMILIES, *families]
+
+
+def test_clean_system_family_maps_aliases_and_drops_what_the_config_refuses():
+    from settings.fonts import system_font
+
+    assert system_font(" Sans ") == "sans-serif"
+    assert system_font("Noto Sans") == "Noto Sans"
+    assert system_font('Bad"Font') == "" and system_font("A,B") == "" and system_font("") == ""
+    assert system_font(system_font("Sans")) == "sans-serif"  # idempotent
+
+
+def test_typing_searches_the_family_name_not_the_suffix():
+    assert not matches("Noto Sans (system font)", "font")
+    assert not matches("Gone (not installed)", "install")
+    assert matches("Noto Sans (system font)", "noto")
+    assert matches("Theme font", "font")
+    assert matches("Hack Nerd Font", "font")
+    entries = picker_entries(("Hack Nerd Font",), "Noto Sans", None)
+    assert first_match(entries, "font") == ("Hack Nerd Font", "Hack Nerd Font")

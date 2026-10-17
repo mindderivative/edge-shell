@@ -18,10 +18,21 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Pango", "1.0")
-gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gtk, Pango, PangoCairo  # noqa: E402
+try:
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import PangoCairo
+except (ValueError, ImportError):  # no PangoCairo typelib: the list holds no installed family
+    PangoCairo = None
+from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
-from settings.fonts import Entry, first_match, font_families, matches, picker_entries  # noqa: E402
+from settings.fonts import (  # noqa: E402
+    Entry,
+    first_match,
+    font_families,
+    matches,
+    picker_entries,
+    system_font,
+)
 
 POPUP_HEIGHT = 360  # px: the most the list takes before it scrolls
 POPUP_WIDTH = 280
@@ -32,6 +43,8 @@ FONT_CHARS = 22  # the button's label; a longer name is cut, the whole name is t
 def installed_families() -> tuple[str, ...]:
     """Every installed font family (Pango's font map), as settings.fonts.font_families lists
     them. Read once: a font installed while the window is open shows after a restart."""
+    if PangoCairo is None:
+        return ()
     return font_families(f.get_name() for f in PangoCairo.FontMap.get_default().list_families())
 
 
@@ -42,10 +55,11 @@ def family_of(font_name: str) -> str:
 
 def system_family() -> str:
     """The desktop's font family (Gtk.Settings gtk-font-name, which KDE sets to its General
-    font); "" when unknown."""
+    font); "" when unknown, or a name the config could not hold or a list of families. Cleaned
+    like the installed families (settings.fonts.system_font): "Sans" is "sans-serif"."""
     settings = Gtk.Settings.get_default()
     name = settings.props.gtk_font_name if settings is not None else None
-    return family_of(name) if name else ""
+    return system_font(family_of(name)) if name else ""
 
 
 class FontPicker:
@@ -67,6 +81,7 @@ class FontPicker:
         self.inherit_label = inherit_label
         self.value: str | None = None
         self.entries: tuple[Entry, ...] = ()
+        self._built: tuple[str | None, tuple[Entry, ...]] | None = None
         self.label = Gtk.Label(xalign=0)
         self.label.set_ellipsize(Pango.EllipsizeMode.END)
         self.label.set_max_width_chars(FONT_CHARS)
@@ -82,7 +97,7 @@ class FontPicker:
         self.search.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "edit-find-symbolic")
         self.list = Gtk.ListBox(activate_on_single_click=True)
         self.list.set_filter_func(self._shown)
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.scroller = scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         scroller.set_propagate_natural_height(True)  # the popover fits its rows ...
         scroller.set_max_content_height(POPUP_HEIGHT)  # ... up to this height
         scroller.set_min_content_width(POPUP_WIDTH)
@@ -114,21 +129,45 @@ class FontPicker:
             self.fill()
 
     def fill(self) -> None:
-        """(Re)build the rows for the value shown, clear the search and select the shown row
-        (the button runs this when the list opens)."""
+        """Open the list: clear the search, select the shown row and scroll to it (the button
+        runs this when the list opens). The rows are rebuilt only when the value or the family
+        list changed since they were built (2000 families take ~160 ms to build)."""
         families = (self._families or installed_families)()
         system = (self._system or system_family)()
-        self.entries = picker_entries(families, system, self.value, self.inherit_label)
-        for row in self.list.get_children():
-            self.list.remove(row)
-        for _value, label in self.entries:
-            self.list.add(Gtk.Label(label=label, xalign=0))
-        self.list.show_all()
+        entries = picker_entries(families, system, self.value, self.inherit_label)
+        if self._built != (self.value, entries):
+            self._built = (self.value, entries)
+            self.entries = entries
+            for row in self.list.get_children():
+                self.list.remove(row)
+            for _value, label in self.entries:
+                self.list.add(Gtk.Label(label=label, xalign=0))
+            self.list.show_all()
         self.search.set_text("")
-        shown = next((i for i, e in enumerate(self.entries) if e[0] == self.value), None)
+        shown = next((i for i, e in enumerate(self.entries) if self._is_shown(e[0])), None)
         if shown is not None:
             self.list.select_row(self.list.get_row_at_index(shown))
+            GLib.idle_add(self._scroll_to_selected)  # once the list has its size
         self.search.grab_focus()
+
+    def _is_shown(self, value: str | None) -> bool:
+        """Is `value` the row of the value shown? Without case, as "not installed" is decided
+        (a configured "noto sans" selects the installed "Noto Sans"; the config keeps its
+        spelling until the user picks)."""
+        if value is None or self.value is None:
+            return value is self.value
+        return value.casefold() == self.value.casefold()
+
+    def _scroll_to_selected(self) -> bool:
+        """Put the selected row in the middle of the list's view; False: run once."""
+        row = self.list.get_selected_row()
+        if row is not None:
+            area = row.get_allocation()
+            adjustment = self.scroller.get_vadjustment()
+            middle = area.y + area.height / 2 - adjustment.get_page_size() / 2
+            top = max(adjustment.get_upper() - adjustment.get_page_size(), 0)
+            adjustment.set_value(min(max(middle, 0), top))
+        return False
 
     def visible_labels(self) -> list[str]:
         """The labels of the rows the search leaves shown (tests, and the reviewer's eye)."""
