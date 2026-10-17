@@ -33,6 +33,11 @@ def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> Easing:
 EASE_OUT = cubic_bezier(0.2, 0.8, 0.2, 1.0)
 
 
+def linear(t: float) -> float:
+    """No easing (the shell fade: equal opacity steps per frame)."""
+    return t
+
+
 class Tween:
     def __init__(
         self,
@@ -62,6 +67,13 @@ class Tween:
             self._tick_id = 0
         self.value = self._from = self._to = float(target)
         self._on_value(self.value)
+
+    def stop(self) -> None:
+        """Stop where it is, without a last on_value (its widget may be about to go)."""
+        if self._tick_id:
+            self._widget.remove_tick_callback(self._tick_id)
+            self._tick_id = 0
+        self._from = self._to = self.value
 
     def animate_to(self, target: float) -> None:
         target = float(target)
