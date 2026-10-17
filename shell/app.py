@@ -338,7 +338,10 @@ class EdgeShellApp:
                 except Exception:
                     log.exception("closing the half-applied shell on %s failed", name)
         if failed:
-            self.sync_monitors()  # rebuild the dropped shells from the new config
+            try:
+                self.sync_monitors()  # rebuild the dropped shells from the new config
+            finally:
+                self._release_held()  # no successor (the rebuild raised): the held one fades
         self.refresh_css()
 
     def _log_deprecated(self, config) -> None:
@@ -398,6 +401,7 @@ class EdgeShellApp:
         except Exception:
             log.exception("rebuilding the panels of %s failed", name)
             self._report_error(f"{name}: rebuilding the panels failed")
+            self._release_held()  # no successor: a shell held for the crossfade fades out
 
     def _report_layout(self, name: str, shell) -> None:
         """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), and

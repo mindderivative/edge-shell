@@ -1488,3 +1488,37 @@ def test_a_fade_in_of_a_shell_that_is_not_the_current_one_does_not_fade_the_held
     app.reload()
     app._faded_in(SimpleNamespace(name="HDMI-A-1"))  # a late ready of a replaced shell
     assert FakeShell.faded == [] and not old.fading_out and app._leaving == {"HDMI-A-1": old}
+
+
+# ---- a held shell is always released (no shell is held forever) -----------------------
+
+
+def test_a_failed_relayout_rebuild_releases_the_held_shell(renv):
+    app, store, errors, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()
+    new = app.shells["HDMI-A-1"]
+    FakeShell.fail_open = {"HDMI-A-1"}
+    new.on_error(new)  # its own re-layout fails and the rebuild raises
+    assert app.shells == {} and len(errors) == 1 and "rebuilding the panels" in errors[0]
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    old.faded_out()
+    assert app._leaving == {}
+
+
+def test_a_failed_apply_and_failed_rebuild_release_the_held_shell(renv):
+    app, store, errors, _, make_config = renv
+    old = app.shells["HDMI-A-1"]
+    old.fade_in()
+    store.pending = thicker(make_config)
+    app.reload()  # the old shell is held, the new one waits
+    FakeShell.fail_apply = {"HDMI-A-1"}
+    FakeShell.fail_open = {"HDMI-A-1"}
+    store.pending = thicker(make_config, accent="#112233")  # a restyle, applied in place
+    app.reload()
+    assert app.shells == {} and len(errors) >= 1 and "cannot build" in errors[-1]
+    assert FakeShell.faded == [("HDMI-A-1", 50)] and old.fading_out
+    old.faded_out()
+    assert app._leaving == {}
