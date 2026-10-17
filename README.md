@@ -402,15 +402,55 @@ file.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
-- Changes apply at once; the running shell reloads them like a hand edit. Spin buttons wait
-  0.4 s after the last change of any spin button, and one queue applies every change in the
-  order you made it: per setting only the last value counts, and a spin button changed and
-  changed back is not written at all. Anything still waiting is applied before a panel is
-  added, moved or removed, before Undo, Save or leaving the config (New, Open, Close, Exit),
-  and before Detect monitors; Revert all drops it. A change the shell would reject is not
-  saved: the reason (with the key path) shows under the row. The mouse wheel scrolls the page
-  and never changes a value, so scrolling over a monitor's shell mode cannot switch it. If the file
-  is changed in an editor while changes are still waiting, they are not applied (they were made
+- **Inputs.**
+  - **Sliders.** A whole number with a minimum and a maximum at most 500 apart is a slider with
+    a spin button beside it for typing an exact value; both show the same number. These are
+    Theme: thickness, radius, peek, hover zone (General), border width, shadow elevation,
+    handle size and weight; Layout: gap; a panel's Handle tab: size and weight; and a widget's
+    font size (the clock, 6-96). A focused slider takes the arrow keys (1), Page Up/Down
+    (a tenth of the range), Home and End. The wider ranges keep a spin button: duration
+    (0-5000 ms), a panel's offset, order, depth, minimum and maximum length and handle offset,
+    a corner panel's width and height. An unset optional number (the font size) shows the
+    slider's minimum and its note says where the value comes from.
+  - **Toggles** (border and shadow Enabled, a panel's click, hover and drag) are thin
+    switches: a 38 x 22 px track with a round 16 px knob, centred in the row (CSS class
+    `edge-switch`, `settings/style.py`).
+  - **Dropdowns** (handle shape, a panel's edge, align and state, the length mode, the panel
+    type list in the toolbar) open below their row (above it when there is no room) with
+    every entry shown at once; the active entry is highlighted, not laid over the box. Before,
+    they opened one row high with a scrollbar on KWin/Wayland and grew on a mouse-over.
+  - **Fonts.** A font is a button that opens a list inside the window: a search field above
+    the families (it has the keyboard focus; type any part of a name, case ignored; Enter
+    picks the first match, a click any row, Escape closes without a change). The list opens
+    scrolled to the font in use. Order: the desktop's own font first ("Noto Sans (system
+    font)", read from the desktop's font setting), then `monospace`, `sans-serif`, `serif`,
+    then every installed family A-Z. The desktop's `Sans`, `Sans-Serif` and `System-ui` show
+    as `sans-serif`. A font in your file that is not installed is listed as "NAME (not
+    installed)", selected, and kept. A hand-edited empty name shows as "(empty)" (the shell
+    refuses an empty name in the theme's font list). The font list is read once per window
+    process.
+  - The Theme page's **Font** is a list of fonts, an ordered fallback list (the first
+    installed one is used): one font button per family, with Move up, Move down and Remove,
+    and **Add font** below, which adds the desktop's font (if it is listed already, then
+    `monospace`, `sans-serif`, `serif`). The list keeps at least one font (its Remove is greyed
+    out at one). After a Move, Remove or Add font the keyboard focus goes to the same font's
+    button (the new font's picker after Add font). The buttons are named "Move font 2 up",
+    "Move font 2 down", "Remove font 2 from the list". The shell does not follow the KDE font
+    by itself: the theme's default font list is unchanged (Hack Nerd Font Mono, JetBrains
+    Mono, monospace); the desktop font is offered, and added by Add font, not used unasked.
+  - A widget's **Font** row (the clock) starts with **Theme font**: it is shown while the key is
+    not set; choosing it removes the key (the theme's font is used again), choosing a family
+    writes `font`.
+- Changes apply at once; the running shell reloads them like a hand edit. Spin buttons and
+  sliders wait 0.4 s after the last change of any of them (a drag writes once, after you
+  stop), and one queue applies every change in the order you made it: per setting only the
+  last value counts, and a value changed and changed back is not written at all. Anything
+  still waiting is applied before a panel is added, moved or removed, before Undo, Save or
+  leaving the config (New, Open, Close, Exit), and before Detect monitors; Revert all drops
+  it. A change the shell would reject is not saved: the reason (with the key path) shows under
+  the row. The mouse wheel scrolls the page and never changes a value (a slider, a spin
+  button or a dropdown included), so scrolling over a monitor's shell mode cannot switch it.
+  If the file is changed in an editor while changes are still waiting, they are not applied (they were made
   for the file before it changed, and panels are tracked by their place in the list) and the
   banner names them: "Not applied (made for the file before it changed):
   theme.thickness = 17, monitors.HDMI-A-1.panels[0].depth = 4".
@@ -484,6 +524,14 @@ that need `gi` or Fabric skip themselves there.
   within 0.4 s are written together after the last change; at narrow widths the tabs scroll
   sideways; a right-click on a handle opens the window but not yet on that panel's page
   (follow-up).
+- Settings window, inputs: the dropdown fix is a GTK quirk workaround (a combo with a wrap
+  width of 1 is anchored below its row); if a dropdown still opens one row high on some setup,
+  the planned fallback is a popover list like the font picker's. A dropdown's list may be a
+  little narrower than its box. The font list is read once per window process (a font
+  installed while the window is open shows after it is reopened); the theme's own default font
+  list is unchanged (Hack Nerd Font Mono, JetBrains Mono, monospace): the desktop font is
+  offered first, not used by itself. The sliders are 160 px wide with no tick marks or value
+  label (the spin button shows the number).
 - Settings window, editing limits: unsetting a whole table leaves that table's own label comment
   behind (not reachable from the window, which only resets single keys); after an edit a CRLF
   file may have `\n` endings on the lines the window writes (the session reads with universal
