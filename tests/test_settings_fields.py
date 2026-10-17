@@ -479,3 +479,10 @@ def test_a_toggle_is_centred_in_its_row_with_a_round_knob():
     edge = 2 * (TRACK_PADDING_PX + BORDER_PX)
     assert switch.get_allocated_width() - edge == 2 * (switch.get_allocated_height() - edge)
     assert switch.get_allocated_height() - edge == KNOB_PX
+
+
+def test_a_toggle_installs_the_stylesheet(monkeypatch):
+    calls = []
+    monkeypatch.setattr(fields, "install_css", lambda: calls.append(1))
+    fields.BoolEditor(lambda _v: None)
+    assert calls == [1]

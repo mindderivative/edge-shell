@@ -85,3 +85,29 @@ def test_a_styled_switch_is_thinner_with_a_2_to_1_content_box(gtk):
     assert styled.get_preferred_width().minimum_width == 2 * style.KNOB_PX + edge  # 38
     assert height == style.KNOB_PX + edge  # 22: the content is 2:1
     assert height < plain.get_preferred_height().minimum_height  # Breeze 24, Adwaita 26
+
+
+def test_the_exact_selectors_of_the_stylesheet():
+    sw = style.SWITCH_CLASS
+    assert selectors(style.STYLESHEET) == [
+        "infobar.info-note",
+        "infobar.info-note > revealer > box",
+        "infobar.info-note:backdrop",
+        "infobar.info-note:backdrop > revealer > box",
+        "infobar.info-note label",
+        "infobar.info-note:backdrop label",
+        f"switch.{sw}",
+        f"switch.{sw} slider",
+    ]
+
+
+def test_the_stylesheet_is_added_at_user_priority(gtk, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        gtk.StyleContext,
+        "add_provider_for_screen",
+        staticmethod(lambda screen, provider, priority: calls.append(priority)),
+    )
+    monkeypatch.setattr(style, "_provider", None)
+    style.install_css()
+    assert calls == [gtk.STYLE_PROVIDER_PRIORITY_USER]

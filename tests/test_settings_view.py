@@ -1824,3 +1824,17 @@ def test_every_combo_of_the_window_opens_below_itself(make_real):
     combos = [w for w in walk(view) if isinstance(w, Gtk.ComboBox)]
     assert len(combos) >= 10 and view.toolbar.kind.widget in combos
     assert [c for c in combos if c.get_wrap_width() != 1] == []
+    view.rebuild()  # the NEW pages' combos open below themselves too
+    after = [w for w in walk(view) if isinstance(w, Gtk.ComboBox)]
+    new = [c for c in after if c not in combos]  # the toolbar's are not rebuilt
+    assert len(after) >= 10 and len(new) >= 9
+    assert [c for c in after if c.get_wrap_width() != 1] == []
+
+
+def test_the_view_installs_the_stylesheet_when_it_is_built(make_real, monkeypatch):
+    import settings.view
+
+    calls = []
+    monkeypatch.setattr(settings.view, "install_css", lambda: calls.append(1))
+    make_real()
+    assert calls == [1]
