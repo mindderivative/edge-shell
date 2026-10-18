@@ -1,4 +1,17 @@
-from shell.plan import desired_shells, reconcile
+from shell.plan import desired_shells, has_windows, reconcile
+
+
+def test_has_windows_is_edge_or_both(make_config):
+    cfg = make_config(
+        monitors={n: {"shell": n.lower()} for n in ("EDGE", "BOTH", "PLASMA", "NONE")}
+    )
+    assert [has_windows(cfg, n) for n in ("EDGE", "BOTH", "PLASMA", "NONE", "DP-9")] == [
+        True,
+        True,
+        False,
+        False,
+        False,  # unlisted: plasma
+    ]
 
 
 def test_only_connected_edge_monitors(make_config):  # Review Focus 2

@@ -1,6 +1,6 @@
 import pytest
 
-from shell.anim import EASE_OUT, Tween, cubic_bezier
+from shell.anim import EASE_OUT, Tween, cubic_bezier, linear
 
 
 class FakeClock:
@@ -42,6 +42,10 @@ def test_easing_endpoints_and_fast_out():
 def test_linear_bezier_is_identity():
     linear = cubic_bezier(0, 0, 1, 1)
     assert linear(0.3) == pytest.approx(0.3, abs=1e-3)
+
+
+def test_linear_is_the_identity_on_0_to_1():
+    assert [linear(t) for t in (0.0, 0.25, 0.5, 1.0)] == [0.0, 0.25, 0.5, 1.0]
 
 
 def test_animate_reaches_target_and_stops():
@@ -143,3 +147,21 @@ def test_on_value_jump_then_animate_on_final_frame_registers_one_callback():
     w.frame(0)
     w.frame(200)
     assert t.value == 50 and not w.callbacks and not t.running
+
+
+def test_stop_freezes_without_a_last_value():
+    """A fade stops its tween before its windows are destroyed: no on_value after stop."""
+    w, seen = FakeWidget(), []
+    t = Tween(w, seen.append, duration_ms=100)
+    t.animate_to(1.0)
+    w.frame(0)
+    w.frame(50)
+    seen_before, value = list(seen), t.value
+    t.stop()
+    assert not w.callbacks and not t.running and seen == seen_before and t.value == value
+    w.frame(50)
+    assert seen == seen_before
+    t.stop()  # stopping a stopped tween is fine
+    t.animate_to(0.0)  # and it can run again, from where it stopped
+    w.frame(0)
+    assert seen[-1] == pytest.approx(value)

@@ -79,9 +79,21 @@ class Border(_Strict):
     """Border along the outside of the frame and panel outline (spec 18). Opt-in. It adds `width`
     px to the footprint; the frame thickness and panel depth are unchanged."""
 
-    enabled: bool = False
-    width: Annotated[int, Field(ge=1, le=16)] = 2
-    color: str = "#8fd3b6ff"
+    enabled: bool = Field(
+        False, description="Draw a line along the outside of the frame and the panels."
+    )
+    width: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=16,
+            description="Width of the border line in px; it adds to the frame's footprint.",
+        ),
+    ] = 2
+    color: str = Field(
+        "#8fd3b6ff",
+        description="Colour of the border: #rrggbb, or #rrggbbaa for a see-through line.",
+    )
 
     @field_validator("color")
     @classmethod
@@ -92,9 +104,15 @@ class Border(_Strict):
 class Shadow(_Strict):
     """Uniform shadow of the frame and panels (spec 18). Opt-in. `elevation` is 0-100 %."""
 
-    enabled: bool = False
-    elevation: Annotated[int, Field(ge=0, le=100)] = 50
-    color: str = "#00000080"
+    enabled: bool = Field(
+        False, description="Cast a soft shadow from the frame and the panels onto the desktop."
+    )
+    elevation: Annotated[
+        int, Field(ge=0, le=100, description="How far the shadow reaches, in % (100 % is 48 px).")
+    ] = 50
+    color: str = Field(
+        "#00000080", description="Colour of the shadow; its alpha (#rrggbbaa) sets how dark it is."
+    )
 
     @field_validator("color")
     @classmethod
@@ -114,25 +132,95 @@ class HandleStyle(_Strict):
     "auto" picks the shape from the panel's interactions (shell.handle.auto_shape). The colours
     are the theme's `handle` and `handle_hover` tokens."""
 
-    shape: HandleShape = "auto"
-    size: HandleSize = 15
-    weight: HandleWeight = 3
+    shape: HandleShape = Field(
+        "auto",
+        description=(
+            "The handle's look: auto picks one from the panel's "
+            "interactions, or dots, bar, chevron, none."
+        ),
+    )
+    size: HandleSize = Field(15, description="Length of the handle along the edge, in px.")
+    weight: HandleWeight = Field(
+        3, description="Thickness in px of the dots, the bar or the chevron's stroke."
+    )
 
 
 class Theme(_Strict):
-    frame: str
-    text: str
-    text_secondary: str
-    accent: str
-    handle: str
-    handle_hover: str
-    surface_hover: str
-    thickness: Annotated[int, Field(ge=2, le=64)]
-    radius: Annotated[int, Field(ge=1, le=64)]
-    peek: Annotated[int, Field(ge=1, le=64)]
-    hover_zone: Annotated[int, Field(ge=1, le=64)]
-    duration_ms: Annotated[int, Field(ge=0, le=5000)]
-    font: Annotated[list[str], Field(min_length=1)]
+    frame: str = Field(description="Colour of the frame and of the panels that grow out of it.")
+    text: str = Field(description="Colour of the text in panels.")
+    text_secondary: str = Field(
+        description=(
+            "Colour of the dimmer text in panels, such as the date and the CPU and RAM lines."
+        )
+    )
+    accent: str = Field(
+        description=(
+            "Highlight colour for items marked active (the built-in widgets do not use it yet)."
+        )
+    )
+    handle: str = Field(description="Colour of a panel's handle.")
+    handle_hover: str = Field(description="Colour of a panel's handle while the pointer is on it.")
+    surface_hover: str = Field(
+        description="Background colour of a dock icon while the pointer is on it."
+    )
+    thickness: Annotated[
+        int, Field(ge=5, le=64, description="Width of the frame around the screen, in px.")
+    ]
+    radius: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=64,
+            description=(
+                "Radius in px of the rounded screen corners and of "
+                "the curves where panels meet the frame."
+            ),
+        ),
+    ]
+    peek: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=64,
+            description="How far in px a collapsed panel slides out when the pointer rests on it.",
+        ),
+    ]
+    hover_zone: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=64,
+            description=(
+                "Width in px of the invisible strip past the frame "
+                "where the pointer wakes a collapsed panel."
+            ),
+        ),
+    ]
+    duration_ms: Annotated[
+        int,
+        Field(ge=0, le=5000, description="Time in ms a panel takes to slide open or closed."),
+    ]
+    # The fade in and out of a monitor's windows (spec 21); 0 = none. At most 500, so the
+    # settings window shows a slider (settings.form.SLIDER_MAX_SPAN).
+    fade_ms: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=500,
+            description=(
+                "Time in ms a monitor's frame and panels fade in or out; 0 turns the fade off."
+            ),
+        ),
+    ] = 50
+    font: Annotated[
+        list[str],
+        Field(
+            min_length=1,
+            description=(
+                "Font families for panel text, tried in order; the first installed one is used."
+            ),
+        ),
+    ]
     border: Border = Field(default_factory=Border)
     shadow: Shadow = Field(default_factory=Shadow)
     handle_style: HandleStyle = Field(default_factory=HandleStyle)
@@ -146,6 +234,8 @@ class Theme(_Strict):
     @classmethod
     def _font_names(cls, value: list[str]) -> list[str]:
         for name in value:
+            if not name.strip():
+                raise ValueError("font names must not be empty")
             check_font_name(name)
         return value
 
@@ -198,7 +288,17 @@ class LayoutSettings(_Strict):
     neighbouring panels' joins on one edge, ON TOP of the joins (r1 + r2), so any value keeps
     the minimum gap the outline needs."""
 
-    gap: Annotated[int, Field(ge=0, le=400)] = 8
+    gap: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=400,
+            description=(
+                "Extra px of frame between neighbouring panels on "
+                "one edge, beyond their curved joins."
+            ),
+        ),
+    ] = 8
 
 
 LayoutOverride = _override_of("LayoutOverride", LayoutSettings)
@@ -210,12 +310,32 @@ class HandleConfig(_Strict):
     handle_hover). `offset` moves the handle along the edge from the body centre (negative:
     towards the start of the edge, left or top); it is clamped to the body."""
 
-    shape: HandleShape | None = None
-    size: HandleSize | None = None
-    weight: HandleWeight | None = None
-    offset: HandleOffset | None = None
-    color: str | None = None
-    hover_color: str | None = None
+    shape: HandleShape | None = Field(
+        None, description="This panel's handle look; unset takes the widget's, then the theme's."
+    )
+    size: HandleSize | None = Field(
+        None,
+        description="Length of this panel's handle along the edge, in px; unset takes the theme's.",
+    )
+    weight: HandleWeight | None = Field(
+        None, description="Thickness in px of this panel's handle strokes; unset takes the theme's."
+    )
+    offset: HandleOffset | None = Field(
+        None,
+        description=(
+            "Moves the handle along the edge from the panel's "
+            "centre, in px; negative goes towards the start."
+        ),
+    )
+    color: str | None = Field(
+        None, description="This panel's handle colour; unset takes the theme's handle colour."
+    )
+    hover_color: str | None = Field(
+        None,
+        description=(
+            "This panel's handle colour under the pointer; unset takes the theme's hover colour."
+        ),
+    )
 
     @field_validator("color", "hover_color")
     @classmethod
@@ -227,9 +347,21 @@ class InteractionConfig(_Strict):
     """Which interactions open and close a panel (spec 15). A missing key comes from the
     widget's default, else true. Keyboard activation follows `click`."""
 
-    click: StrictBool | None = None
-    hover: StrictBool | None = None
-    drag: StrictBool | None = None
+    click: StrictBool | None = Field(
+        None,
+        description=(
+            "Whether clicking the handle (or pressing Enter on it) opens or closes the panel."
+        ),
+    )
+    hover: StrictBool | None = Field(
+        None, description="Whether resting the pointer on a collapsed panel makes it peek out."
+    )
+    drag: StrictBool | None = Field(
+        None,
+        description=(
+            "Whether dragging the handle opens or closes the panel; it snaps at the halfway point."
+        ),
+    )
 
 
 # The panel keys by kind (spec 19; the settings window reads them): both kinds take
@@ -288,24 +420,74 @@ class PanelConfig(_Strict):
     but the bag is a mutable, unhashable dict; requests that travel carry a frozen WidgetProps
     instead."""
 
-    panel: PanelKind
-    name: PanelName
-    widget: str
-    edge: Edge | None = None
-    pos: Offset | Literal["center"] | None = None  # deprecated: align + offset
-    align: Align | None = None
-    offset: SignedOffset | None = None
-    order: Order | None = None
-    length: int | str | None = None
-    min_length: Length | None = None
-    max_length: Length | None = None
-    depth: Depth | None = None
-    state: PanelState | None = None
+    panel: PanelKind = Field(
+        description=(
+            "The kind of panel: edge (a strip on a screen edge) or corner (a block in a corner)."
+        )
+    )
+    name: PanelName = Field(
+        description=(
+            "The panel's name in logs, notifications and this window; unique on the monitor."
+        )
+    )
+    widget: str = Field(description="Which widget the panel shows (its content).")
+    edge: Edge | None = Field(
+        None,
+        description=(
+            "An edge panel: the screen edge it sits on. A corner panel: the edge it opens out from."
+        ),
+    )
+    pos: Offset | Literal["center"] | None = Field(  # deprecated: align + offset
+        None, description="Deprecated: px from the start of the edge. Use align and offset instead."
+    )
+    align: Align | None = Field(
+        None,
+        description="Where the panel sits along its edge: at the start, the centre or the end.",
+    )
+    offset: SignedOffset | None = Field(
+        None,
+        description=(
+            "Shifts the panel along the edge from its aligned "
+            "end, in px; negative only when centred."
+        ),
+    )
+    order: Order | None = Field(
+        None,
+        description=(
+            "Orders panels sharing one align slot: lower comes "
+            "first, equal ones keep the file order."
+        ),
+    )
+    length: int | str | None = Field(
+        None,
+        description=(
+            "Size along the edge: px, fill (the free space), content "
+            "(the widget's size) or a percent such as 50%."
+        ),
+    )
+    min_length: Length | None = Field(
+        None,
+        description="The panel never gets shorter than this many px, whatever its length setting.",
+    )
+    max_length: Length | None = Field(
+        None,
+        description="The panel never gets longer than this many px, whatever its length setting.",
+    )
+    depth: Depth | None = Field(
+        None, description="How far the open panel reaches past the frame, in px."
+    )
+    state: PanelState | None = Field(
+        None, description="Whether the panel starts collapsed (only its handle) or extended (open)."
+    )
     handle: HandleConfig = Field(default_factory=HandleConfig)
     interaction: InteractionConfig = Field(default_factory=InteractionConfig)
-    corner: Corner | None = None
-    width: Length | None = None  # px from the screen corner, both frame bands included
-    height: Length | None = None
+    corner: Corner | None = Field(None, description="Which screen corner the panel sits in.")
+    width: Length | None = Field(  # px from the screen corner, both frame bands included
+        None, description="Width of the corner panel in px, counted from the screen corner."
+    )
+    height: Length | None = Field(
+        None, description="Height of the corner panel in px, counted from the screen corner."
+    )
     widget_props: dict[str, Any] = Field(default_factory=dict)  # never a key in the file
 
     @model_validator(mode="before")
@@ -367,7 +549,13 @@ class PanelConfig(_Strict):
 
 
 class MonitorConfig(_Strict):
-    shell: ShellMode = "plasma"
+    shell: ShellMode = Field(
+        "plasma",
+        description=(
+            "What runs on this screen: Edge Shell's frame (edge), "
+            "only Plasma (plasma), both or neither (none)."
+        ),
+    )
     theme: ThemeOverride = Field(default_factory=ThemeOverride)
     layout: LayoutOverride = Field(default_factory=LayoutOverride)
     panels: list[PanelConfig] = Field(default_factory=list)

@@ -219,7 +219,7 @@ def test_the_shape_sits_a_fixed_inset_inside_the_body_edge(edge, thickness, d):
 
 
 @pytest.mark.parametrize("edge", EDGES)
-@pytest.mark.parametrize("thickness", [2, 6, 8])
+@pytest.mark.parametrize("thickness", [5, 6, 8])
 @pytest.mark.parametrize("d", [0, 64])
 def test_a_thin_frame_still_centres_the_shape_in_its_band(edge, thickness, d):
     assert thickness + d - centre_from_screen(edge, thickness, d) == thickness / 2

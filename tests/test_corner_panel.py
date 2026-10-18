@@ -29,6 +29,7 @@ def stub(make_config, spec=BOX, interaction=None, handle=None, d=0.0):
         _look=hd.resolve_handle(handle, interaction, theme),
         _d=d,
         _last_rect=None,
+        _input_off=False,
         _handle=FakeHandleWidget(),
         _handle_area=SimpleNamespace(draws=0),
         _content=FakeHandleWidget(),
@@ -208,6 +209,16 @@ def test_the_corner_input_region_is_reapplied_after_the_parent_allocate(make_con
     ep.EdgePanel.do_size_allocate(s, None)
     assert order == ["parent", "region"]
     assert s.regions[0] is None and rects_of(s.regions[-1]) == [(0, 364, 300, 26)]
+
+
+def test_a_corner_panel_with_input_off_takes_none(make_config):
+    s = stub(make_config)
+    s._hovered = False
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    ep.EdgePanel.set_input_enabled(s, False)
+    assert rects_of(s.regions[-1]) == []
+    ep.EdgePanel.set_input_enabled(s, True)
+    assert rects_of(s.regions[-1]) == [(0, 364, 300, 26)]
 
 
 def test_a_build_that_raises_destroys_the_half_built_window(make_config, monkeypatch):

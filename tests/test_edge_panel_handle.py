@@ -54,6 +54,7 @@ def stub(make_config, edge="bottom", interaction=ALL, handle=None, **extra):
         _hovered=False,
         _extended=False,
         _last_rect=None,
+        _input_off=False,
         _draw_failed=False,
         _handle=FakeHandleWidget(),
         _handle_area=SimpleNamespace(draws=0),
@@ -335,6 +336,40 @@ def test_the_input_region_is_reapplied_after_the_parent_allocate(
     )  # fmt: skip
     assert s.regions[0] is None and rects_of(s.regions[-1]) == [tuple(r) for r in expected]
     assert s._last_rect == primed
+
+
+def test_with_input_off_a_panel_takes_none_at_any_depth_until_it_is_on_again(make_config):
+    """Spec 21: a monitor's panels take no input while it is invisible or fading out."""
+    s = stub(make_config)
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    ep.EdgePanel._update_input_region(s, 0.0)
+    ep.EdgePanel.set_input_enabled(s, False)
+    assert rects_of(s.regions[-1]) == []
+    for d in (0.0, 32.0, 64.0):  # depth frames keep it empty
+        ep.EdgePanel._update_input_region(s, d)
+        assert rects_of(s.regions[-1]) == []
+    ep.EdgePanel.set_input_enabled(s, True)
+    assert rects_of(s.regions[-1]) == [(14, 48, 560, 26)]  # the region of depth 0 again
+
+
+def test_input_off_survives_the_parent_allocate(make_config, monkeypatch):
+    s = stub(make_config)
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    monkeypatch.setattr(ep.WaylandWindow, "do_size_allocate", lambda _s, _a: s.regions.append(None))
+    ep.EdgePanel.set_input_enabled(s, False)
+    s.regions.clear()
+    ep.EdgePanel.do_size_allocate(s, None)  # Fabric resets the shape to the whole surface
+    assert s.regions[0] is None and rects_of(s.regions[-1]) == []
+
+
+def test_turning_input_off_drops_a_hover_peek(make_config):
+    s = stub(make_config, _hovered=True)
+    s._update_input_region = lambda d: ep.EdgePanel._update_input_region(s, d)
+    s._retarget = lambda: s.calls.append(("retarget", s._hovered))
+    ep.EdgePanel.set_input_enabled(s, False)
+    assert s._hovered is False and s.calls == [("retarget", False)]
+    ep.EdgePanel.set_input_enabled(s, True)
+    assert s.calls == [("retarget", False)]  # turning it on retargets nothing
 
 
 # ---- interaction flags --------------------------------------------------------------

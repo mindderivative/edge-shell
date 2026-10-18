@@ -28,7 +28,7 @@ from shell.config.models import (
 )
 
 FieldKind = Literal[
-    "color", "int", "bool", "enum", "fonts", "length", "widget", "deprecated", "text"
+    "color", "int", "bool", "enum", "fonts", "font", "length", "widget", "deprecated", "text"
 ]
 
 # Keys holding a #rrggbb / #rrggbbaa colour. The models check them with a field validator,
@@ -39,13 +39,16 @@ LENGTH_PERCENT = (1, 100)
 LENGTH_MODES = ("px", "fill", "content", "percent")
 # The unit or meaning shown next to a row, by (model, key): one key can mean different things
 # in different tables ("width" of the border vs the width of a corner panel). A widget
-# property's hint is its Field(description=...).
+# property's hint is its Field(json_schema_extra={"hint": ...}). The label's tooltip is the
+# field's Field(description=...) in every model: one short sentence, and a test fails for a
+# field of any model (widgets' included) that has none.
 HINTS = {
     ("Theme", "thickness"): "px",
     ("Theme", "radius"): "px",
     ("Theme", "peek"): "px",
     ("Theme", "hover_zone"): "px",
     ("Theme", "duration_ms"): "ms",
+    ("Theme", "fade_ms"): "ms; 0 turns the fade off",
     ("Border", "width"): "px",
     ("Shadow", "elevation"): "% (100 % = 48 px)",
     ("HandleStyle", "size"): "px along the edge",
@@ -68,6 +71,7 @@ HINTS = {
 # Row labels; any other key reads "Some key" (pydantic's own titles read "Duration Ms").
 LABELS = {
     "duration_ms": "Duration",
+    "fade_ms": "Fade",
     "text_secondary": "Secondary text",
     "surface_hover": "Surface (hover)",
     "handle_hover": "Handle (hover)",
@@ -88,6 +92,12 @@ MODE_HINTS = {
 }
 KIND_LABELS = {"edge": "Edge", "corner": "Corner", "float": "Float (coming soon)"}
 LEAD_ROWS = ("name", "widget", "panel")  # every panel section starts with these
+# A whole number with both bounds gets a slider (Phil: "If a numeric has a minimum and maximum
+# use sliders instead of number spinners") when its range is at most this wide: on a 160 px
+# slider that is at most 3 values per pixel (the fade, 0-500 ms, is the widest slider). Wider
+# ranges (an offset of +-20000, a corner width of 60-4000 px, a duration of 0-5000 ms, a depth
+# of 16-2000 px, an order of 0-1000) keep the spin button, whose arrows step by one.
+SLIDER_MAX_SPAN = 500
 CORNER_ROWS = (*LEAD_ROWS, "corner", "edge", "width", "height", "state")  # a corner panel
 
 
@@ -100,10 +110,19 @@ class FieldSpec:
     minimum: int | None = None
     maximum: int | None = None
     hint: str = ""
+    tooltip: str = ""  # the label's tooltip: the model field's description (one sentence)
     labels: tuple[str, ...] = ()  # what the choices show (empty: the choices themselves)
     disabled: tuple[str, ...] = ()  # choices shown but not selectable ("coming soon")
     required: bool = False  # the entry needs it: no reset button
     max_length: int | None = None  # a text row: the most characters the entry takes
+
+
+def uses_slider(spec: FieldSpec) -> bool:
+    """True when the row of `spec` is a slider: an int with both bounds and a range of at most
+    SLIDER_MAX_SPAN."""
+    if spec.kind != "int" or spec.minimum is None or spec.maximum is None:
+        return False
+    return spec.maximum - spec.minimum <= SLIDER_MAX_SPAN
 
 
 @dataclass(frozen=True)
@@ -178,8 +197,14 @@ def _field(
     panel, pos, length, the colours) and only `name` is a text row: every other string key
     must be classified here (pinned by a test)."""
     first = _options(prop)[0]
-    hint = HINTS.get((model, key), prop.get("description", ""))
-    common = {"key": key, "label": label_for(key), "hint": hint, "required": required}
+    hint = HINTS.get((model, key), prop.get("hint", ""))
+    common = {
+        "key": key,
+        "label": label_for(key),
+        "hint": hint,
+        "tooltip": prop.get("description", ""),
+        "required": required,
+    }
     if not text:
         if key == "widget":
             choices, labels = widget_choices(widgets)
@@ -211,6 +236,8 @@ def _field(
         return FieldSpec(kind="int", minimum=low, maximum=high, **common)
     if not text and key == "font" and first.get("type") == "array":
         return FieldSpec(kind="fonts", **common)
+    if text and key == "font" and first.get("type") == "string":
+        return FieldSpec(kind="font", **common)  # a widget's font: one family, unset = theme
     if first.get("type") == "string" and (text or key == "name"):
         return FieldSpec(kind="text", max_length=first.get("maxLength"), **common)
     raise ValueError(f"no form field for {key!r}: {prop}")
@@ -483,12 +510,3 @@ def join_length(mode: str, number: float | None) -> int | str:
         text = f"{number:.1f}".rstrip("0").rstrip(".")
         return f"{text}%"
     raise ValueError(f"unknown length mode {mode!r}")
-
-
-def parse_fonts(text: str) -> list[str]:
-    """'Hack Nerd Font Mono, monospace' -> ['Hack Nerd Font Mono', 'monospace']."""
-    return [name.strip() for name in text.split(",") if name.strip()]
-
-
-def format_fonts(fonts: list[str]) -> str:
-    return ", ".join(fonts)

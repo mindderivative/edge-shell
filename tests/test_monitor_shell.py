@@ -25,6 +25,14 @@ class FakeWindow:
         self.handles = []
         self.natural = 200
         self.measured = 0
+        self.opacity = []  # every set_opacity value (spec 21)
+        self.inputs = []  # every set_input_enabled value
+
+    def set_opacity(self, value):
+        self.opacity.append(value)
+
+    def set_input_enabled(self, enabled):
+        self.inputs.append(enabled)
 
     def destroy(self):
         self.destroyed = True
@@ -113,7 +121,10 @@ def bare_shell(windows, panels=(), unregister=None):
     shell._unregister = unregister or (lambda _w: None)
     shell.monitor = FakeMonitor()
     shell._monitor_handlers = []
-    shell._measure_id = shell._relayout_id = 0
+    shell._measure_id = shell._relayout_id = shell._reserve_id = 0
+    shell._fade = None
+    shell._raises_pending = shell._ready_id = 0
+    shell._detached = False
     return shell
 
 

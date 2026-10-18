@@ -16,3 +16,6 @@ config.local.toml
 
 # Spike renders
 spikes/out/
+
+# graphify knowledge graph output
+graphify-out/

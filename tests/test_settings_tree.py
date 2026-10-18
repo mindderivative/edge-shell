@@ -465,3 +465,40 @@ def test_delete_with_the_focus_on_a_monitor_row_ignores_the_selected_panel(tree,
     tree.row_of("theme").grab_focus()
     key_from(focused.get_focus(), Gdk.KEY_KP_Delete)
     assert tree.actions == []
+
+
+def _drawn_left_to_right(buttons):
+    """The actions of `buttons` in the order they are drawn in their box: a button packed at
+    the start is drawn in packing order, one packed at the end after them (GtkBox lists
+    those in drawn order; the first packed is rightmost)."""
+    box = next(iter(buttons.values())).get_parent()
+    by_widget = {b: a for a, b in buttons.items()}
+    start, end = [], []
+    for child in box.get_children():
+        if child in by_widget:
+            pack = box.query_child_packing(child)[3]
+            (end if pack == Gtk.PackType.END else start).append(by_widget[child])
+    return start + end
+
+
+def test_the_row_buttons_read_up_down_remove_from_left_to_right(tree):
+    buttons = tree.row_of("panel:HDMI-A-1:0").buttons
+    assert list(buttons) == ["up", "down", "remove"]
+    assert _drawn_left_to_right(buttons) == ["up", "down", "remove"]
+
+
+def test_the_row_buttons_are_about_ten_percent_smaller():
+    from settings.tree import ROW_BUTTON_ICON_PX
+
+    def width(button):
+        button.show()
+        return button.get_preferred_width().natural_width
+
+    old = Gtk.Button.new_from_icon_name("go-up-symbolic", Gtk.IconSize.MENU)
+    old.set_relief(Gtk.ReliefStyle.NONE)
+    row = SettingsTree(lambda _p: None, lambda _p, _a: None)
+    row.show(ENTRIES)
+    new = row.row_of("panel:HDMI-A-1:0").buttons["up"]
+    assert new.get_image().get_pixel_size() == ROW_BUTTON_ICON_PX
+    assert 0.88 <= width(new) / width(old) <= 0.92
+    row.destroy()

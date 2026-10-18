@@ -29,6 +29,15 @@ def test_structural_theme_change_rebuilds_monitor(fake_registry, make_config):
     assert diff_configs(old, new) == [Change("rebuild-monitor", "HDMI-A-1")]
 
 
+def test_a_fade_change_is_a_restyle_never_a_rebuild(fake_registry, make_config):
+    """fade_ms only changes the next fade: the windows stay (spec 21)."""
+    old = make_config(monitors={"HDMI-A-1": mon(), "DP-1": mon("plasma")})
+    new = make_config(theme={"fade_ms": 300}, monitors={"HDMI-A-1": mon(), "DP-1": mon("plasma")})
+    assert diff_configs(old, new) == [Change("restyle", "HDMI-A-1")]
+    one = make_config(monitors={"HDMI-A-1": mon(theme={"fade_ms": 0})})
+    assert diff_configs(old, one) == [Change("restyle", "HDMI-A-1")]
+
+
 def test_mode_changes(fake_registry, make_config):
     def cfg(shell):
         return make_config(monitors={"HDMI-A-1": mon(shell)})

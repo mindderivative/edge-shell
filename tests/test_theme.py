@@ -23,6 +23,12 @@ def test_css_font_stack_quotes_names_but_not_generics(make_config):
     assert 'font-family: "Hack Nerd Font Mono", "JetBrains Mono", monospace;' in css
 
 
+@pytest.mark.parametrize("generic", ["Sans-Serif", "MONOSPACE", "Serif", "sans-serif"])
+def test_css_generic_families_are_unquoted_whatever_their_case(make_config, generic):
+    css = to_css(make_config(theme={"font": ["Fira Code", generic]}).theme, "mon-x")
+    assert f'font-family: "Fira Code", {generic};' in css  # CSS keywords: quoted they are names
+
+
 def test_css_is_scoped_and_uses_theme_colors(make_config):
     css = to_css(make_config(theme={"accent": "#112233"}).theme, "mon-x")
     assert ".mon-x .active { color: #112233; }" in css

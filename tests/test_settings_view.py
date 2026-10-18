@@ -642,20 +642,20 @@ def test_undo_after_a_refused_flush_does_nothing_more(make, pending):
     assert path.read_text() == USER and not view.session.history
 
 
-FONT = ("theme", "font")
+NAME = ("monitors", "HDMI-A-1", "panels", 0, "name")
 
 
-def test_typed_fonts_never_reach_the_file_through_a_hand_edit_rebuild(make):
+def test_typed_text_never_reaches_the_file_through_a_hand_edit_rebuild(make):
     """The rebuild unparents the focused entry and GTK sends focus-out: the retired row's
-    commit must not write the typed fonts onto the re-read file."""
+    commit must not write the typed name onto the re-read file."""
     view, path = make()
-    old = row(view, FONT)
-    old.editor.widget.set_text("Typed Font")
+    old = row(view, NAME)
+    old.editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
     old.editor.commit()  # the focus-out of the retired entry
     old.flush()
-    assert "Typed Font" not in path.read_text() and not view.session.history
+    assert "Typed Name" not in path.read_text() and not view.session.history
 
 
 TILE_USER = """\
@@ -877,24 +877,7 @@ def test_a_heading_with_markup_characters_is_shown_as_text(text):
 
 
 # ---- the info note keeps its blue background and light text, focused or not ----------------
-def test_the_info_note_css_has_the_class_colours_and_a_backdrop_rule():
-    from settings.view import INFO_NOTE_CLASS, INFO_NOTE_CSS
-
-    assert f".{INFO_NOTE_CLASS}" in INFO_NOTE_CSS
-    assert "#2b5c8a" in INFO_NOTE_CSS  # the background
-    assert "#ffffff" in INFO_NOTE_CSS  # the text
-    assert ":backdrop" in INFO_NOTE_CSS  # an unfocused window keeps both
-
-
-def test_the_info_note_css_is_valid_and_installed_once():
-    from settings import view as view_module
-
-    provider = Gtk.CssProvider()
-    provider.load_from_data(view_module.INFO_NOTE_CSS.encode())  # raises on a parse error
-    first = view_module.install_info_note_css()
-    assert view_module.install_info_note_css() is first  # a second call reuses it
-
-
+# (its CSS is in settings.style: tests/test_settings_style.py)
 def test_an_info_banner_gets_the_class_and_others_do_not(make):
     from settings.view import INFO_NOTE_CLASS
 
@@ -989,10 +972,10 @@ def test_a_hand_edit_met_while_applying_names_every_dropped_edit(make, clock):
 
 def test_typed_text_dropped_by_a_hand_edit_is_named(make):
     view, path = make()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view.file_changed()
-    assert "theme.font (typed text)" in view.banner_label.get_text()
+    assert "monitors.HDMI-A-1.panels[0].name (typed text)" in view.banner_label.get_text()
 
 
 def test_the_deferred_rebuild_applies_what_was_queued_meanwhile_once(make, clock):
@@ -1053,33 +1036,33 @@ def test_dropped_edits_are_named_after_an_invalid_hand_edit_rebuild(make, clock,
 def test_typed_text_is_named_when_a_timer_drain_meets_a_hand_edit(make, clock):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     _fire(view, clock)
     text = view.banner_label.get_text()
-    assert "theme.font (typed text)" in text and "panels[0].depth = 120" in text
+    assert "panels[0].name (typed text)" in text and "panels[0].depth = 120" in text
 
 
 def test_typed_text_is_named_when_an_immediate_edit_meets_a_hand_edit(make):
     view, path = make()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     path.write_text(USER.replace('shell = "edge"', 'shell = "both"'))
     view._on_change(SHELL, "both")
     drain()
     text = view.banner_label.get_text()
-    assert "theme.font (typed text)" in text and "changed outside" in text
+    assert "panels[0].name (typed text)" in text and "changed outside" in text
 
 
 def test_a_refused_revert_names_the_edits_it_dropped(make, clock):
     view, path = make()
     row(view, DEPTH).editor.widget.set_value(120)
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     hand = USER.replace('shell = "edge"', 'shell = "both"')
     path.write_text(hand)
     view.revert()  # refused: the hand edit is the new starting point
     text = view.banner_label.get_text()
     assert "changed outside" in text and "Not applied" in text
-    assert "panels[0].depth = 120" in text and "theme.font (typed text)" in text
+    assert "panels[0].depth = 120" in text and "panels[0].name (typed text)" in text
     assert path.read_text() == hand and len(view.queue) == 0
 
 
@@ -1089,9 +1072,9 @@ def test_typed_text_is_sent_by_a_flush(make, pending):
     spin = row(view, DEPTH).editor.widget
     spin.set_text("130")
     assert view.save() and "depth = 130" in path.read_text()
-    row(view, FONT).editor.widget.set_text("Typed Font")
+    row(view, NAME).editor.widget.set_text("Typed Name")
     view.flush()
-    assert "Typed Font" in path.read_text()
+    assert 'name = "Typed Name"' in path.read_text()
 
 
 def test_a_nested_run_of_the_queue_inside_a_flush_does_nothing(make, clock):
@@ -1337,6 +1320,44 @@ def test_no_tab_is_wider_than_the_space_beside_the_tree_at_860(make_real):
         for scroller in nb.get_children():
             width = scroller.get_child().get_preferred_width().minimum_width
             assert width <= 640, (page, nb.get_tab_label_text(scroller), width)
+
+
+def test_the_clock_and_corner_pages_fit_beside_the_tree_too(make_real, monkeypatch):
+    """The new inputs (sliders, the font pickers, the theme's font list) inside the 640 px of
+    a tab, on the pages that have them all: the Theme page, a clock panel (its Widget tab: a
+    font picker and a font size slider) and a corner panel."""
+    from settings import fontpicker
+    from settings.fields import FontEditor
+
+    long_name = "A Very Long Installed Font Family Name Indeed Bold Condensed"
+    monkeypatch.setattr(fontpicker, "installed_families", lambda: (long_name,))
+    view, path = make_real()
+    add(view, "clock")
+    add(view, "summary", "corner")
+    view.session.apply(lambda d: d.set(("theme", "font"), [long_name, "monospace"]))
+    view.rebuild()
+    clock = row(view, ("monitors", "HDMI-A-1", "panels", 1, "font"))
+    assert isinstance(clock.editor, FontEditor)
+    for page in ("theme", "panel:HDMI-A-1:1", "panel:HDMI-A-1:2"):
+        nb = notebook(view, page)
+        for scroller in nb.get_children():
+            width = scroller.get_child().get_preferred_width().minimum_width
+            assert width <= 640, (page, nb.get_tab_label_text(scroller), width)
+
+
+def test_the_mouse_wheel_edits_no_input_of_the_window(make_real):
+    """Every slider, spin button and combo of every page (and the toolbar) passes the wheel
+    to the page: a turn over any of them changes nothing and writes nothing."""
+    view, path = make_real()
+    add(view, "clock")
+    before = path.read_text()
+    inputs = [w for w in walk(view) if isinstance(w, (Gtk.Range, Gtk.SpinButton, Gtk.ComboBox))]
+    assert sum(isinstance(w, Gtk.Scale) for w in inputs) >= 20  # theme, monitor, clock pages
+    for widget in inputs:
+        event = Gdk.Event.new(Gdk.EventType.SCROLL)
+        event.scroll.direction = Gdk.ScrollDirection.UP
+        assert widget.emit("scroll-event", event) is False, widget
+    assert len(view.queue) == 0 and path.read_text() == before
 
 
 def test_a_rows_note_is_cut_with_its_whole_text_as_the_tooltip(make_real):
@@ -1833,3 +1854,25 @@ def test_a_failed_detection_keeps_the_invalid_file_explanation(tmp_path, fake_re
     assert after.startswith(before) and "kscreen-doctor failed: timed out" in after
     view.tree.detect_button.clicked()  # again: not added twice
     assert view.banner_label.get_text() == after
+
+
+def test_every_combo_of_the_window_opens_below_itself(make_real):
+    """The toolbar's panel type list, every enum and widget row and the length mode."""
+    view, _ = make_real()
+    combos = [w for w in walk(view) if isinstance(w, Gtk.ComboBox)]
+    assert len(combos) >= 10 and view.toolbar.kind.widget in combos
+    assert [c for c in combos if c.get_wrap_width() != 1] == []
+    view.rebuild()  # the NEW pages' combos open below themselves too
+    after = [w for w in walk(view) if isinstance(w, Gtk.ComboBox)]
+    new = [c for c in after if c not in combos]  # the toolbar's are not rebuilt
+    assert len(after) >= 10 and len(new) >= 9
+    assert [c for c in after if c.get_wrap_width() != 1] == []
+
+
+def test_the_view_installs_the_stylesheet_when_it_is_built(make_real, monkeypatch):
+    import settings.view
+
+    calls = []
+    monkeypatch.setattr(settings.view, "install_css", lambda: calls.append(1))
+    make_real()
+    assert calls == [1]

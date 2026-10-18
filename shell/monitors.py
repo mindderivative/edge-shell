@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 
 import gi
@@ -21,6 +22,7 @@ from shell.config.diff import Change
 from shell.config.models import Config
 from shell.corner_panel import CornerPanel
 from shell.edge_panel import EdgePanel
+from shell.fade import Fade
 from shell.frame import EDGES, FrameEdge
 from shell.outputs import match_geometries, parse_kscreen, read_kscreen_json
 from shell.panel_layout import Layout, layout_monitor
@@ -48,6 +50,12 @@ RAISE_DELAY_MS = 500
 RAISE_FALLBACK_MS = 2000
 # A resolution change arrives as several notify::geometry signals; re-layout once it settles.
 RELAYOUT_DELAY_MS = 250
+# With a fade, every shell builds its zone strips this long after its fade-in starts, not with
+# the shell: the strips make a maximized window shrink, which must not happen before the frame
+# is seen (Phil's gate findings 4 and 3 of the re-check: building them with the shell shrank the
+# window ~0.5 s early; 50 ms was still too early). A rebuild's successor does the same: the
+# held old shell keeps its own strips until the successor has built its set (on_reserved).
+RESERVE_DELAY_MS = 100
 
 
 def raise_delays(env=os.environ) -> tuple[int, ...]:
@@ -122,11 +130,30 @@ class MonitorShell:
         on_layout=None,
         on_error=None,
         on_settings=None,
+        fade_ms: int = 0,
+        on_fade_in: Callable[[MonitorShell], None] | None = None,
+        reserve_now: bool = True,
+        on_reserved: Callable[[MonitorShell], None] | None = None,
+        on_closing: Callable[[MonitorShell], None] | None = None,
     ):
         """`on_layout(shell)` is called after a re-layout this shell starts by itself (content
         measured, monitor geometry changed), so the app can report new layout warnings;
         `on_error(shell)` when such a re-layout raised (logged here; the app rebuilds us);
-        `on_settings()` is given to every panel (a right-click on its handle)."""
+        `on_settings()` is given to every panel (a right-click on its handle).
+
+        `fade_ms` > 0 (spec 21): every window is built at opacity 0 and the panels take no
+        input; once the monitor is ready (the first re-raise has run, no "content" measurement
+        is pending) all windows fade in together over `fade_ms`, the panels take input from
+        the start of the fade, and `on_fade_in(shell)` is called. 0: no fade (as before).
+
+        `reserve_now` False (only with a fade): the 4 zone strips are not built with the shell
+        but RESERVE_DELAY_MS after the fade-in starts (an enable, a startup, a hot-plug, a
+        rebuild's successor; the maximized windows shrink after the frame appears), and
+        `on_closing(shell)` is called when a fade-out has ended, just before the windows are
+        closed (the app lets the successor build its due strips first), and
+        `on_reserved(shell)` is called when they exist (the app drops the strips of the shell
+        this one replaces). True: built at once. Without a fade they are always built at
+        once."""
         self.name = name
         self.monitor = monitor
         self._register = register_window
@@ -163,6 +190,17 @@ class MonitorShell:
         self._relayout_id = 0  # pending geometry re-layout
         self._scale_warned = False
         self._monitor_handlers: list[int] = []
+        self._fade_ms = fade_ms
+        self._reserve_now = reserve_now or fade_ms <= 0
+        self._reserve_id = 0  # pending late build of the strips
+        self._on_reserved = on_reserved or (lambda _shell: None)
+        self._on_closing = on_closing or (lambda _shell: None)
+        self._on_fade_in = on_fade_in or (lambda _shell: None)
+        self._fade: Fade | None = None  # made in _build, right after the canvas
+        self._input_live = fade_ms <= 0  # the panels take input (from the fade-in on)
+        self._raises_pending = 0  # first re-raises still to run: the monitor is not ready
+        self._ready_id = 0  # pending idle readiness check
+        self._detached = False  # leaving (detach): no longer follows the config or monitor
         try:
             self._build(config)
         except BaseException:
@@ -175,14 +213,69 @@ class MonitorShell:
         # The canvas first: it draws the frame and corners and must stay below every panel.
         self.canvas = ShapeCanvas(monitor, theme, self._scope)
         self._track(self.canvas)
-        self.strips = [FrameEdge(edge, monitor, theme, self._scope) for edge in EDGES]
-        for strip in self.strips:
-            self._track(strip)
+        # One Tween on the canvas's frame clock sets every window (0 ms: no fade work at all).
+        self._fade = Fade(
+            self.canvas,
+            self._set_opacity,
+            self._fade_ms,
+            GLib.timeout_add,
+            GLib.source_remove,
+            on_start=self._faded_in,
+        )
+        if self._reserve_now:
+            self._build_strips(theme)
         self._sync_panels(config, theme, startup=True)
         if self.live_panels():
-            for delay in raise_delays():
-                GLib.timeout_add(delay, self._raise_panels)
+            for i, delay in enumerate(raise_delays()):
+                first = i == 0  # the fallback re-raise is not waited for
+                self._raises_pending += first
+                GLib.timeout_add(delay, self._raise_panels, first)
         self._monitor_handlers.append(monitor.connect("notify::geometry", self._on_geometry))
+        if self._fade.state == "waiting":  # checked once the build has returned to the loop
+            self._ready_id = GLib.idle_add(self._ready_idle)
+
+    def _build_strips(self, theme) -> None:
+        """The 4 zone strips, each tracked (and so registered) as soon as it exists."""
+        for edge in EDGES:
+            strip = FrameEdge(edge, self.monitor, theme, self._scope)
+            self.strips.append(strip)
+            self._track(strip)
+
+    def _reserve(self) -> bool:
+        """RESERVE_DELAY_MS after the fade-in started: build the strips from the current theme,
+        unless the shell was closed or detached meanwhile."""
+        self._reserve_id = 0
+        if self._closed or self._detached or self.strips:
+            return False
+        self._reserve_built()  # a GLib callback: never raises into the main loop (decision 11)
+        return False
+
+    def reserve_pending_now(self) -> None:
+        """The late build of the strips is due but not yet run, and the shell is about to leave
+        (a second rebuild replaces it before its zone came): build it now, so the zone the
+        older leaving shell is about to lose is handed to this one. Nothing otherwise."""
+        if self._reserve_id and not self._closed:
+            GLib.source_remove(self._reserve_id)
+            self._reserve_id = 0
+            self._reserve_built()
+
+    def _reserve_built(self) -> None:
+        """Build the strips and report (the body of _reserve, without its guards)."""
+        try:
+            self._build_strips(self._theme)
+        except Exception:
+            log.exception("reserving the edges of %s failed", self.name)
+            return
+        try:
+            self._on_reserved(self)
+        except Exception:
+            log.exception("the reserve callback of %s failed", self.name)
+
+    def drop_strips(self) -> None:
+        """Destroy the zone strips now (the successor's set exists)."""
+        for strip in self.strips:
+            self._destroy(strip)
+        self.strips = []
 
     def live_panels(self) -> list[EdgePanel]:
         return [p for p in self.panels if p is not None]
@@ -320,12 +413,13 @@ class MonitorShell:
                 self._on_error(self)
             except Exception:
                 log.exception("handling the measurement failure of %s failed", self.name)
+        self._check_ready()
         return False
 
     # ---- monitor geometry -----------------------------------------------------------------
     def _on_geometry(self, *_args) -> None:
         """The monitor's resolution (or position) changed: re-layout once it settles."""
-        if self._closed:
+        if self._closed or self._detached:
             return
         if self._relayout_id:
             GLib.source_remove(self._relayout_id)
@@ -405,9 +499,12 @@ class MonitorShell:
             self._failed[index] = (_entry_key(req), message)
             return None
         panel.scene_key = key
+        if not self._input_live:  # invisible until the fade-in: no input either
+            panel.set_input_enabled(False)
         self._track(panel)
         if raise_later:  # created after startup: re-raise it like the first ones
             for delay in raise_delays()[:1]:
+                self._raises_pending += 1
                 GLib.timeout_add(delay, self._raise_one, panel)
         return panel
 
@@ -417,22 +514,148 @@ class MonitorShell:
         self.canvas.remove_panel(panel.scene_key)
         self._destroy(panel)
 
-    def _raise_panels(self) -> bool:
-        """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS)."""
-        if not self._closed:
+    def _raise_panels(self, first: bool = False) -> bool:
+        """Re-map the live panels so they stack above the canvas (see RAISE_DELAY_MS). The
+        `first` one is waited for by the fade-in: a re-map is a visible blink."""
+        if not self._closed and not self._detached:  # a leaving shell is never re-mapped
             for panel in self.live_panels():
                 panel.raise_to_top()
+        if first:
+            self._raised()
         return False
 
     def _raise_one(self, panel: EdgePanel) -> bool:
         # The panel may have been rebuilt or removed during the delay: only raise live ones.
-        if panel in self.panels:
+        if panel in self.panels and not self._detached:
             panel.raise_to_top()
+        self._raised()
         return False
+
+    # ---- fade (spec 21) -------------------------------------------------------------------
+    def _raised(self) -> None:
+        self._raises_pending = max(0, self._raises_pending - 1)
+        self._check_ready()
+
+    def _ready_idle(self) -> bool:
+        self._ready_id = 0
+        self._check_ready()
+        return False
+
+    def _check_ready(self) -> None:
+        """Fade in once nothing that re-maps or resizes a window is pending (Fade.ready only
+        acts while waiting; its own timeout fades in anyway)."""
+        if self._closed or self._detached or self._fade is None:
+            return
+        if self._raises_pending or self._measure_id:
+            return
+        self._fade.ready()
+
+    def _faded_in(self) -> None:
+        """The fade-in starts: the panels take input from now on (what is seen is clicked)."""
+        self._input_live = True
+        for panel in self.live_panels():
+            try:
+                panel.set_input_enabled(True)
+            except Exception:  # one failing panel must not leave the others without input
+                log.exception("could not enable the input of a panel on %s", self.name)
+        if not self._reserve_now and not self.strips and not self._reserve_id:
+            self._reserve_id = GLib.timeout_add(RESERVE_DELAY_MS, self._reserve)
+        self._on_fade_in(self)
+
+    @property
+    def fade_state(self) -> str:
+        """The fade's state (shell.fade.State); "done" once closed."""
+        if self._closed:
+            return "done"
+        return "shown" if self._fade is None else self._fade.state
+
+    @property
+    def fading_out(self) -> bool:
+        """True once fade_out has started (or the shell is closed)."""
+        return self.fade_state in ("fading-out", "done")
+
+    def finish_fade(self) -> None:
+        """Complete a fade-in in progress now (fully shown). A shell replaced in the middle of
+        its fade-in (a second reload) is held at full opacity: fades never stack."""
+        if not self._closed and self._fade is not None and self._fade.state == "fading-in":
+            self._fade.finish()
+
+    def detach(self, keep_strips: bool = False) -> None:
+        """Stop following the config and the monitor: the shell is leaving (fade_out, or a
+        rebuild replaces it). Pending measurements, re-layouts and readiness checks are
+        dropped, re-raises do nothing (a re-map would blink), the monitor's geometry is no
+        longer watched, and a pending late build of the strips is cancelled. Everything else
+        stays on screen, as it is, until fade_out or close. Once only.
+
+        The zone strips are destroyed now unless `keep_strips` (what fade_out and a rebuild's
+        hold pass): they stay and are closed with the other windows, so a maximized window
+        grows only when the frame is gone (it would show its square corners through the fading
+        frame's rounded ones), and a held shell reserves the zone until its successor has built
+        its own strips (the app then calls drop_strips: never two sets for longer than that
+        call)."""
+        if self._detached or self._closed:
+            return
+        self._detached = True
+        self._cancel_sources()
+        self._disconnect_monitor()
+        if not keep_strips:
+            for strip in self.strips:
+                self._destroy(strip)
+            self.strips = []
+
+    def fade_out(self, duration_ms: int, on_done: Callable[[MonitorShell], None]) -> None:
+        """Fade every window out over `duration_ms` from the opacity it has, then close and
+        call on_done(self). From now on the shell is detached and its panels take no input
+        (clicks reach the successor or the desktop). With 0 ms, or when nothing was visible
+        yet (still waiting to fade in), it is closed at once, as close() does. A second call
+        while fading out is ignored (the first on_done runs)."""
+        if self._closed or duration_ms <= 0 or self.fade_state == "waiting":
+            self.close()
+            self._call_done(on_done)
+            return
+        if self.fading_out:
+            return
+        self.detach(keep_strips=True)  # the zones go with the frame, at the end
+        for panel in self.live_panels():
+            try:
+                panel.set_input_enabled(False)
+            except Exception:  # the fade-out must start whatever one panel does
+                log.exception("could not disable the input of a panel on %s", self.name)
+        self._fade.fade_out(duration_ms, lambda: self._faded_out(on_done))
+
+    def _faded_out(self, on_done: Callable[[MonitorShell], None]) -> None:
+        try:
+            self._on_closing(self)  # its successor takes over the zone before the windows go
+        except Exception:
+            log.exception("the closing callback of %s failed", self.name)
+        try:
+            self.close()
+        except Exception:  # in a frame-clock tick: never raise into GTK
+            log.exception("closing %s after its fade-out failed", self.name)
+        self._call_done(on_done)
+
+    def _call_done(self, on_done: Callable[[MonitorShell], None]) -> None:
+        try:
+            on_done(self)
+        except Exception:
+            log.exception("the fade-out callback of %s failed", self.name)
+
+    def _set_opacity(self, value: float) -> None:
+        """One frame of the fade: every window of the monitor, in the same tick."""
+        for window in self.windows:
+            self._apply_opacity(window, value)
+
+    def _apply_opacity(self, window, value: float) -> None:
+        try:
+            window.set_opacity(value)  # GTK 3 paints a toplevel's opacity as a group alpha
+        except Exception:  # one window going away must not stop the others
+            log.debug("could not set the opacity of a window on %s", self.name, exc_info=True)
 
     # ---- windows --------------------------------------------------------------------------
     def _track(self, window) -> None:
         self.windows.append(window)
+        if self._fade is not None and self._fade.state != "shown":
+            self._apply_opacity(window, self._fade.value)  # before its first frame is drawn
         self._register(window)
         self._check_monitor(window)
 
@@ -477,21 +700,30 @@ class MonitorShell:
             self._remeasure.update(range(len(self.panels)))  # fonts may have changed
         self._sync_panels(config, theme, startup=False)
 
-    def close(self) -> None:
-        self._closed = True
-        for source in (self._measure_id, self._relayout_id):
+    def _cancel_sources(self) -> None:
+        for source in (self._measure_id, self._relayout_id, self._ready_id, self._reserve_id):
             if source:
                 GLib.source_remove(source)
-        self._measure_id = self._relayout_id = 0
+        self._measure_id = self._relayout_id = self._ready_id = self._reserve_id = 0
+
+    def _disconnect_monitor(self) -> None:
         for handler in self._monitor_handlers:
             try:
                 self.monitor.disconnect(handler)
             except Exception:  # the monitor may be gone already (unplugged)
                 log.debug("could not disconnect from %s", self.name, exc_info=True)
         self._monitor_handlers.clear()
+
+    def close(self) -> None:
+        self._closed = True
+        if self._fade is not None:
+            self._fade.cancel()  # before the canvas (its frame clock) is destroyed
+        self._cancel_sources()
+        self._disconnect_monitor()
         for window in self.windows:
             self._release(window)
         self.windows.clear()
+        self.strips = []  # released with the windows
         self.panels.clear()
         self._resolved.clear()
         self._handles.clear()

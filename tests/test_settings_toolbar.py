@@ -171,3 +171,21 @@ def test_the_toolbar_is_on_two_lines_and_a_long_title_is_cut(toolbar):
     assert toolbar.title.get_parent() is line and toolbar.add_button.get_parent() is second
     assert toolbar.kind.widget.get_parent() is second
     assert all(b.get_parent() is second for b in toolbar.panel_buttons.values())
+
+
+def _drawn_left_to_right(buttons):
+    """The actions of `buttons` in the order they are drawn in their box: a button packed at
+    the start is drawn in packing order, one packed at the end after them (GtkBox lists
+    those in drawn order; the first packed is rightmost)."""
+    box = next(iter(buttons.values())).get_parent()
+    by_widget = {b: a for a, b in buttons.items()}
+    start, end = [], []
+    for child in box.get_children():
+        if child in by_widget:
+            pack = box.query_child_packing(child)[3]
+            (end if pack == Gtk.PackType.END else start).append(by_widget[child])
+    return start + end
+
+
+def test_the_panel_buttons_read_up_down_remove_from_left_to_right(toolbar):
+    assert _drawn_left_to_right(toolbar.panel_buttons) == ["up", "down", "remove"]

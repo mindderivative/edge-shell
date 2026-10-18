@@ -33,6 +33,13 @@ alongside Plasma and does not replace it.
 - Several panels per edge: align slots (start, center, end) with order and offset, a configurable gap, lengths in px, "fill", "content" or a percentage with optional min/max. Panels keep clear of the rounded screen corners and re-lay out when the monitor's resolution changes.
 - Panel animation, hover peek, click to toggle, drag to open or close with a 50% snap.
 - Live config reload: an invalid edit keeps the last good config and sends a notification.
+- Fades: a monitor's Edge Shell fades in when it is turned on or starts (it is built hidden and
+  fades in once ready; the live gate showed no blink and the panels do not trail the frame),
+  fades out when it is turned off or the shell
+  quits (Ctrl+C or SIGTERM), and a full rebuild (a thickness change, for example) crossfades
+  from the old frame to the new one. `[theme] fade_ms` (default 50 ms, 0-500, per monitor too)
+  sets the time; 0 turns it off and gives the old instant behaviour. The settings window has
+  it as the **Fade** slider on the Theme page's General tab.
 - Monitor hot-plug, and per-monitor theme overrides scoped to that monitor.
 
 ## Requirements
@@ -65,12 +72,20 @@ scripts/py main.py --restore-config                        # put back config.tom
 
 `scripts/py` runs the shared venv; override it with `EDGE_SHELL_PYTHON=/path/to/python`.
 Only one instance can run (Fabric names the app `edge-shell`). Quit a backgrounded copy
-with `fg`, then Ctrl+C.
+with `fg`, then Ctrl+C. Ctrl+C (or SIGTERM) fades every monitor out first and quits when the
+fade is done (at most the longest `fade_ms` + 250 ms later); a second Ctrl+C or SIGTERM quits at
+once. The exit status is 130 after Ctrl+C, 143 after SIGTERM. The quit is handled by the main
+loop: if the loop is stuck in a callback, Ctrl+C does nothing, so use Ctrl+\ or `kill -9`.
 
 ## Configure
 
 `config.default.toml` lists every key. Your config (`~/.config/edge-shell/config.toml`, or
 `--config PATH`) is overlaid on it and reloads live when saved.
+
+The frame's `[theme] thickness` is 5 to 64 px (it was 2 to 64 before 2026-10-17). A config that
+still says 2, 3 or 4 is invalid like any bad value: a running shell keeps its last good config
+and notifies, the settings window opens that file read-only with the error, and a start refuses
+it with `config error: theme.thickness: ...` (exit status 2). Raise the value to 5 or more.
 
 ```toml
 [monitors.HDMI-A-1]
@@ -381,8 +396,8 @@ file.
   elsewhere). The selected panel row has Move up, Move down and Remove buttons at its right
   (Tab reaches them); the toolbar has the same three. After a Remove the monitor's row is
   selected (and keeps the keyboard focus when the tree had it).
-- **Theme** page, tabs: **General** (colours, fonts, thickness, radius, peek, hover zone,
-  duration; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
+- **Theme** page, tabs: **General** (colours, fonts, thickness (5-64 px), radius, peek, hover zone,
+  duration, fade; any theme key added later lands here), **Borders**, **Shadows**, **Handle** (the
   handle colours and the handle style) and **Layout** (the gap). A **monitor** page has the same
   tabs under a banner that is always shown: "These values override the Theme for HDMI-A-1. A row
   you have not set here shows the Theme's value." A row not set there reads "global theme".
@@ -402,15 +417,58 @@ file.
 - Each row shows the value in effect and where it comes from (`your config`, `default`,
   `global theme`, `widget default`, ...). The reset button removes the key from your file, so
   the value is inherited again.
-- Changes apply at once; the running shell reloads them like a hand edit. Spin buttons wait
-  0.4 s after the last change of any spin button, and one queue applies every change in the
-  order you made it: per setting only the last value counts, and a spin button changed and
-  changed back is not written at all. Anything still waiting is applied before a panel is
-  added, moved or removed, before Undo, Save or leaving the config (New, Open, Close, Exit),
-  and before Detect monitors; Revert all drops it. A change the shell would reject is not
-  saved: the reason (with the key path) shows under the row. The mouse wheel scrolls the page
-  and never changes a value, so scrolling over a monitor's shell mode cannot switch it. If the file
-  is changed in an editor while changes are still waiting, they are not applied (they were made
+- Every label has a tooltip: a one-sentence explanation of what the property does. It comes
+  from the field's `description` in the model (`shell/config/models.py`, or the widget's
+  property model). Every settings field must have one; a test enforces it.
+- **Inputs.**
+  - **Sliders.** A whole number with a minimum and a maximum at most 500 apart is a slider with
+    a spin button beside it for typing an exact value; both show the same number. These are
+    Theme: thickness, radius, peek, hover zone (General), border width, shadow elevation,
+    handle size and weight; Layout: gap; a panel's Handle tab: size and weight; and a widget's
+    font size (the clock, 6-96). A focused slider takes the arrow keys (1), Page Up (+ a tenth of the
+    range) and Page Down (- a tenth), Home and End. Dragging a slider writes once, when you
+    release the mouse button (the number beside it follows the drag). The wider ranges keep a spin button: duration
+    (0-5000 ms), a panel's offset, order, depth, minimum and maximum length and handle offset,
+    a corner panel's width and height. An unset optional number (the font size) shows the
+    slider's minimum and its note says where the value comes from.
+  - **Toggles** (border and shadow Enabled, a panel's click, hover and drag) are thin
+    switches: a 38 x 22 px track with a round 16 px knob, centred in the row (CSS class
+    `edge-switch`, `settings/style.py`).
+  - **Dropdowns** (handle shape, a panel's edge, align and state, the Widget and Corner
+    lists, the length mode, the panel type list in the toolbar) open below their row (above it when there is no room) with
+    every entry shown at once; the active entry is highlighted, not laid over the box. Before,
+    they opened one row high with a scrollbar on KWin/Wayland and grew on a mouse-over.
+  - **Fonts.** A font is a button that opens a list inside the window: a search field above
+    the families (it has the keyboard focus; type any part of a name, case ignored; Enter
+    picks the first match, a click any row, Escape closes without a change). The list opens
+    scrolled to the font in use. Order: the desktop's own font first ("Noto Sans (system
+    font)", read from the desktop's font setting), then `monospace`, `sans-serif`, `serif`,
+    then every installed family A-Z. The desktop's `Sans`, `Sans-Serif` and `System-ui` show
+    as `sans-serif`. A font in your file that is not installed is listed as "NAME (not
+    installed)", selected, and kept. The font list is read once per window process.
+  - The Theme page's **Font** is a list of fonts, an ordered fallback list (the first
+    installed one is used): one font button per family, with Move up, Move down and Remove,
+    and **Add font** below, which adds the desktop's font (if it is listed already, then
+    `monospace`, `sans-serif`, `serif`). The list keeps at least one font (its Remove is greyed
+    out at one). After a Move the keyboard focus stays on the moved font's button; after a Remove
+    it goes to the font that took the removed one's place (else the last line, else Add font);
+    after Add font it goes to the new line's picker. The buttons are named "Move font 2 up",
+    "Move font 2 down", "Remove font 2 from the list". The shell does not follow the KDE font
+    by itself: the theme's default font list is unchanged (Hack Nerd Font Mono, JetBrains
+    Mono, monospace); the desktop font is offered, and added by Add font, not used unasked.
+  - A widget's **Font** row (the clock) starts with **Theme font**: it is shown while the key is
+    not set; choosing it removes the key (the theme's font is used again), choosing a family
+    writes `font`.
+- Changes apply at once; the running shell reloads them like a hand edit. Spin buttons and
+  sliders wait 0.4 s after the last change of any of them (a mouse drag of a slider writes once,
+  when you release the button), and one queue applies every change in the order you made it: per setting only the
+  last value counts, and a value changed and changed back is not written at all. Anything
+  still waiting is applied before a panel is added, moved or removed, before Undo, Save or
+  leaving the config (New, Open, Close, Exit), and before Detect monitors; Revert all drops
+  it. A change the shell would reject is not saved: the reason (with the key path) shows under
+  the row. The mouse wheel scrolls the page and never changes a value (a slider, a spin
+  button or a dropdown included), so scrolling over a monitor's shell mode cannot switch it.
+  If the file is changed in an editor while changes are still waiting, they are not applied (they were made
   for the file before it changed, and panels are tracked by their place in the list) and the
   banner names them: "Not applied (made for the file before it changed):
   theme.thickness = 17, monitors.HDMI-A-1.panels[0].depth = 4".
@@ -481,9 +539,18 @@ that need `gi` or Fabric skip themselves there.
   no right-click menu; Remove (button or Delete) selects the monitor's row, not a neighbouring
   panel; a panel's Move and Remove buttons show on the selected row only (not on hover); the
   mode checkboxes always write `shell` (no reset to the default); two spin buttons changed
-  within 0.4 s are written together after the last change; at narrow widths the tabs scroll
-  sideways; a right-click on a handle opens the window but not yet on that panel's page
-  (follow-up).
+  within 0.4 s are written together after the last change; at the narrowest width a horizontal
+  scrollbar appears and the Reset buttons are reached by scrolling (at the default 860 px
+  nothing scrolls sideways); a right-click on a handle opens the window but not yet on that
+  panel's page (follow-up).
+- Settings window, inputs: the dropdown fix is a GTK quirk workaround (a combo with a wrap
+  width of 1 is anchored below its row); if a dropdown still opens one row high on some setup,
+  the planned fallback is a popover list like the font picker's. A dropdown's list may be a
+  little narrower than its box. The font list is read once per window process (a font
+  installed while the window is open shows after it is reopened); the theme's own default font
+  list is unchanged (Hack Nerd Font Mono, JetBrains Mono, monospace): the desktop font is
+  offered first, not used by itself. The sliders are 160 px wide with no tick marks or value
+  label (the spin button shows the number).
 - Settings window, editing limits: unsetting a whole table leaves that table's own label comment
   behind (not reachable from the window, which only resets single keys); after an edit a CRLF
   file may have `\n` endings on the lines the window writes (the session reads with universal
@@ -537,6 +604,51 @@ that need `gi` or Fabric skip themselves there.
 - The "Panels adjusted" notification is not repeated after an unplug and replug that yields
   identical layout warnings.
 - On a dark wallpaper the border and shadow are faint; raise the shadow alpha or elevation.
+- Fades (spec section 21). When it fades: a monitor turned on or started (fade in), a monitor
+  turned off (`shell = "plasma"` or `"none"`: fade out), a full rebuild (a change of
+  `thickness`, `radius`, `peek`, `hover_zone` or `duration_ms`: crossfade), and a quit by
+  Ctrl+C or SIGTERM. What does not fade: a restyle (colours, borders, shadows, handle style,
+  fonts, and `fade_ms` itself, which applies from the next fade), panel adds, removes,
+  rebuilds and state changes, a resolution change (re-laid out in place), an unplugged or
+  replaced (new Gdk monitor) output (closed at once: the output is gone), the failure rebuilds
+  (a shell whose in-place apply or re-layout raised is closed at once, its replacement still
+  fades in), and `--stats` (never fades). What you may see: a monitor appears about half a
+  second after it is turned on or started, not at once: the fade waits for the panels' first
+  re-raise (which re-maps them and would blink) and, if something is stuck, starts after a
+  1000 ms ready timeout anyway. The maximized windows take the new frame size when the zone
+  strips are built, which is 100 ms after the frame starts to appear (on an enable and on
+  a rebuild's new shell alike: the frame appears first); on a disable the strips stay until
+  the fade-out has ended, so the window grows when the frame is gone and its square corners
+  never show through the fading frame. During a rebuild the held old shell keeps its strips
+  until the new shell has built its own (they are swapped in one call, so the zone is
+  continuous and the window does not bounce); a held shell whose successor never appears
+  (turned off meanwhile, a quit, a failed rebuild) fades out with its strips. A monitor turned
+  on again while the previous frame is still fading out reserves like any enable, and the old
+  strips go when the new ones exist. The handover is continuous for every fade length: with
+  a fade shorter than the 100 ms (the default is 50 ms) the new shell builds its strips just
+  before the old one closes. Known: after a failed in-place apply or re-layout the failed
+  shell closes at once and the replacement reserves late, so a maximized window grows at
+  once and shrinks again about 0.6 s later (the ready wait plus 100 ms). A monitor whose
+  `[monitors.X]` entry was removed gets the global theme CSS for the rest of its fade. That resize is the compositor's and is not faded. The
+  fallback re-raise 2 s after the start may still re-map the panels once after the fade (the
+  live gate saw no flicker from it). A disabled monitor keeps its theme CSS (border radius,
+  handle look, fonts) until its fade-out has ended. The fade gate (Phil, HDMI-A-1): items
+  1, 2 and 5-12 passed (no blink, no flicker on the fallback re-raise, the crossfade, the
+  quit statuses 130 and 143); items 3 and 4 passed with findings (square corners at the start
+  of a disable, the window shrinking about 0.5 s before the frame appeared on an enable); a
+  first re-check passed items 4-7 and found the monitor's CSS dropped at the start of a
+  disable, 50 ms still too early, and the rebuild shrinking the window before the new frame;
+  all fixed (commits f61d49a, 4e8c947, 8515e3b, a4452f7 and 4627cc8). Phil's next re-check of
+  items 3 and 4 is pending. During a crossfade the old shell's text and fonts take the new theme's CSS at
+  once (its frame keeps the old look until it is gone), and where both shells draw the same
+  shape it dims slightly half-way (two half-transparent frames over each other). A reload
+  during a crossfade finishes the running fade-in and drops the older leaving shell at once;
+  an unplug or replacement of that monitor in the middle of a crossfade drops its old shell
+  at once (a quit in the middle of a crossfade also closes the fading old shell at once and fades the
+  new one out). Quit: the
+  first signal fades and quits, bounded by the longest `fade_ms` + 250 ms; a second signal
+  quits at once. Ctrl+C and SIGTERM now need the main loop to be running: a loop stuck in a
+  callback ignores them (use Ctrl+\ or `kill -9`).
 
 ## Licence
 

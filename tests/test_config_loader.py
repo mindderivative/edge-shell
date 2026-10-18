@@ -1,6 +1,6 @@
 import pytest
 
-from shell.config.loader import OLD_FORMAT, load_config
+from shell.config.loader import DEFAULT_PATH, OLD_FORMAT, load_config
 from shell.config.models import ConfigError
 
 
@@ -11,6 +11,11 @@ def write(path, text):
 
 def test_defaults_only_matches_test_theme(make_config):
     assert load_config(None).theme == make_config().theme
+
+
+def test_the_defaults_file_lists_the_fade():
+    assert load_config(None).theme.fade_ms == 50
+    assert "\nfade_ms = 50 " in DEFAULT_PATH.read_text(encoding="utf-8")  # listed, not implied
 
 
 def test_missing_user_file_uses_defaults(tmp_path, make_config):

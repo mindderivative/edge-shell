@@ -36,6 +36,20 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "edge-shell"
 EXERCISE_MS = 300  # --stats toggles every panel this often: a 280 ms tween plus a frame
+# A quit signal fades every monitor out first (spec 21), waiting at most the longest fade_ms
+# plus this; a second signal quits at once.
+QUIT_MARGIN_MS = 250
+
+
+def unix_signal_add(priority: int, signum: int, handler, data) -> int:
+    """GLib's Unix signal source: GLibUnix.signal_add (GLib 2.80+; this machine: 2.90), else
+    the older GLib.unix_signal_add. `handler(data)` runs in the main loop."""
+    try:
+        gi.require_version("GLibUnix", "2.0")
+        from gi.repository import GLibUnix
+    except (ValueError, ImportError):
+        return GLib.unix_signal_add(priority, signum, handler, data)
+    return GLibUnix.signal_add(priority, signum, handler, data)
 
 
 def _already_running() -> bool:
@@ -59,6 +73,13 @@ class EdgeShellApp:
         self._relayout_rebuilt: set[str] = set()  # rebuilt after a failed re-layout, until a reload
         self._monitors_reported: list[str] = []  # the unknown configured names last notified
         self._seen_connected: set[str] = set()  # every monitor name connected this session
+        # Shells fading out (spec 21), at most one per monitor: out of `shells`, so nothing
+        # else (reports, CSS, reloads) sees them; closed by their fade or by _retire.
+        self._leaving: dict[str, MonitorShell] = {}
+        self._quitting = False  # a quit signal came: fading out, then quit
+        self._quit_timer = 0
+        self._quit_sent = False
+        self._exit_code = 0
         self._log_deprecated(store.config)
 
     @property
@@ -89,13 +110,21 @@ class EdgeShellApp:
             self._check_monitor_names(connected)
         except Exception:  # a warning must never break startup or a reload
             log.exception("checking the monitor names failed")
+        retired = False
+        for name, shell in list(self._leaving.items()):
+            if connected.get(name) is not shell.monitor:  # unplugged or replaced: no fade on it
+                self._retire(name)
+                retired = True
+        if retired:
+            self.refresh_css()  # its CSS goes (a shell opened below refreshes again)
         wanted = plan.desired_shells(self.config, connected)
         desired = {name: connected[name] for name in wanted}
         active = {name: shell.monitor for name, shell in self.shells.items()}
         close, open_ = plan.reconcile(active, desired)
         for name in close:
             log.info("closing Edge Shell on %s", name)
-            self._close_shell(name)
+            # Faded out while its monitor is still there; unplugged or replaced: closed now.
+            self._close_shell(name, fade=connected.get(name) is self.shells[name].monitor)
         for name in open_:
             self._open_shell(name, desired[name])
         if close or open_:
@@ -122,9 +151,114 @@ class EdgeShellApp:
             log.warning("monitor names in the config are not connected (%s)", report)
             self._notify(MONITOR_TITLE, f"{report}\nUse the connected names in the config.")
 
-    def _close_shell(self, name: str) -> None:
+    def _close_shell(self, name: str, fade: bool = True) -> None:
+        """Take `name`'s shell out of `shells`. With `fade` it fades out (spec 21; at once
+        with fade_ms 0) and is closed when done; without (its monitor is gone), now."""
         self._forget_reports(name)
-        self.shells.pop(name).close()
+        shell = self.shells.pop(name)
+        if fade:
+            self._fade_away(name, shell)
+        else:
+            self._retire(name)
+            shell.close()
+
+    def _leave_shell(self, name: str) -> None:
+        """A full rebuild of `name` (spec 21, crossfade): the old shell stays on screen,
+        detached (held), until its successor starts fading in; then it fades out over the
+        same time (_faded_in). Without a fade it is closed now, as before."""
+        if self._fade_ms(name) <= 0:
+            self._close_shell(name, fade=False)
+            return
+        self._forget_reports(name)
+        shell = self.shells.pop(name)
+        if shell.fade_state == "waiting":
+            # never visible: closed now; a shell it was replacing stays held for the next one
+            shell.close()
+            return
+        shell.finish_fade()  # mid fade-in: held fully shown, never two fades at once
+        shell.reserve_pending_now()  # its zone is due: build it, detach would cancel it
+        self._retire(name)  # at most one leaving shell per monitor: an older one goes now
+        shell.detach(keep_strips=True)  # held with its zone until its successor has its own
+        self._leaving[name] = shell
+
+    def _hand_over(self, name: str, shell: MonitorShell) -> None:
+        """An older leaving shell of `name` is about to be closed for `shell`, which is leaving
+        too: if `shell` has not built its strips yet (its zone is due), build them first, so the
+        zone passes from the older one to this one without a gap."""
+        if name in self._leaving:
+            shell.reserve_pending_now()
+        self._retire(name)
+
+    def _reserved(self, shell: MonitorShell) -> None:
+        """`shell` (current) has built its zone strips: the shell it replaces, held or fading
+        out and still keeping its own, drops them in the same call. New set first, then the old
+        one; no frame is drawn between, and the edges are never reserved twice for longer."""
+        if self.shells.get(shell.name) is not shell:
+            return
+        old = self._leaving.get(shell.name)
+        if old is not None:
+            old.drop_strips()
+
+    def _closing(self, shell: MonitorShell) -> None:
+        """A leaving shell's fade-out has ended and its windows (and strips) are about to go:
+        the successor builds its own strips now if they are still due (a fade shorter than
+        RESERVE_DELAY_MS), so the zone passes on without a gap."""
+        successor = self.shells.get(shell.name)
+        if successor is not None and successor is not shell:
+            successor.reserve_pending_now()
+
+    def _faded_in(self, shell: MonitorShell) -> None:
+        """`shell` starts fading in: the shell it replaces (held) fades out with it."""
+        if self.shells.get(shell.name) is not shell:
+            return
+        old = self._leaving.get(shell.name)
+        if old is not None and not old.fading_out:
+            old.fade_out(self._fade_ms(shell.name), self._gone)
+
+    def _release_held(self, only: str | None = None) -> None:
+        """A held shell whose monitor got no successor (its rebuild failed, or it was never
+        opened) fades out on its own; with `only`, just that monitor's."""
+        for name, shell in list(self._leaving.items()):
+            if only is not None and name != only:
+                continue
+            if name not in self.shells and not shell.fading_out:
+                shell.fade_out(self._fade_ms(name), self._gone)
+
+    def _fade_away(self, name: str, shell: MonitorShell) -> None:
+        if shell.fade_state == "waiting":
+            # never visible: closed now, and the shell it was replacing (held, on screen)
+            # fades out instead of disappearing
+            shell.close()
+            self._release_held(name)  # only this monitor's: another may be waiting on a successor
+            return
+        self._hand_over(name, shell)  # at most one leaving shell per monitor
+        self._leaving[name] = shell
+        shell.fade_out(self._fade_ms(name), self._gone)
+
+    def _retire(self, name: str) -> None:
+        """Close `name`'s leaving shell now (its fade, if any, is dropped)."""
+        shell = self._leaving.pop(name, None)
+        if shell is not None:
+            try:
+                shell.close()
+            except Exception:
+                log.exception("closing the leaving shell of %s failed", name)
+
+    def _gone(self, shell: MonitorShell) -> None:
+        """A leaving shell finished its fade-out and closed itself."""
+        if self._leaving.get(shell.name) is shell:
+            del self._leaving[shell.name]
+            if shell.name not in self.shells:
+                self.refresh_css()  # a monitor with no shell left drops its CSS
+        if self._quitting and not self._leaving and not self.shells:
+            self._quit_now()
+
+    def _fade_ms(self, name: str) -> int:
+        """The fade of `name`'s next fade in or out (spec 21): the config in effect now (a
+        change of fade_ms applies from the next fade on). 0 while --stats measures."""
+        if self._stats_seconds:
+            return 0
+        return self.config.theme_for(name).fade_ms
 
     def _forget_reports(self, name: str) -> None:
         """A closed shell's notified lists are stale: the monitor, plugged in again with the
@@ -134,6 +268,7 @@ class EdgeShellApp:
 
     def _open_shell(self, name: str, monitor) -> None:
         log.info("opening Edge Shell on %s", name)
+        fade_ms = self._fade_ms(name)
         shell = self.shells[name] = MonitorShell(
             name,
             monitor,
@@ -143,6 +278,11 @@ class EdgeShellApp:
             on_layout=lambda shell, n=name: self._report_layout(n, shell),
             on_error=lambda shell, n=name: self._relayout_failed(n, shell),
             on_settings=self.open_settings,
+            fade_ms=fade_ms,
+            on_fade_in=self._faded_in,
+            reserve_now=fade_ms <= 0,
+            on_reserved=self._reserved,
+            on_closing=self._closing,
         )
         if not shell.measure_pending:  # else the measurement's on_layout reports, with real sizes
             self._report_layout(name, shell)
@@ -171,12 +311,15 @@ class EdgeShellApp:
     def _sync_once(self, timer: int) -> bool:
         if timer in self._sync_timers:
             self._sync_timers.remove(timer)
-        self.sync_monitors()
+        if not self._quitting:  # never reopen what the quit is fading out
+            self.sync_monitors()
         return GLib.SOURCE_REMOVE
 
     def css(self) -> str:
         return "\n".join(
-            to_css(self.config.theme_for(name), scope_class(name)) for name in sorted(self.shells)
+            to_css(self.config.theme_for(name), scope_class(name))
+            # a shell fading out (or held) is still on screen: its panels keep their CSS
+            for name in sorted({*self.shells, *self._leaving})
         )
 
     def refresh_css(self) -> None:
@@ -196,6 +339,8 @@ class EdgeShellApp:
 
     def reload(self) -> None:
         # Runs from a GLib/watcher callback: never let an exception escape half-applied.
+        if self._quitting:  # never reopen what the quit is fading out
+            return
         try:
             self._reload()
         except Exception:
@@ -215,10 +360,16 @@ class EdgeShellApp:
         kinds = ", ".join(c.kind for c in changes) or "none"
         log.info("config reloaded: %d change(s): %s", len(changes), kinds)
         rebuild = {c.monitor for c in changes if c.kind == "rebuild-monitor"}
-        for name in rebuild & set(self.shells):
-            self._close_shell(name)
+        for name in sorted(rebuild & set(self.shells)):
+            if plan.has_windows(new, name):
+                self._leave_shell(name)  # rebuilt: the old one is held for the crossfade
+            else:
+                self._close_shell(name)  # turned off (plasma / none): it fades out
         # Shells opened here are built from the new config already: never apply onto them.
-        _, opened = self.sync_monitors()
+        try:
+            _, opened = self.sync_monitors()
+        finally:
+            self._release_held()  # e.g. the new shell failed to build: the old one fades out
         grouped: dict[str, list] = defaultdict(list)
         for change in changes:
             if change.monitor not in rebuild:
@@ -242,7 +393,10 @@ class EdgeShellApp:
                 except Exception:
                     log.exception("closing the half-applied shell on %s failed", name)
         if failed:
-            self.sync_monitors()  # rebuild the dropped shells from the new config
+            try:
+                self.sync_monitors()  # rebuild the dropped shells from the new config
+            finally:
+                self._release_held()  # no successor (the rebuild raised): the held one fades
         self.refresh_css()
 
     def _log_deprecated(self, config) -> None:
@@ -302,6 +456,7 @@ class EdgeShellApp:
         except Exception:
             log.exception("rebuilding the panels of %s failed", name)
             self._report_error(f"{name}: rebuilding the panels failed")
+            self._release_held()  # no successor: a shell held for the crossfade fades out
 
     def _report_layout(self, name: str, shell) -> None:
         """Notify panels moved, shrunk or hidden by the layout rules (shell.panel_layout), and
@@ -382,7 +537,10 @@ class EdgeShellApp:
         self.app.hold()  # stay alive even with no windows (e.g. all monitors set to plasma)
         self.start_watching()
         self.watch_displays()
-        signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C quits
+        # Python's own SIGINT handler stays the default, so PyGObject installs no fallback of
+        # its own that would quit without the fade; GLib's handler below takes the signal.
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        self._watch_quit_signals()  # Ctrl+C and SIGTERM fade out, then quit
         if self.recorder is not None:
             GLib.timeout_add(EXERCISE_MS, self._exercise)
             GLib.timeout_add(int(self._stats_seconds * 1000), self._stop)
@@ -391,7 +549,50 @@ class EdgeShellApp:
         if self.recorder is not None:
             wall, cpu = time.perf_counter() - wall0, time.process_time() - cpu0
             print("\n".join(self.recorder.report(wall, cpu)))
-        return 0
+        return self._exit_code
+
+    # ---- quit (spec 21) ---------------------------------------------------------------
+    def _watch_quit_signals(self) -> None:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            unix_signal_add(GLib.PRIORITY_HIGH, signum, self._on_quit_signal, signum)
+
+    def _on_quit_signal(self, signum: int) -> bool:
+        """Fade every monitor out, then quit: when the last fade is done, at the latest the
+        longest fade_ms + QUIT_MARGIN_MS later. A second signal quits at once. The exit status
+        is the shell's usual one for a signal (128 + its number: 130 for Ctrl+C)."""
+        self._exit_code = 128 + signum
+        if self._quitting:
+            log.info("second quit signal: quitting now")
+            self._quit_now()
+            return GLib.SOURCE_CONTINUE
+        self._quitting = True
+        names = sorted({*self.shells, *self._leaving})
+        wait = max((self._fade_ms(name) for name in names), default=0)
+        log.info("quit signal %d: fading out %s", signum, ", ".join(names) or "nothing")
+        for name in sorted(self.shells):
+            try:
+                self._close_shell(name)
+            except Exception:
+                log.exception("fading out %s for the quit failed", name)
+        if self._leaving:
+            self._quit_timer = GLib.timeout_add(wait + QUIT_MARGIN_MS, self._quit_timeout)
+        else:
+            self._quit_now()
+        return GLib.SOURCE_CONTINUE
+
+    def _quit_timeout(self) -> bool:
+        self._quit_timer = 0
+        log.info("the fade-out did not finish in time: quitting")
+        self._quit_now()
+        return GLib.SOURCE_REMOVE
+
+    def _quit_now(self) -> None:
+        if self._quit_timer:
+            GLib.source_remove(self._quit_timer)
+            self._quit_timer = 0
+        if self.app is not None and not self._quit_sent:
+            self._quit_sent = True
+            self.app.quit()
 
     def _exercise(self) -> bool:
         """--stats: keep every panel animating (collapse <-> extend)."""

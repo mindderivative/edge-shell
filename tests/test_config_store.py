@@ -84,3 +84,20 @@ def test_required_store_keeps_config_if_file_disappears(tmp_path, fake_registry)
     path.unlink()
     assert store.reload() is None
     assert "c.toml" in store.last_error
+
+
+@pytest.mark.parametrize("thin", [2, 3, 4])
+def test_an_old_thin_frame_is_a_bad_edit_on_reload_and_an_error_at_startup(
+    tmp_path, fake_registry, thin
+):
+    # The frame is at least 5 px thick: a file that says 2-4 is invalid like any bad value. A
+    # running shell keeps its last good config and reports the error; a start refuses it.
+    path = tmp_path / "c.toml"
+    path.write_text(GOOD + "[theme]\nthickness = 7\n")
+    store = ConfigStore(path)
+    path.write_text(GOOD + f"[theme]\nthickness = {thin}\n")
+    assert store.reload() is None
+    assert store.config.theme.thickness == 7
+    assert "theme.thickness" in store.last_error and "5" in store.last_error
+    with pytest.raises(ConfigError, match="theme.thickness"):
+        ConfigStore(path)

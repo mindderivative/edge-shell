@@ -34,14 +34,23 @@ def format_time(now: datetime) -> str:
 
 
 class ClockProps(WidgetProps):
+    # description: the label's tooltip in the settings window; hint: the note beside the value
     format: Annotated[str, Field(min_length=1, max_length=64)] = Field(
-        "HH:mm", description="HH mm ss H h a ddd dd MMM MM yyyy; other text in 'single quotes'"
+        "HH:mm",
+        description="How the clock shows time and date; text in 'single quotes' is kept as it is.",
+        json_schema_extra={
+            "hint": "HH mm ss H h a ddd dd MMM MM yyyy; other text in 'single quotes'"
+        },
     )
     font: Annotated[str, Field(min_length=1, max_length=100)] | None = Field(
-        None, description="a font family; reset: the theme's font"
+        None,
+        description="The clock's font family; unset uses the theme's fonts.",
+        json_schema_extra={"hint": "a font family; reset: the theme's font"},
     )
     font_size: Annotated[int, Field(ge=6, le=96)] | None = Field(
-        None, description="pt; reset: the theme's size"
+        None,
+        description="The clock's text size in pt; unset uses the theme's size.",
+        json_schema_extra={"hint": "pt; reset: the theme's size"},
     )
 
     @field_validator("format")

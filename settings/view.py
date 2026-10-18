@@ -23,8 +23,7 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import GLib, Gtk
 
 from settings.dialogs import GtkDialogs
 from settings.document import UserDocument
@@ -53,6 +52,7 @@ from settings.panels import add_step, panel_section, panel_step, panel_title
 from settings.queue import RESET, EditQueue, QueuedEdit, describe, path_text
 from settings.screens import DetectError, desktop_label, detect_outputs
 from settings.session import ChangedOutside, SettingsSession, check_text
+from settings.style import INFO_NOTE_CLASS, install_css
 from settings.toolbar import ScreenToolbar
 from settings.tree import SettingsTree
 from settings.values import field_value, layout_preview, lookup, panel_ops
@@ -62,41 +62,6 @@ from shell.outputs import Output
 from shell.registry import requests_for
 
 Edit = Callable[[UserDocument], Any]
-
-# The once-only info note must not depend on the theme: GTK's own infobar colours turn the
-# text orange in a focused window and white in an unfocused one. A blue background with light
-# text, with the :backdrop (unfocused) state spelled out, reads the same either way.
-INFO_NOTE_CLASS = "info-note"
-INFO_NOTE_CSS = """
-infobar.info-note,
-infobar.info-note > revealer > box,
-infobar.info-note:backdrop,
-infobar.info-note:backdrop > revealer > box {
-    background-color: #2b5c8a;
-    background-image: none;
-}
-infobar.info-note label,
-infobar.info-note:backdrop label {
-    color: #ffffff;
-}
-"""
-_info_note_provider: Gtk.CssProvider | None = None
-
-
-def install_info_note_css() -> Gtk.CssProvider:
-    """Add the info note's CSS to the screen (USER priority), once; later calls reuse it."""
-    global _info_note_provider
-    if _info_note_provider is None:
-        provider = Gtk.CssProvider()
-        provider.load_from_data(INFO_NOTE_CSS.encode())
-        screen = Gdk.Screen.get_default()
-        if screen is not None:
-            Gtk.StyleContext.add_provider_for_screen(
-                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
-            )
-        _info_note_provider = provider
-    return _info_note_provider
-
 
 # shown in a panel's tree row and page heading (panel_title), or deciding its rows (widget:
 # the kind and the Widget tab; panel: the kind's rows; corner: the edge choices): a change
@@ -157,7 +122,7 @@ class SettingsView(Gtk.Box):
             self.add_panel,
             lambda action: self.on_panel_action(self.stack.get_visible_child_name(), action),
         )
-        install_info_note_css()
+        install_css()  # the info note's colours (settings.style)
         self.banner = Gtk.InfoBar()
         self.banner_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
         self.banner.get_content_area().add(self.banner_label)
@@ -398,7 +363,7 @@ class SettingsView(Gtk.Box):
     def refresh(self) -> None:
         """Show the session's current values in every row (no rebuild: focus is kept). A row
         holding an edit that is not applied yet keeps it (`keep_pending`): another row's apply
-        must neither drop a pending spin value nor reset a typed font list, nor clear a row's
+        must neither drop a pending spin value nor reset typed text, nor clear a row's
         "Not saved" error (apply() clears the error of the row whose edit went through)."""
         config, user = self.config, self.session.user
         for row in self.rows:
@@ -730,8 +695,8 @@ class SettingsView(Gtk.Box):
 
     def flush(self, defer: bool = False) -> None:
         """The barrier before anything that must see every edit (a panel added, removed or
-        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a font
-        list or a name without Enter, a number without Enter) into the queue, then the whole
+        moved, Undo, Redo, Save, leaving the config): each row sends its typed text (a spin
+        value or a name without Enter) into the queue, then the whole
         queue is applied in order (a spin edit inside its pause included). A rebuild an edit
         asks for waits until the end (once). Not for Revert all or a hand edit: they drop the
         queue. `save_failed` says whether an edit could not be written (the error is on

@@ -30,6 +30,7 @@ def test_unknown_key_rejected(make_config):
     ("theme", "field"),
     [
         ({"thickness": 0}, "thickness"),
+        ({"thickness": 4}, "thickness"),
         ({"radius": 0}, "radius"),
         ({"thickness": 9999}, "thickness"),
         ({"duration_ms": -1}, "duration_ms"),
@@ -39,6 +40,21 @@ def test_theme_bounds(make_config, theme, field):
     with pytest.raises(ValidationError) as exc:
         make_config(theme=theme)
     assert exc.value.errors()[0]["loc"] == ("theme", field)
+
+
+def test_the_frame_is_at_least_5_px_thick(make_config):
+    assert make_config(theme={"thickness": 5}).theme.thickness == 5
+    assert make_config(theme={"thickness": 64}).theme.thickness == 64
+    for thin in (1, 2, 3, 4):
+        with pytest.raises(ValidationError):
+            make_config(theme={"thickness": thin})
+
+
+def test_a_monitor_override_keeps_the_same_minimum(make_config):
+    ok = make_config(monitors={"HDMI-A-1": {"theme": {"thickness": 5}}})
+    assert ok.theme_for("HDMI-A-1").thickness == 5
+    with pytest.raises(ValidationError, match=r"monitors\.HDMI-A-1\.theme: thickness"):
+        make_config(monitors={"HDMI-A-1": {"theme": {"thickness": 4}}})
 
 
 @pytest.mark.parametrize(
@@ -80,6 +96,24 @@ def test_monitor_theme_override_merges(make_config):
     assert cfg.theme_for("DP-1").accent == "#8fd3b6"
 
 
+def test_fade_ms_defaults_to_50_and_is_bounded_0_to_500(make_config):
+    assert make_config().theme.fade_ms == 50
+    assert make_config(theme={"fade_ms": 0}).theme.fade_ms == 0  # 0: no fade
+    assert make_config(theme={"fade_ms": 500}).theme.fade_ms == 500
+    for bad in (-1, 501):
+        with pytest.raises(ValidationError) as exc:
+            make_config(theme={"fade_ms": bad})
+        assert exc.value.errors()[0]["loc"] == ("theme", "fade_ms")
+
+
+def test_fade_ms_has_a_per_monitor_override(make_config):
+    cfg = make_config(monitors={"HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 300}}})
+    assert cfg.theme_for("HDMI-A-1").fade_ms == 300
+    assert cfg.theme_for("DP-1").fade_ms == 50
+    with pytest.raises(ValidationError, match="monitors.HDMI-A-1.theme: fade_ms"):
+        make_config(monitors={"HDMI-A-1": {"shell": "edge", "theme": {"fade_ms": 501}}})
+
+
 def test_bad_override_color_fails_at_load(make_config):
     with pytest.raises(ValidationError) as exc:
         make_config(monitors={"HDMI-A-1": {"theme": {"accent": "nope"}}})
@@ -99,6 +133,14 @@ def test_font_names_with_control_characters_rejected(make_config, bad):
     with pytest.raises(ValidationError) as exc:
         make_config(theme={"font": ["Hack", bad]})
     assert "control character" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", " ", "\u00a0 "])
+def test_empty_font_names_in_the_theme_list_are_refused(make_config, bad):
+    with pytest.raises(ValidationError) as exc:
+        make_config(theme={"font": ["Hack", bad]})
+    assert exc.value.errors()[0]["loc"] == ("theme", "font")
+    assert "must not be empty" in str(exc.value)
 
 
 def test_font_override_with_bad_name_fails_at_load(make_config):

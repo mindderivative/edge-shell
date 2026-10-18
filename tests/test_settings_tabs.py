@@ -52,6 +52,7 @@ def test_each_theme_key_is_on_its_tab():
     general = keys(tabs["General"])
     assert ("theme", "accent") in general and ("theme", "thickness") in general
     assert ("theme", "font") in general and ("theme", "handle") not in general
+    assert ("theme", "fade_ms") in general  # no tab of its own: General
     assert keys(tabs["Borders"]) == [
         ("theme", "border", "enabled"),
         ("theme", "border", "width"),

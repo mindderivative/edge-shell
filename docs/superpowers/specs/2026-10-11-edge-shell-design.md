@@ -36,7 +36,7 @@ A frame of thickness `T` surrounds each enabled monitor. Desktop corners are rou
 
 | Token | Default | Notes |
 | --- | --- | --- |
-| `T` frame thickness | 10 px | Also the space reserved on each edge |
+| `T` frame thickness | 10 px | 5-64 px (at least 5 since 2026-10-17; before it 2-64: a file with 2-4 is now invalid). Also the space reserved on each edge |
 | `R` corner and join radius | 14 px | Joins shrink to half the panel's depth while it animates (so the convex corner and concave join stack into a smooth S-curve instead of overlapping) |
 | Frame color | `#0b0c0d` | Panels use the same color so they read as part of the frame |
 | Text / secondary | `#e6e8ea` / `#9ba0a6` | |
@@ -189,6 +189,8 @@ shell = "plasma"
   | Change | Reaction |
   | --- | --- |
   | Theme colour, border, shadow or handle style | Regenerate CSS; redraw the canvas (no rebuild) |
+  | Theme `thickness`, `radius`, `peek`, `hover_zone` or `duration_ms` | Rebuild the monitor: the new shell crossfades over the old one (section 21) |
+  | Theme `fade_ms` | Nothing now: the next fade uses it (a restyle, section 21) |
   | Panel `state` | Retarget the tween |
   | Panel `handle` or `interaction` | Update the live panel in place (no rebuild) |
   | Panel `edge`, `pos`, `align`, `offset`, `order`, `length`, `min_length`, `max_length` or `depth` | Rebuild that panel's window, and any panel whose resolved position or visibility changed with it (section 17 rules) |
@@ -196,7 +198,7 @@ shell = "plasma"
   | Panel `panel`, `widget`, `name` or a widget property | Rebuild that panel (section 20) |
   | Layout `gap` (`[layout]`, `[monitors.X.layout]`) | Re-layout the monitor: rebuild only the panels that moved |
   | Panel added or removed | Create or destroy that window |
-  | Monitor `shell` mode | Create or destroy that monitor's windows |
+  | Monitor `shell` mode | Create (fade in) or destroy (fade out) that monitor's windows (section 21) |
   | Invalid config | Keep the old config; report the error |
 
 ## 7. Plasma integration
@@ -307,6 +309,8 @@ A normal window (opened from a key binding, tray icon or frame handle) for editi
 **Menus and file operations (2026-10-15, plan `docs/superpowers/plans/2026-10-15-settings-menus.md`; design in `2026-10-14-panel-widget-model-design.md` section 6):** a menu bar (File: New, Open, Save, Save As, Close, Exit; Edit: Undo, Redo, Cut, Copy, Paste, Revert all; Help: About) with Ctrl+N/O/S/Shift+S/W/Q/Z/Shift+Z/Y (Ctrl+X/C/V stay the text field's own). Live apply stays; **Save** sets the saved point and refreshes `config.toml.bak` (so `--restore-config` puts back the last Save, or the file before the window's first change); leaving with unsaved changes (Close, Exit, New, Open, the close button) asks Save / Discard / Cancel, and Discard returns the file to the saved point (an invalid hand edit made while the window was open, if Discard replaces it, is first kept as `.before-revert`; the text the file had when the window opened is not copied); a hand edit counts as saved. New never replaces a file and adds `.toml`; Open, New and Save As show their file in its own window (one window per file); Save As writes a copy first and then puts the original back to its saved point; Close leaves an empty window with New and Open. A config that is not the shell's own (`~/.config/edge-shell/config.toml` or its `--config` file) says so once. File dialogs come through the desktop portal (`GTK_USE_PORTAL=1` unless set). The project is MIT licensed; Help > About shows the licence. Results (Phil, live on HDMI-A-1, 2026-10-15): all 15 gate items passed. Item 1 passed but the once-only "not the default config" note was not blue and its text was orange in a focused window and white in an unfocused one (GTK's theme infobar colours); fixed with a theme-independent style class (blue background, white text, with a `:backdrop` rule) installed once at USER priority. Item 15 (`GTK_USE_PORTAL=0` against the default): with `GTK_USE_PORTAL=0` the window looks very different (GTK's own dialogs and look); Phil prefers the default, so portal stays on and `os.environ.setdefault("GTK_USE_PORTAL", "1")` stays (`GTK_USE_PORTAL=0` still overrides it). Known limits: KDE's portal dialog may ask "overwrite?" for New on an existing name, after which the window refuses it (New never replaces a file); the Panel type row and the other panel-model items are unaffected.
 
 **Toolbar, tree and tabbed pages (2026-10-15, plan `docs/superpowers/plans/2026-10-15-settings-tree.md`; design in `2026-10-14-panel-widget-model-design.md` section 7):** the window is a per-screen toolbar (the screen's name, Enable and the desktop's checkbox writing the monitor's `shell`, the panel type list with Add, Move up/down and Remove), a tree (Theme; each monitor, "(not connected)" when only in the config, with its panels by name; Detect monitors) and the selected page. Theme and monitor pages have the tabs General, Borders, Shadows, Handle and Layout (a monitor page under an always-shown override banner); each panel has its own page with the tabs Panel, Position, Handle, Interaction and Widget, and is renamed through the Name row. Every edit goes through one ordered queue (`settings/queue.py`): spin buttons share one 0.4 s timer, the last edit of a setting wins, structural edits, Undo, Save, leaving the config and Detect monitors apply the queue first, and a hand edit drops what is queued and the banner names it. Undo and Revert all are in the Edit menu only. The shell compares the config's monitor names with the connected ones (`shell/monitor_check.py`) and warns once per change of unknown names (a monitor seen connected in this session is never unknown); the window shows the same text, and a Detect monitors that returns no monitor keeps the list and says so. Known limits: no tree search or context menu; a right-click on a handle does not yet open that panel's page. Results (Phil, live on HDMI-A-1, 2026-10-16): all 15 gate items of the tree plan passed with no finding that needed a change.
+
+**Input styles (2026-10-16, plan `docs/superpowers/plans/2026-10-16-input-styles.md`; design in `2026-10-14-panel-widget-model-design.md` section 8):** dropdowns open below their row at the size of their entries (`wrap_width` 1; the old placement laid the active entry over the combo and KWin shrank the menu), toggles are thin `Gtk.Switch`es with a round knob (one scoped stylesheet), whole numbers with a range of at most 500 are a slider plus a spin button (the wider ranges keep the spin button; the wheel never edits either), and fonts are a searchable popover picker over the installed families (the desktop's font first, then `monospace`, `sans-serif`, `serif`, then the families; a font that is not installed is kept; the theme's font list is one picker per family with Move up, Move down, Remove and Add font; a widget's font starts with "Theme font"). The theme's default font list is unchanged: the shell does not follow the KDE font by itself. Known limits: the font list is read once per window process; a dropdown's list may be a little narrower than its box; the popover list is the fallback if a dropdown still opens short. Results (Phil, live on HDMI-A-1, 2026-10-16): all 13 gate items passed. Findings and what was done: slider updates now happen on mouse-button release, not while the pointer pauses (a slow mouse wrote too often; the number beside the slider still follows the drag, a keyboard change or a trough click keeps the pause, and Undo, Save or a structural edit during a drag apply the current value); Page Up and Page Down were inverted (GTK's binding for a horizontal slider) and now raise and lower the value; the tree's row buttons read Up, Down, Remove from left to right (Remove was first) and are 27 px instead of 30; item 12 (narrow window) is accepted as expected: at the narrowest width a horizontal scrollbar appears and the Reset buttons are reached by scrolling, at the default 860 px nothing scrolls sideways; the dropdown fix (`wrap_width` 1) is confirmed working live (item 1 passed).
 
 ## 14. Open questions
 
@@ -545,3 +549,142 @@ Spec: `docs/superpowers/specs/2026-10-14-panel-widget-model-design.md` (sections
   widget or kind is one edit that drops the keys the new one does not take.
 
 **Results.** Gate (Phil, live on HDMI-A-1, 2026-10-14): all 13 checklist items, counted by Phil as 21 steps with the eight error cases of item 4 (a-h), passed with no failures: the start state and its four `building panel` lines (each panel built once, the clock at a fixed 320 px); the clock's `format`, quoted text, `font` and `font_size` by hand (one `panel-rebuild` each); a rename by hand; the eight error cases keeping the previous layout with the quoted notification texts; the settings window's panel list, Widget frame and add list; adding panels with free names (`Clock`, `Clock 2`); widget properties from the window; names in the window; switching the widget; Revert all; a hand edit while the window is open; `examples/corner-test.toml`; DP-1 untouched. The deferred-rebuild click fix (panel buttons keep the focus where it is) was not reported as a problem. Not checked live (covered by tests): a widget whose build raises and is not retried until its entry changes, a widget property type the window cannot show refused at registration, the Panel type row and the greyed-out `float` row (no built-in widget supports two panel kinds). Known limits: the duplicate-name error under a renamed row names the later entry's index in its path prefix (the message names both entries); a live theme-font change leaves an existing clock's font fallback until the panel is rebuilt.
+
+## 21. Implemented: shell fade
+
+Plan: `docs/superpowers/plans/2026-10-16-shell-fade.md`. Phil: "make the shell fade-in when
+enabled or requires a full redraw ... On disable have it fade out instead of just disappear
+instantly."
+
+Decisions (from the plan; 1-11 are the behaviour, 12-13 bookkeeping and cost):
+
+1. **Key.** `[theme] fade_ms` (default 50, 0-500 ms; `[monitors.X.theme] fade_ms` per monitor;
+   0 = no fade, exactly the old behaviour). A change is a restyle: nothing is rebuilt, the next
+   fade uses it. The settings window shows it on the General tab as the **Fade** slider (0-500
+   is within the slider rule's span of 500). `--stats` never fades.
+2. **Mechanism: `Gtk.Widget.set_opacity` on every toplevel of the monitor.** GTK 3.24 paints a
+   toplevel's opacity itself (a group with alpha, since the Wayland visual is the RGBA one),
+   over everything the window draws (the canvas drawing, panel content, handles). Alternatives
+   not taken: drawing the fade into the canvas only (the panels' own content and handles
+   would not fade), CSS `opacity` on the content (the canvas would not fade). Contingency if
+   KWin shows no fade (gate item 2): the opacity on each window's child.
+3. **Built at opacity 0, mapped as before** (not hidden): first configures, first frames,
+   content rebuilds and re-raises all happen invisibly.
+4. **Ready condition.** A monitor fades in when its first re-raise (`RAISE_DELAY_MS`, 500 ms:
+   a re-map that would blink) has run and no "content" measurement (which can rebuild a panel)
+   is pending, checked after each re-raise, each measurement and once after the build. If it
+   is not ready after `READY_TIMEOUT_MS` (1000 ms) it fades in anyway. The 2 s fallback
+   re-raise is not waited for.
+5. **One linear Tween per monitor** on the canvas window's frame clock; its one callback sets
+   every window's opacity in the same frame. A fade still running `FINISH_MARGIN_MS` (300 ms)
+   after its duration (a canvas that gets no frames) is finished at once, with a warning.
+6. **Input follows visibility.** Panels are built without input (`set_input_enabled(False)`),
+   take it from the start of the fade-in, and lose it at the start of a fade-out.
+7. **Fade out.** Turning a monitor off fades it out over its `fade_ms` from the opacity it has,
+   then destroys its windows; the shell is detached (no re-layout, measurement or re-raise)
+   and its strips (the reserved zone) stay until the fade-out ends (`detach(keep_strips=True)`;
+   they close with the shell's windows), so a maximized window grows when the frame is gone.
+   The monitor's scoped theme CSS stays loaded while its shell fades (`css()` covers the
+   shells in `shells` and in `_leaving`; it is refreshed when the last leaving shell of a
+   monitor goes), so the panels keep their border radius, handle look and fonts. An unplugged
+   or replaced monitor, and a shell that never became visible, are closed at once.
+8. **Crossfade on a full rebuild** (theme `thickness`, `radius`, `peek`, `hover_zone`,
+   `duration_ms`): the old shell stays on screen, detached and fully shown, until the new
+   shell starts its fade-in; then new 0 -> 1 and old 1 -> 0 over `fade_ms`, and the old one is
+   destroyed. Input moves at that moment. The new windows are mapped later, so they stack
+   above. Known effect: where both shells cover the same shape, the two half-transparent
+   frames dim it slightly half-way.
+9. **No stacking.** At most one leaving shell per monitor: a reload during a crossfade
+   destroys the older leaving shell at once and completes the current fade-in (held fully
+   shown); a shell replaced before it was ever visible is simply closed; a held shell whose
+   successor fails to build fades out on its own, so no shell is held forever. The app keeps
+   leaving shells out of `shells`, so reports, CSS and reloads never see them.
+10. **Quit.** SIGINT and SIGTERM (GLib's Unix signal source; Python's SIGINT handler stays the
+    default so PyGObject installs no quit-without-fade fallback) fade every monitor out and
+    quit when the last fade is done, at the latest the longest `fade_ms` +
+    `QUIT_MARGIN_MS` (250 ms) later. A second signal quits at once. The exit status is 128 +
+    the signal (130, 143). Reloads and hot-plug syncs are ignored while quitting; a leaving
+    shell of a crossfade is dropped at once. Ctrl+C and SIGTERM need the main loop to be
+    running (a callback that never returns blocks them: Ctrl+\ or `kill -9`).
+11. **Not faded.** A restyle, panel adds, removes, rebuilds and state changes, a resolution
+    change (re-laid out in place), failure rebuilds (an in-place apply or a re-layout that
+    raised: the broken shell is closed at once, the new shell still fades in), `--stats`.
+12. **Bookkeeping.** Every window stays registered with Fabric's `Application` until the shell
+    that owns it closes, so a crossfade has two sets of windows; the zone strips are the
+    exception, because two sets would stack their exclusive zones. Changed after Phil's gate
+    and re-check (findings 3 and 4; then the rebuild shrink and 50 ms too early): with a fade
+    EVERY shell (an enable, a startup, a hot-plug, a rebuild's successor) builds its strips
+    `RESERVE_DELAY_MS` (100 ms) after its own fade-in starts (`reserve_now` False), so the
+    frame appears first and the maximized window resizes a beat later; with `fade_ms` 0 they
+    are built with the shell as before (the old shell is closed at once). A held shell
+    (`_leave_shell`) keeps its strips (`detach(keep_strips=True)`), so the window does not
+    shrink or grow while the successor waits for its ready check; when the successor has
+    built its set (`on_reserved` -> `EdgeShellApp._reserved`) the app drops the leaving
+    shell's strips in the same call (`drop_strips`, new set first, then the old; no frame is
+    drawn between, though the compositor may still apply the two surface changes a moment
+    apart: to be judged live). A held shell whose successor never appears (turned off while it
+    waited, a quit, a failed rebuild) fades out with the strips it kept. On a disable
+    (`fade_out`) the strips are kept until the fade-out ends and closed with the other windows
+    (they used to be destroyed at the start, so a maximized window grew while the frame was
+    still partly opaque and its square corners showed through the frame's rounded inner
+    corners). A second rebuild, or a disable, in the 100 ms before the first successor's
+    strips are due builds them first (`reserve_pending_now`, from `_hand_over`) when an older
+    leaving shell is about to be closed, so the zone passes on without a gap. A rebuild within
+    100 ms of a fresh enable's fade-in does the same for the held shell itself (`_leave_shell`
+    builds the due strips before `detach` would cancel them). The handover is continuous for
+    every fade length: when a leaving shell's fade-out ends, `MonitorShell._faded_out` calls
+    `on_closing` before its windows go and the app (`_closing`) lets the successor build its
+    due strips first, so with `fade_ms` below `RESERVE_DELAY_MS` (the default is 50) the new
+    strips come when the old shell closes instead of 50 ms later. A shell enabled
+    again while the previous one is still fading out reserves late like any enable; the old
+    strips go when the new ones exist. Known, accepted limits: the error-path rebuilds
+    (`_relayout_failed`, a failed in-place apply) open their shell with no held predecessor,
+    so the failed shell closes at once, a maximized window grows at once and shrinks again about
+    0.6 s later (the ready wait plus 100 ms); a monitor whose `[monitors.X]` entry was removed
+    gets the global theme CSS for the rest of its fade (one scope per monitor); a late strip that fails to build is logged, not retried; a shell opened with `fade_ms` 0
+    while an older one still fades out keeps both sets until the old fade ends.
+13. **Cost.** A 50 ms fade is 3 frames at 60 Hz: 3 full redraws of each window (the canvas's
+    full draw is 1.6 ms without effects, about 15 ms with border and shadow at 1920x1080, so
+    a frame may be dropped with effects on) plus GTK's group for each; blending a translucent
+    layer surface is the compositor's work, as it already is for these ARGB windows.
+
+Code: `shell/fade.py` (`Fade`, pure state machine: waiting, fading-in, shown, fading-out,
+done), `shell/monitors.py` (`MonitorShell`: opacity, input gating, ready check, `detach`,
+`fade_out`), `shell/app.py` (`_leave_shell`, `_fade_away`, `_retire`, `_release_held`, the
+quit path).
+
+Verified headless: the state machine (`tests/test_fade.py`), the build, ready, timeout, input
+and close paths of `MonitorShell` on fake windows and a fake frame clock
+(`tests/test_monitor_fade.py`), the app's hold, crossfade, release and quit rules
+(`tests/test_app_sync.py`). Live only (the gate): what KWin shows: no blink or growth at
+enable, the fade itself, the crossfade, the quit.
+
+Known limits: the monitor appears about 0.5 s after it is turned on; maximized windows resize
+100 ms after the frame starts to appear (an enable or a rebuild) and when the frame is gone on a
+disable;
+the crossfade's mid-way dim. (The 2 s fallback re-raise was expected to flicker once after the
+fade; the gate saw none.) Open question 6 (the early shrink) is answered by decision 12.
+
+**Results (Phil, live on HDMI-A-1, DP-1 untouched, 2026-10-17): the gate (plan Task 7, items
+1-12): items 1, 2 and 5-12 passed; items 3 and 4 passed with findings.** No blink, no flicker on
+the fallback re-raise, the crossfade passed, the quit statuses were 130 and 143. Finding 3: on a
+disable (Enable unticked) at Fade 300 the frame's rounded inner corners reverted instantly to 90
+degrees (not on an enable nor on a rebuild): the strips were destroyed at the start of the
+fade-out, a maximized window grew while the frame was still partly opaque and its square corners
+showed through. Finding 4: on an enable the strips came with the build, so a maximized window
+shrank about 0.5 s before the frame faded in; Phil wanted the window to resize 50 ms after the
+frame starts to appear. Fixed in f61d49a (the strips are kept until a fade-out ends and built
+after a fade-in starts), 4e8c947 (a shell opened while the previous one fades out reserves
+late) and 8515e3b (a held shell whose successor is gone keeps its zone).
+
+**First re-check (Phil, HDMI-A-1, HEAD 1bafeae):** items 4-7 pass. Findings: (1) a disable still
+showed 90-degree corners and a default handle look: `EdgeShellApp.css()` covered only `shells`, so
+the monitor's scoped CSS was dropped while its shell still faded out in `_leaving` (a rebuild
+keeps the monitor in `shells`, so it was not affected); fixed in a4452f7 (`css()` covers the
+leaving shells too and is refreshed when the last one goes). (2) The enable shrink at 50 ms was
+"much better but still too much": `RESERVE_DELAY_MS` is 100. (3) A rebuild crossfade (thickness 10
+to 64, maximized window): the window shrank before the new frame faded in, because the successor
+of a held shell reserved at once while its frame appeared only after the ready wait; fixed in
+4627cc8 (decision 12: every fading shell reserves late, the held one keeps its strips until the
+successor has its own). Items 3 and 4 and the rebuild are to be re-checked by Phil after these
+commits.
